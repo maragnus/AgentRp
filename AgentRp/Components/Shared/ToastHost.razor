@@ -1,0 +1,43 @@
+@implements IDisposable
+@inject IUserFeedbackService UserFeedbackService
+
+@if (UserFeedbackService.Messages.Count > 0)
+{
+    <div class="toast-container position-fixed top-0 end-0 p-3 app-toast-stack">
+        @foreach (var toast in UserFeedbackService.Messages)
+        {
+            <div class="toast show border-0 shadow-sm mb-2" role="status" aria-live="polite">
+                <div class="toast-header @GetHeaderClass(toast.Intent)">
+                    <strong class="me-auto">@toast.Title</strong>
+                    <small>@toast.CreatedUtc.ToShorthandDateWithRelativeDays()</small>
+                    <button type="button"
+                            class="btn-close ms-2 mb-1"
+                            aria-label="Close"
+                            @onclick="() => UserFeedbackService.Dismiss(toast.Id)"></button>
+                </div>
+                <div class="toast-body">@toast.Message</div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    protected override void OnInitialized()
+    {
+        UserFeedbackService.Changed += HandleChanged;
+    }
+
+    public void Dispose()
+    {
+        UserFeedbackService.Changed -= HandleChanged;
+    }
+
+    private void HandleChanged() => InvokeAsync(StateHasChanged);
+
+    private static string GetHeaderClass(ToastIntent intent) => intent switch
+    {
+        ToastIntent.Success => "bg-success-subtle text-success-emphasis",
+        ToastIntent.Error => "bg-danger-subtle text-danger-emphasis",
+        _ => "bg-info-subtle text-info-emphasis"
+    };
+}

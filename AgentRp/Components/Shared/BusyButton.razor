@@ -1,0 +1,55 @@
+<button type="@Type"
+        class="@Class"
+        disabled="@(Disabled || IsBusy)"
+        @attributes="AdditionalAttributes"
+        @onclick="HandleClickAsync">
+    @if (IsBusy)
+    {
+        <span class="spinner-border spinner-border-sm @(ShowBusyText ? "me-2" : string.Empty)" role="status" aria-hidden="true"></span>
+        @if (ShowBusyText)
+        {
+            <span>@(string.IsNullOrWhiteSpace(BusyText) ? "Working..." : BusyText)</span>
+        }
+    }
+    else
+    {
+        @ChildContent
+    }
+</button>
+
+@code {
+    [Parameter]
+    public string Type { get; set; } = "button";
+
+    [Parameter]
+    public string Class { get; set; } = "btn btn-primary";
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    [Parameter]
+    public bool IsBusy { get; set; }
+
+    [Parameter]
+    public string? BusyText { get; set; }
+
+    [Parameter]
+    public bool ShowBusyText { get; set; } = true;
+
+    [Parameter]
+    public EventCallback OnClick { get; set; }
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)]
+    public IReadOnlyDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private Task HandleClickAsync()
+    {
+        if (Disabled || IsBusy)
+            return Task.CompletedTask;
+
+        return OnClick.InvokeAsync();
+    }
+}

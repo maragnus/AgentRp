@@ -1,0 +1,57 @@
+@if (IsOpen)
+{
+    <div class="modal fade show d-block"
+         tabindex="-1"
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby="@TitleId">
+        <div class="modal-dialog @DialogClass" role="document" @onclick:stopPropagation="true">
+            <div class="modal-content shadow">
+                <div class="modal-header">
+                    <h2 class="modal-title fs-5 mb-0" id="@TitleId">@Title</h2>
+                    <button type="button"
+                            class="btn-close"
+                            aria-label="Close"
+                            @onclick="CloseAsync"></button>
+                </div>
+
+                <div class="modal-body">
+                    @ChildContent
+                </div>
+
+                @if (FooterContent is not null)
+                {
+                    <div class="modal-footer">
+                        @FooterContent
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-backdrop fade show"></div>
+}
+
+@code {
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public string Title { get; set; } = string.Empty;
+
+    [Parameter]
+    public string DialogClass { get; set; } = "modal-lg modal-dialog-scrollable modal-fullscreen-sm-down";
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    [Parameter]
+    public RenderFragment? FooterContent { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    private string TitleId { get; } = $"app-modal-title-{Guid.NewGuid():N}";
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+}

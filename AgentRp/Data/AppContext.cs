@@ -1,0 +1,345 @@
+using Microsoft.EntityFrameworkCore;
+
+namespace AgentRp.Data;
+
+public sealed class AppContext(DbContextOptions<AppContext> options) : DbContext(options)
+{
+    public DbSet<ChatThread> ChatThreads => Set<ChatThread>();
+
+    public DbSet<ChatStory> ChatStories => Set<ChatStory>();
+
+    public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+
+    public DbSet<ProcessRun> ProcessRuns => Set<ProcessRun>();
+
+    public DbSet<ProcessStep> ProcessSteps => Set<ProcessStep>();
+
+    public DbSet<StoryChatSnapshot> StoryChatSnapshots => Set<StoryChatSnapshot>();
+
+    public DbSet<StoryChatAppearanceEntry> StoryChatAppearanceEntries => Set<StoryChatAppearanceEntry>();
+
+    public DbSet<AppSetting> AppSettings => Set<AppSetting>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<ChatThread>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.Title).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.SelectedAgentName).HasMaxLength(200);
+            builder.HasIndex(x => x.UpdatedUtc);
+            builder.HasIndex(x => new { x.IsStarred, x.UpdatedUtc });
+            builder.HasOne(x => x.Story)
+                .WithOne(x => x.Thread)
+                .HasForeignKey<ChatStory>(x => x.ChatThreadId)
+                .OnDelete(DeleteBehavior.Cascade);
+            builder.HasMany(x => x.Messages)
+                .WithOne(x => x.Thread)
+                .HasForeignKey(x => x.ThreadId)
+                .OnDelete(DeleteBehavior.Cascade);
+            builder.HasMany(x => x.ProcessRuns)
+                .WithOne(x => x.Thread)
+                .HasForeignKey(x => x.ThreadId)
+                .OnDelete(DeleteBehavior.Cascade);
+            builder.HasMany(x => x.Snapshots)
+                .WithOne(x => x.Thread)
+                .HasForeignKey(x => x.ThreadId)
+                .OnDelete(DeleteBehavior.Cascade);
+            builder.HasMany(x => x.AppearanceEntries)
+                .WithOne(x => x.Thread)
+                .HasForeignKey(x => x.ThreadId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ChatStory>(builder =>
+        {
+            builder.HasKey(x => x.ChatThreadId);
+            builder.Property(x => x.SceneJson)
+                .HasColumnType("nvarchar(max)");
+            builder.Property(x => x.CharactersJson)
+                .HasColumnType("nvarchar(max)");
+            builder.Property(x => x.LocationsJson)
+                .HasColumnType("nvarchar(max)");
+            builder.Property(x => x.ItemsJson)
+                .HasColumnType("nvarchar(max)");
+            builder.Property(x => x.HistoryJson)
+                .HasColumnType("nvarchar(max)");
+        });
+
+        modelBuilder.Entity<ChatMessage>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.Role).HasConversion<string>();
+            builder.Property(x => x.MessageKind).HasConversion<string>();
+            builder.Property(x => x.GenerationMode).HasConversion<string>();
+            builder.Property(x => x.Content).HasColumnType("nvarchar(max)");
+            builder.HasIndex(x => new { x.ThreadId, x.CreatedUtc });
+            builder.HasIndex(x => new { x.ThreadId, x.ParentMessageId });
+            builder.HasIndex(x => x.EditedFromMessageId);
+            builder.HasIndex(x => new { x.ThreadId, x.SourceProcessRunId });
+        });
+
+        modelBuilder.Entity<ProcessRun>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.Status).HasConversion<string>();
+            builder.Property(x => x.Summary).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.Stage).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.ContextJson).HasColumnType("nvarchar(max)");
+            builder.HasIndex(x => new { x.ThreadId, x.UserMessageId });
+            builder.HasIndex(x => new { x.ThreadId, x.TargetMessageId });
+            builder.HasMany(x => x.Steps)
+                .WithOne(x => x.Run)
+                .HasForeignKey(x => x.ProcessRunId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ProcessStep>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.Status).HasConversion<string>();
+            builder.Property(x => x.Title).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.Summary).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.Detail).HasColumnType("nvarchar(max)");
+            builder.HasIndex(x => new { x.ProcessRunId, x.SortOrder });
+        });
+
+        modelBuilder.Entity<AppSetting>(builder =>
+        {
+            builder.HasKey(x => x.Key);
+            builder.Property(x => x.Key).HasMaxLength(200);
+            builder.Property(x => x.JsonValue).HasColumnType("nvarchar(max)");
+        });
+
+        modelBuilder.Entity<StoryChatSnapshot>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.Summary).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.SnapshotJson).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.IncludedMessageIdsJson).HasColumnType("nvarchar(max)");
+            builder.HasIndex(x => new { x.ThreadId, x.CreatedUtc });
+            builder.HasIndex(x => new { x.ThreadId, x.SelectedLeafMessageId });
+            builder.HasIndex(x => new { x.ThreadId, x.CoveredThroughMessageId });
+        });
+
+        modelBuilder.Entity<StoryChatAppearanceEntry>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.Summary).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.AppearanceJson).HasColumnType("nvarchar(max)");
+            builder.HasIndex(x => new { x.ThreadId, x.CreatedUtc });
+            builder.HasIndex(x => new { x.ThreadId, x.SelectedLeafMessageId });
+            builder.HasIndex(x => new { x.ThreadId, x.CoveredThroughMessageId });
+        });
+    }
+}
+
+public sealed class ChatThread
+{
+    public Guid Id { get; set; }
+
+    public required string Title { get; set; }
+
+    public bool IsStarred { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+
+    public DateTime UpdatedUtc { get; set; }
+
+    public Guid? ActiveLeafMessageId { get; set; }
+
+    public Guid? SelectedSpeakerCharacterId { get; set; }
+
+    public string SelectedAgentName { get; set; } = string.Empty;
+
+    public ChatStory? Story { get; set; }
+
+    public List<ChatMessage> Messages { get; set; } = [];
+
+    public List<ProcessRun> ProcessRuns { get; set; } = [];
+
+    public List<StoryChatSnapshot> Snapshots { get; set; } = [];
+
+    public List<StoryChatAppearanceEntry> AppearanceEntries { get; set; } = [];
+}
+
+public sealed class ChatMessage
+{
+    public Guid Id { get; set; }
+
+    public Guid ThreadId { get; set; }
+
+    public ChatRole Role { get; set; }
+
+    public ChatMessageKind MessageKind { get; set; }
+
+    public required string Content { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+
+    public Guid? SpeakerCharacterId { get; set; }
+
+    public StoryScenePostMode GenerationMode { get; set; }
+
+    public Guid? SourceProcessRunId { get; set; }
+
+    public Guid? ParentMessageId { get; set; }
+
+    public Guid? EditedFromMessageId { get; set; }
+
+    public required ChatThread Thread { get; set; }
+}
+
+public sealed class ProcessRun
+{
+    public Guid Id { get; set; }
+
+    public Guid ThreadId { get; set; }
+
+    public Guid UserMessageId { get; set; }
+
+    public Guid? AssistantMessageId { get; set; }
+
+    public Guid? TargetMessageId { get; set; }
+
+    public Guid? ActorCharacterId { get; set; }
+
+    public required string Summary { get; set; }
+
+    public string? Stage { get; set; }
+
+    public string? ContextJson { get; set; }
+
+    public ProcessRunStatus Status { get; set; }
+
+    public DateTime StartedUtc { get; set; }
+
+    public DateTime? PlanningStartedUtc { get; set; }
+
+    public DateTime? PlanningCompletedUtc { get; set; }
+
+    public DateTime? ProseStartedUtc { get; set; }
+
+    public DateTime? ProseCompletedUtc { get; set; }
+
+    public DateTime? CompletedUtc { get; set; }
+
+    public required ChatThread Thread { get; set; }
+
+    public List<ProcessStep> Steps { get; set; } = [];
+}
+
+public sealed class ProcessStep
+{
+    public Guid Id { get; set; }
+
+    public Guid ProcessRunId { get; set; }
+
+    public int SortOrder { get; set; }
+
+    public required string Title { get; set; }
+
+    public required string Summary { get; set; }
+
+    public required string Detail { get; set; }
+
+    public required string IconCssClass { get; set; }
+
+    public ProcessStepStatus Status { get; set; }
+
+    public DateTime? StartedUtc { get; set; }
+
+    public DateTime? CompletedUtc { get; set; }
+
+    public ProcessRun Run { get; set; } = null!;
+}
+
+public sealed class StoryChatSnapshot
+{
+    public Guid Id { get; set; }
+
+    public Guid ThreadId { get; set; }
+
+    public Guid SelectedLeafMessageId { get; set; }
+
+    public Guid CoveredThroughMessageId { get; set; }
+
+    public DateTime CoveredThroughUtc { get; set; }
+
+    public required string Summary { get; set; }
+
+    public required string SnapshotJson { get; set; }
+
+    public required string IncludedMessageIdsJson { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+
+    public ChatThread Thread { get; set; } = null!;
+}
+
+public sealed class StoryChatAppearanceEntry
+{
+    public Guid Id { get; set; }
+
+    public Guid ThreadId { get; set; }
+
+    public Guid SelectedLeafMessageId { get; set; }
+
+    public Guid CoveredThroughMessageId { get; set; }
+
+    public DateTime CoveredThroughUtc { get; set; }
+
+    public required string Summary { get; set; }
+
+    public required string AppearanceJson { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+
+    public DateTime UpdatedUtc { get; set; }
+
+    public ChatThread Thread { get; set; } = null!;
+}
+
+public sealed class AppSetting
+{
+    public required string Key { get; set; }
+
+    public required string JsonValue { get; set; }
+
+    public DateTime UpdatedUtc { get; set; }
+}
+
+public enum ChatRole
+{
+    User,
+    Assistant
+}
+
+public enum ChatMessageKind
+{
+    CharacterSpeech,
+    Narration,
+    System
+}
+
+public enum StoryScenePostMode
+{
+    Manual,
+    GuidedAi,
+    AutomaticAi
+}
+
+public enum ProcessRunStatus
+{
+    Running,
+    Completed,
+    Failed
+}
+
+public enum ProcessStepStatus
+{
+    Pending,
+    Running,
+    Completed,
+    Failed
+}

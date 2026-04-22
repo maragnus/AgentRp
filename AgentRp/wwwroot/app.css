@@ -1,0 +1,321 @@
+html, body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    font-family: "Segoe UI", sans-serif;
+    background:
+        radial-gradient(circle at top left, rgba(13, 110, 253, 0.10), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(13, 202, 240, 0.10), transparent 24%),
+        var(--bs-body-tertiary);
+}
+
+.app-markdown em { color: purple;}
+
+a, .btn-link {
+    color: inherit;
+}
+
+.app-shell {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+}
+
+.app-shell-menu-toggle {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 1030;
+}
+
+.app-shell-menu-toggle-button {
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.app-shell-body {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.app-shell-sidebar {
+    flex: 0 0 24rem;
+    width: 24rem;
+    min-height: 0;
+    transition: width 0.2s ease, flex-basis 0.2s ease;
+}
+
+.app-shell-sidebar.is-narrow {
+    flex-basis: 17rem;
+    width: 17rem;
+}
+
+.app-shell-sidebar.is-wide {
+    flex-basis: 24rem;
+    width: 24rem;
+}
+
+.app-shell-mobile-header {
+    position: sticky;
+    top: 0;
+    z-index: 1020;
+}
+
+.app-shell-mobile-sidebar {
+    flex: 0 0 100%;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.app-shell-main {
+    min-width: 0;
+    min-height: 0;
+}
+
+.app-shell-main-scroll {
+    min-height: 0;
+    overflow: hidden;
+}
+
+.app-shell-main-content {
+    height: 100%;
+    min-height: 0;
+    overflow: auto;
+    box-sizing: border-box;
+}
+
+.app-chat-workspace {
+    min-height: 100%;
+    border-radius: 0;
+    overflow: visible;
+}
+
+.app-chat-header {
+    flex-shrink: 0;
+}
+
+.app-chat-transcript {
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(248, 249, 250, 0.92));
+}
+
+.app-chat-empty-state {
+    min-height: 40vh;
+}
+
+.app-message-card-user,
+.app-message-card-assistant {
+    max-width: 64rem;
+}
+
+.app-message-card {
+    border-radius: 1rem;
+    cursor: pointer;
+    outline: none;
+}
+
+.app-message-card .card {
+    border-radius: 1rem;
+    transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+
+.app-message-card:focus-visible .card,
+.app-message-card.is-selected .card,
+.app-message-card.is-editing .card {
+    box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.15);
+}
+
+.app-message-card:hover .card {
+    transform: translateY(-1px);
+}
+
+.app-message-content {
+    white-space: pre-wrap;
+}
+
+.app-message-footer {
+    opacity: 0;
+    transform: translateY(0.25rem);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.app-message-card:hover .app-message-footer,
+.app-message-card:focus-visible .app-message-footer,
+.app-message-card.is-selected .app-message-footer,
+.app-message-card.is-editing .app-message-footer {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.app-message-action-button {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.app-branch-count {
+    min-width: 2.75rem;
+    text-align: center;
+}
+
+.app-inline-edit-textarea {
+    min-height: 7rem;
+    resize: vertical;
+}
+
+.app-chat-message {
+    min-height: 5rem;
+    resize: vertical;
+}
+
+.app-markdown > :last-child {
+    margin-bottom: 0;
+}
+
+.app-markdown p,
+.app-markdown ul,
+.app-markdown ol {
+    margin-bottom: 0.9rem;
+}
+
+.app-markdown h1,
+.app-markdown h2,
+.app-markdown h3,
+.app-markdown h4 {
+    margin-bottom: 0.75rem;
+    font-size: 1rem;
+}
+
+.app-markdown ul,
+.app-markdown ol {
+    padding-left: 1.25rem;
+}
+
+.app-toast-stack {
+    z-index: 1085;
+    max-width: min(24rem, 100vw - 2rem);
+}
+
+.list-group-item.active .text-body-secondary {
+    color: rgba(255, 255, 255, 0.75) !important;
+}
+
+@media (hover: none) {
+    .app-message-footer {
+        opacity: 0;
+        transform: translateY(0.25rem);
+    }
+
+    .app-message-card:hover .app-message-footer {
+        opacity: 0;
+        transform: translateY(0.25rem);
+    }
+}
+
+@media (max-width: 991.98px) {
+    body {
+        overflow-x: hidden;
+    }
+
+    .app-shell-body {
+        min-height: 0;
+    }
+
+    .app-shell-main-content {
+        overflow: auto;
+    }
+
+    .app-chat-transcript {
+        overflow: visible;
+    }
+
+    .app-chat-workspace {
+        border-left: 0;
+        border-right: 0;
+        box-shadow: none !important;
+    }
+}
+
+@media (min-width: 992px) {
+    html, body {
+        overflow: hidden;
+    }
+
+    .app-shell {
+        height: 100dvh;
+        overflow: hidden;
+    }
+
+    .app-shell-body,
+    .app-shell-sidebar,
+    .app-shell-main,
+    .app-shell-main-scroll,
+    .app-shell-main-content {
+        height: 100%;
+    }
+
+    .app-shell-main-content {
+        overflow: auto;
+    }
+
+    .app-chat-workspace {
+        height: 100%;
+        min-height: 0;
+        border-radius: 0;
+        overflow: hidden;
+    }
+
+    .app-chat-transcript {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+    }
+
+    .app-chat-empty-state {
+        min-height: 100%;
+    }
+}
+
+.blazor-error-boundary {
+    background: #842029;
+    color: #fff;
+    padding: 1rem;
+    border-radius: 0.75rem;
+}
+
+.blazor-error-boundary::after {
+    content: "An error has occurred.";
+}
+
+#blazor-error-ui {
+    color-scheme: light only;
+    background: lightyellow;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.2);
+    box-sizing: border-box;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+}
+
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        position: absolute;
+        right: 0.75rem;
+        top: 0.5rem;
+    }

@@ -1,0 +1,441 @@
+@inject IStoryEntityAiAssistService StoryEntityAiAssistService
+@inject IThreadAgentService ThreadAgentService
+@inject ILogger<StoryEntityAiAssistModal> Logger
+
+<AppModal IsOpen="IsOpen" Title="@BuildTitle()" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down" OnClose="CloseAsync">
+    <ChildContent>
+        <div class="d-flex flex-column gap-3">
+            <InlineAlert Message="@_errorMessage" />
+
+            @if (!_isAiAvailable)
+            {
+                <div class="alert alert-light border mb-0">
+                    <div class="fw-semibold mb-1">AI Unavailable</div>
+                    <div class="small text-body-secondary">This chat does not currently have an Aspire-configured AI provider enabled.</div>
+                </div>
+            }
+
+            @if (_isWorking)
+            {
+                <div class="d-flex align-items-center gap-3 py-4">
+                    <div class="spinner-border" role="status"></div>
+                    <div>
+                        <div class="fw-semibold">@_workingTitle</div>
+                        <div class="text-body-secondary small">@_workingMessage</div>
+                    </div>
+                </div>
+            }
+            else if (_session is null)
+            {
+                <div class="d-flex flex-column gap-1">
+                    <div class="fw-semibold">@BuildIntroHeading()</div>
+                    <div class="small text-body-secondary">@BuildIntroText()</div>
+                </div>
+
+                <div>
+                    <label class="form-label" for="@_promptInputId">Prompt</label>
+                    <textarea id="@_promptInputId" class="form-control" rows="6" @bind="_prompt"></textarea>
+                </div>
+            }
+            else
+            {
+                <div class="d-flex flex-column gap-1">
+                    <div class="fw-semibold text-primary-emphasis">Draft Ready</div>
+                    <div>@_session.ReviewSummary</div>
+                </div>
+
+                <div class="d-flex flex-column gap-1 border-top pt-3">
+                    <div class="text-body-secondary small text-uppercase fw-semibold">Prompt history</div>
+                    <div class="small">@string.Join(" -> ", _session.PromptHistory)</div>
+                </div>
+
+                <div class="d-flex flex-column gap-3 border-top pt-3">
+                    @foreach (var field in GetDraftFields())
+                    {
+                        <div>
+                            <ReadOnlyTextField Label="@field.Label"
+                                               Value="@field.Value"
+                                               IsMultiline="@field.IsMultiline"
+                                               Rows="@field.Rows" />
+                        </div>
+                    }
+                </div>
+
+                <div>
+                    <label class="form-label" for="@_refineInputId">Refine with another prompt</label>
+                    <textarea id="@_refineInputId" class="form-control" rows="4" @bind="_refinePrompt"></textarea>
+                </div>
+            }
+        </div>
+    </ChildContent>
+
+    <FooterContent>
+        <div class="w-100 d-flex flex-wrap justify-content-between gap-2">
+            <div class="d-flex gap-2">
+                @if (_session is not null)
+                {
+                    <button type="button" class="btn btn-outline-danger" @onclick="RejectAsync">
+                        <i class="fa-regular fa-xmark me-2" aria-hidden="true"></i>
+                        Reject
+                    </button>
+                }
+                @if (!string.IsNullOrWhiteSpace(_selectedAgentName))
+                {
+                    <div class="small text-body-secondary">Using @_selectedAgentName</div>
+                }
+            </div>
+
+            <div class="d-flex gap-2">
+                <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+
+                @if (_session is null)
+                {
+                    <BusyButton Class="btn btn-primary"
+                                IsBusy="_isWorking"
+                                BusyText="Generating..."
+                                Disabled="@(_isWorking || !_isAiAvailable)"
+                                OnClick="GenerateAsync">
+                        <i class="fa-regular fa-wand-magic-sparkles me-2" aria-hidden="true"></i>
+                        Generate Draft
+                    </BusyButton>
+                }
+                else
+                {
+                    <BusyButton Class="btn btn-outline-primary"
+                                IsBusy="_isWorking"
+                                BusyText="Refining..."
+                                Disabled="@(_isWorking || !_isAiAvailable)"
+                                OnClick="RefineAsync">
+                        <i class="fa-regular fa-wand-magic-sparkles me-2" aria-hidden="true"></i>
+                        Refine
+                    </BusyButton>
+
+                    <BusyButton Class="btn btn-primary"
+                                IsBusy="_isAccepting"
+                                BusyText="Saving..."
+                                Disabled="_isWorking || _isAccepting"
+                                OnClick="AcceptAsync">
+                        <i class="fa-regular fa-check me-2" aria-hidden="true"></i>
+                        Accept
+                    </BusyButton>
+                }
+            </div>
+        </div>
+    </FooterContent>
+</AppModal>
+
+@code {
+    [Parameter]
+    public Guid ThreadId { get; set; }
+
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public StoryEntityKind EntityKind { get; set; }
+
+    [Parameter]
+    public Guid? EntityId { get; set; }
+
+    [Parameter]
+    public EventCallback<StoryEntityAcceptResult> OnAccepted { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    private readonly string _promptInputId = $"story-entity-ai-prompt-{Guid.NewGuid():N}";
+    private readonly string _refineInputId = $"story-entity-ai-refine-{Guid.NewGuid():N}";
+    private bool _wasOpen;
+    private Guid _loadedThreadId;
+    private Guid? _loadedEntityId;
+    private StoryEntityKind _loadedEntityKind;
+    private bool _isWorking;
+    private bool _isAccepting;
+    private string _workingTitle = "Generating draft";
+    private string _workingMessage = "The AI is reviewing the story context.";
+    private string _prompt = string.Empty;
+    private string _refinePrompt = string.Empty;
+    private bool _isAiAvailable;
+    private string? _selectedAgentName;
+    private StoryEntityAiDraftSessionView? _session;
+    private string? _errorMessage;
+
+    protected override void OnParametersSet()
+    {
+        if (!IsOpen)
+        {
+            _wasOpen = false;
+            return;
+        }
+
+        if (_wasOpen
+            && _loadedThreadId == ThreadId
+            && _loadedEntityId == EntityId
+            && _loadedEntityKind == EntityKind)
+            return;
+
+        _wasOpen = true;
+        _loadedThreadId = ThreadId;
+        _loadedEntityId = EntityId;
+        _loadedEntityKind = EntityKind;
+        ResetState();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!IsOpen)
+            return;
+
+        try
+        {
+            var selection = await ThreadAgentService.GetSelectionAsync(ThreadId, CancellationToken.None);
+            _isAiAvailable = selection.IsAiAvailable;
+            _selectedAgentName = selection.SelectedAgentName;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Loading AI provider selection failed for chat {ThreadId}.", ThreadId);
+            _isAiAvailable = false;
+            _selectedAgentName = null;
+        }
+    }
+
+    private async Task GenerateAsync()
+    {
+        if (!_isAiAvailable)
+        {
+            _errorMessage = "Generating the draft failed because this chat does not have an AI provider configured.";
+            return;
+        }
+
+        var prompt = _prompt.Trim();
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            _errorMessage = $"Generating the {BuildEntityLabel()} draft failed because the prompt was empty.";
+            return;
+        }
+
+        _errorMessage = null;
+        _isWorking = true;
+        _workingTitle = "Generating draft";
+        _workingMessage = $"Building a proposed {BuildEntityLabel()} from the story context.";
+
+        try
+        {
+            _session = await StoryEntityAiAssistService.GenerateDraftAsync(
+                new StartStoryEntityAiDraft(ThreadId, EntityKind, EntityId, prompt),
+                CancellationToken.None);
+            _refinePrompt = string.Empty;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Generating AI draft failed for {EntityKind} {EntityId} in chat {ThreadId}.", EntityKind, EntityId, ThreadId);
+            _errorMessage = $"Generating the {BuildEntityLabel()} draft failed.";
+        }
+        finally
+        {
+            _isWorking = false;
+        }
+    }
+
+    private async Task RefineAsync()
+    {
+        if (_session is null)
+            return;
+
+        if (!_isAiAvailable)
+        {
+            _errorMessage = "Refining the draft failed because this chat does not have an AI provider configured.";
+            return;
+        }
+
+        var prompt = _refinePrompt.Trim();
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            _errorMessage = $"Refining the {BuildEntityLabel()} draft failed because the prompt was empty.";
+            return;
+        }
+
+        _errorMessage = null;
+        _isWorking = true;
+        _workingTitle = "Refining draft";
+        _workingMessage = $"Applying the new prompt to the current {BuildEntityLabel()} draft.";
+
+        try
+        {
+            _session = await StoryEntityAiAssistService.RefineDraftAsync(
+                new RefineStoryEntityAiDraft(ThreadId, _session, prompt),
+                CancellationToken.None);
+            _refinePrompt = string.Empty;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Refining AI draft failed for {EntityKind} {EntityId} in chat {ThreadId}.", EntityKind, EntityId, ThreadId);
+            _errorMessage = $"Refining the {BuildEntityLabel()} draft failed.";
+        }
+        finally
+        {
+            _isWorking = false;
+        }
+    }
+
+    private async Task AcceptAsync()
+    {
+        if (_session is null)
+            return;
+
+        _errorMessage = null;
+        _isAccepting = true;
+        try
+        {
+            var accepted = await StoryEntityAiAssistService.AcceptDraftAsync(
+                new AcceptStoryEntityAiDraft(ThreadId, _session),
+                CancellationToken.None);
+
+            if (OnAccepted.HasDelegate)
+                await OnAccepted.InvokeAsync(accepted);
+
+            await CloseAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Accepting AI draft failed for {EntityKind} {EntityId} in chat {ThreadId}.", EntityKind, EntityId, ThreadId);
+            _errorMessage = $"Saving the accepted {BuildEntityLabel()} draft failed.";
+        }
+        finally
+        {
+            _isAccepting = false;
+        }
+    }
+
+    private async Task RejectAsync()
+    {
+        ResetState();
+        await CloseAsync();
+    }
+
+    private Task CloseAsync()
+    {
+        _errorMessage = null;
+        return OnClose.InvokeAsync();
+    }
+
+    private void ResetState()
+    {
+        _session = null;
+        _prompt = string.Empty;
+        _refinePrompt = string.Empty;
+        _isWorking = false;
+        _isAccepting = false;
+        _workingTitle = "Generating draft";
+        _workingMessage = "The AI is reviewing the story context.";
+        _errorMessage = null;
+    }
+
+    private string BuildTitle() => _session is null
+        ? $"AI {BuildModeLabel()} {BuildEntityTitle()}"
+        : $"Review AI {BuildEntityTitle()} Draft";
+
+    private string BuildIntroHeading() => EntityId.HasValue
+        ? $"Edit {BuildEntityTitle()} With Prompt"
+        : $"New {BuildEntityTitle()} From Prompt";
+
+    private string BuildIntroText() => EntityId.HasValue
+        ? $"Describe how the AI should revise this {BuildEntityLabel()}. The draft will include the current {BuildEntityLabel()} details plus the broader story context."
+        : $"Describe the {BuildEntityLabel()} you want to create. The AI will use the story context and available lookup tools before proposing a draft.";
+
+    private string BuildModeLabel() => EntityId.HasValue ? "Edit" : "New";
+
+    private string BuildEntityTitle() => EntityKind switch
+    {
+        StoryEntityKind.Character => "Character",
+        StoryEntityKind.Item => "Item",
+        StoryEntityKind.Location => "Location",
+        StoryEntityKind.HistoryFact => "History Fact",
+        StoryEntityKind.TimelineEntry => "Timeline Entry",
+        _ => "Entity"
+    };
+
+    private string BuildEntityLabel() => BuildEntityTitle().ToLowerInvariant();
+
+    private string BuildEntityDisplay(string displayName) => $"{BuildEntityTitle()} '{displayName}'";
+
+    private IReadOnlyList<DraftFieldView> GetDraftFields()
+    {
+        if (_session is null)
+            return [];
+
+        return _session.Draft switch
+        {
+            CharacterAiDraftView draft => GetCharacterDraftFields(draft),
+            ItemAiDraftView draft => GetItemDraftFields(draft),
+            LocationAiDraftView draft => GetLocationDraftFields(draft),
+            HistoryFactAiDraftView draft => GetHistoryFactDraftFields(draft),
+            TimelineEntryAiDraftView draft => GetTimelineEntryDraftFields(draft),
+            _ => []
+        };
+    }
+
+    private static IReadOnlyList<DraftFieldView> GetCharacterDraftFields(CharacterAiDraftView draft) =>
+    [
+        DraftFieldView.SingleLine("Name", draft.Name),
+        DraftFieldView.Multiline("Summary", draft.Summary, 2),
+        DraftFieldView.Multiline("General Appearance", draft.GeneralAppearance),
+        DraftFieldView.Multiline("Core Personality", draft.CorePersonality),
+        DraftFieldView.Multiline("Relationships", draft.Relationships),
+        DraftFieldView.Multiline("Preferences / Likes / Beliefs", draft.PreferencesBeliefs),
+        DraftFieldView.SingleLine("Currently In Scene", draft.IsPresentInScene ? "Yes" : "No")
+    ];
+
+    private static IReadOnlyList<DraftFieldView> GetItemDraftFields(ItemAiDraftView draft) =>
+    [
+        DraftFieldView.SingleLine("Name", draft.Name),
+        DraftFieldView.Multiline("Summary", draft.Summary, 2),
+        DraftFieldView.Multiline("Details", draft.Details, 4),
+        DraftFieldView.SingleLine("Owner Character", draft.OwnerCharacterName ?? "None"),
+        DraftFieldView.SingleLine("Stored Location", draft.LocationName ?? "None"),
+        DraftFieldView.SingleLine("Currently In Scene", draft.IsPresentInScene ? "Yes" : "No")
+    ];
+
+    private static IReadOnlyList<DraftFieldView> GetLocationDraftFields(LocationAiDraftView draft) =>
+    [
+        DraftFieldView.SingleLine("Name", draft.Name),
+        DraftFieldView.Multiline("Summary", draft.Summary, 2),
+        DraftFieldView.Multiline("Details", draft.Details, 4),
+        DraftFieldView.SingleLine("Current Location", draft.IsCurrent ? "Yes" : "No")
+    ];
+
+    private static IReadOnlyList<DraftFieldView> GetHistoryFactDraftFields(HistoryFactAiDraftView draft) =>
+    [
+        DraftFieldView.SingleLine("Title", draft.Title),
+        DraftFieldView.Multiline("Summary", draft.Summary, 2),
+        DraftFieldView.Multiline("Details", draft.Details, 4),
+        DraftFieldView.Multiline("Characters", FormatReferences(draft.Characters), 2),
+        DraftFieldView.Multiline("Locations", FormatReferences(draft.Locations), 2),
+        DraftFieldView.Multiline("Items", FormatReferences(draft.Items), 2)
+    ];
+
+    private static IReadOnlyList<DraftFieldView> GetTimelineEntryDraftFields(TimelineEntryAiDraftView draft) =>
+    [
+        DraftFieldView.SingleLine("Sort Order", draft.SortOrder?.ToString() ?? "Automatic"),
+        DraftFieldView.SingleLine("When", string.IsNullOrWhiteSpace(draft.WhenText) ? "None" : draft.WhenText),
+        DraftFieldView.SingleLine("Title", draft.Title),
+        DraftFieldView.Multiline("Summary", draft.Summary, 2),
+        DraftFieldView.Multiline("Details", draft.Details, 4),
+        DraftFieldView.Multiline("Characters", FormatReferences(draft.Characters), 2),
+        DraftFieldView.Multiline("Locations", FormatReferences(draft.Locations), 2),
+        DraftFieldView.Multiline("Items", FormatReferences(draft.Items), 2)
+    ];
+
+    private static string FormatReferences(IReadOnlyList<StoryEntityReferenceView> references) =>
+        references.Count == 0
+            ? "None"
+            : string.Join(Environment.NewLine, references.Select(x => $"- {x.Name}"));
+
+    private sealed record DraftFieldView(string Label, string Value, bool IsMultiline, int Rows)
+    {
+        public static DraftFieldView SingleLine(string label, string value) => new(label, value, false, 1);
+
+        public static DraftFieldView Multiline(string label, string value, int rows = 3) => new(label, value, true, rows);
+    }
+}

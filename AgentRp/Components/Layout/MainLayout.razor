@@ -1,0 +1,138 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject NavigationManager NavigationManager
+
+<CascadingValue Value="@_shellState">
+    <div class="app-shell bg-body-tertiary">
+        <div class="app-shell-menu-toggle d-none d-lg-block">
+            <DesktopSidebarModeSelector />
+        </div>
+
+        <div class="app-shell-mobile-header d-lg-none border-bottom bg-body shadow-sm">
+            <div class="d-flex align-items-center justify-content-between gap-3 px-3 py-2">
+                <div class="min-w-0">
+                    <div class="fw-semibold text-truncate">@CurrentMobileHeaderTitle</div>
+                    @if (!string.IsNullOrWhiteSpace(CurrentMobileHeaderSubtitle))
+                    {
+                        <div class="small text-body-secondary">@CurrentMobileHeaderSubtitle</div>
+                    }
+                </div>
+
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm flex-shrink-0"
+                        @onclick="ToggleMobilePane">
+                    <i class="fa-regular @(ShowMobileSidebar ? "fa-message" : "fa-sidebar") me-2" aria-hidden="true"></i>
+                    @MobilePaneButtonText
+                </button>
+            </div>
+        </div>
+
+        <div class="app-shell-body d-flex h-100">
+            @if (ShowDesktopSidebar)
+            {
+                <aside class="@DesktopSidebarClass" data-testid="desktop-sidebar">
+                    <SidebarContent />
+                </aside>
+            }
+
+            @if (ShowMobileSidebar)
+            {
+                <aside class="app-shell-mobile-sidebar d-flex d-lg-none border-end bg-body" data-testid="mobile-sidebar">
+                    <SidebarContent OnNavigate="ShowContentAsync" />
+                </aside>
+            }
+
+            <main class="@MainRegionClass">
+                <article class="app-shell-main-scroll flex-grow-1">
+                    <div class="app-shell-main-content h-100">
+                        @Body
+                    </div>
+                </article>
+            </main>
+        </div>
+    </div>
+</CascadingValue>
+
+<ToastHost />
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">x</span>
+</div>
+
+@code {
+    private readonly AppShellState _shellState = new();
+
+    private bool ShowDesktopSidebar => _shellState.DesktopSidebarMode is not DesktopSidebarMode.Hidden;
+
+    private bool ShowMobileSidebar => _shellState.IsSidebarVisibleOnMobile;
+
+    private string MainRegionClass => ShowMobileSidebar
+        ? "app-shell-main d-none d-lg-flex flex-grow-1 flex-column position-relative"
+        : "app-shell-main d-flex flex-grow-1 flex-column position-relative";
+
+    private string DesktopSidebarClass => _shellState.DesktopSidebarMode switch
+    {
+        DesktopSidebarMode.Narrow => "app-shell-sidebar is-narrow d-none d-lg-flex border-end bg-body",
+        DesktopSidebarMode.Wide => "app-shell-sidebar is-wide d-none d-lg-flex border-end bg-body",
+        _ => "app-shell-sidebar d-none d-lg-flex border-end bg-body"
+    };
+
+    private bool IsChatRoute
+    {
+        get
+        {
+            var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+            return string.IsNullOrWhiteSpace(path)
+                || path.StartsWith("chat/", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private string CurrentMobileHeaderTitle => ShowMobileSidebar
+        ? "Agentic RP"
+        : _shellState.MobileHeaderTitle;
+
+    private string? CurrentMobileHeaderSubtitle => ShowMobileSidebar
+        ? "Recent chats"
+        : _shellState.MobileHeaderSubtitle;
+
+    private string MobilePaneButtonText => ShowMobileSidebar
+        ? IsChatRoute ? "Chat" : "Content"
+        : "Chats";
+
+    protected override void OnInitialized()
+    {
+        ApplyRouteDefaults(NavigationManager.Uri);
+        _shellState.Changed += HandleShellStateChanged;
+        NavigationManager.LocationChanged += HandleLocationChanged;
+    }
+
+    public void Dispose()
+    {
+        _shellState.Changed -= HandleShellStateChanged;
+        NavigationManager.LocationChanged -= HandleLocationChanged;
+    }
+
+    private void ToggleMobilePane() => _shellState.ToggleMobilePane();
+
+    private Task ShowContentAsync()
+    {
+        _shellState.ShowContent();
+        return Task.CompletedTask;
+    }
+
+    private void HandleLocationChanged(object? sender, LocationChangedEventArgs args)
+    {
+        ApplyRouteDefaults(args.Location);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplyRouteDefaults(string uri)
+    {
+        var relativePath = NavigationManager.ToBaseRelativePath(uri);
+        _shellState.ApplyRouteDefaults(relativePath);
+    }
+
+    private void HandleShellStateChanged() => InvokeAsync(StateHasChanged);
+}

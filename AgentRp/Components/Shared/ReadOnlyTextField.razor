@@ -1,0 +1,47 @@
+<div class="d-flex flex-column gap-1">
+    <label class="form-label mb-0" for="@_inputId">@Label</label>
+
+    @if (IsMultiline)
+    {
+        <textarea id="@_inputId"
+                  class="form-control"
+                  rows="@ResolvedRows"
+                  readonly>@DisplayValue</textarea>
+    }
+    else
+    {
+        <input id="@_inputId"
+               class="form-control"
+               type="text"
+               value="@DisplayValue"
+               readonly />
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? Value { get; set; }
+
+    [Parameter]
+    public bool IsMultiline { get; set; }
+
+    [Parameter]
+    public int Rows { get; set; } = 3;
+
+    [Parameter]
+    public string EmptyText { get; set; } = "None";
+
+    private readonly string _inputId = $"readonly-text-field-{Guid.NewGuid():N}";
+
+    private string DisplayValue => string.IsNullOrWhiteSpace(Value) ? EmptyText : Value;
+
+    private int ResolvedRows => Math.Max(Rows, CountDisplayLines());
+
+    private int CountDisplayLines() => DisplayValue
+        .Replace("\r\n", "\n", StringComparison.Ordinal)
+        .Replace('\r', '\n')
+        .Count(character => character == '\n') + 1;
+}

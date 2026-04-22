@@ -1,0 +1,424 @@
+<AppModal IsOpen="IsOpen"
+          Title="Snapshot Draft"
+          DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down"
+          OnClose="HandleCloseAsync">
+    <ChildContent>
+        @if (IsLoading)
+        {
+            <div class="d-flex align-items-center gap-3 py-3">
+                <div class="spinner-border spinner-border-sm" role="status"></div>
+                <span>Building snapshot draft...</span>
+            </div>
+        }
+        else if (Draft is null)
+        {
+            <div class="alert alert-danger mb-0">The snapshot draft could not be loaded.</div>
+        }
+        else
+        {
+            <div class="d-flex flex-column gap-4">
+                <div class="small text-body-secondary">
+                    This draft will become an inline snapshot immediately after the selected message in the chat log.
+                </div>
+
+                <div class="d-flex flex-column gap-1">
+                    @if (Draft.LatestSnapshot is null)
+                    {
+                        <div class="fw-semibold">No committed snapshot yet</div>
+                        <div class="small text-body-secondary">This draft covers the branch from the beginning through the selected message.</div>
+                    }
+                    else
+                    {
+                        <div class="fw-semibold">Last committed snapshot</div>
+                        <div class="small text-body-secondary">
+                            Covers through @Draft.LatestSnapshot.CoveredThroughUtc.ToShorthandDateWithRelativeDays()
+                        </div>
+                        <div class="small mt-2">@Draft.LatestSnapshot.Summary</div>
+                    }
+                </div>
+
+                <div class="d-flex align-items-center justify-content-between gap-3">
+                    <div>
+                        <div class="fw-semibold">Covered Messages</div>
+                        <div class="small text-body-secondary">This snapshot includes every unsnapshotted message through the selected message.</div>
+                    </div>
+                    <span class="badge text-bg-light border text-body-secondary">@_messages.Count messages</span>
+                </div>
+
+                <div class="list-group">
+                    @foreach (var message in _messages)
+                    {
+                        <div class="list-group-item">
+                            <div class="d-flex align-items-start gap-3">
+                                <div class="pt-1 text-body-secondary">
+                                    <i class="fa-regular fa-compress" aria-hidden="true"></i>
+                                </div>
+                                <div class="flex-grow-1">
+                                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                                        <div class="fw-semibold">@message.SpeakerName</div>
+                                        <div class="small text-body-secondary">@message.CreatedUtc.ToShorthandDateWithRelativeDays()</div>
+                                    </div>
+                                    <div class="small text-body-secondary">@message.Content</div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <div>
+                    <label class="form-label" for="snapshot-summary">Narrative Summary</label>
+                    <textarea id="snapshot-summary"
+                              class="form-control"
+                              rows="6"
+                              @bind="_narrativeSummary"></textarea>
+                </div>
+
+                <div class="d-flex flex-column gap-3">
+                    <div class="d-flex align-items-center justify-content-between gap-2">
+                        <div>
+                            <div class="fw-semibold">Facts</div>
+                            <div class="small text-body-secondary">These entries will be appended to canonical facts on commit.</div>
+                        </div>
+                        <button type="button"
+                                class="btn btn-outline-primary btn-sm"
+                                @onclick="AddFact">
+                            <i class="fa-regular fa-plus" aria-hidden="true"></i>
+                        </button>
+                    </div>
+
+                    @if (_facts.Count == 0)
+                    {
+                        <div class="small text-body-secondary">No fact entries in this draft.</div>
+                    }
+                    else
+                    {
+                        <div class="d-flex flex-column gap-3">
+                            @for (var index = 0; index < _facts.Count; index++)
+                            {
+                                var fact = _facts[index];
+
+                                <div class="d-flex flex-column gap-3">
+                                    <div class="d-flex align-items-center justify-content-between gap-2 @(index > 0 ? "border-top pt-3" : string.Empty)">
+                                        <div class="fw-semibold">Fact @(index + 1)</div>
+                                        <button type="button"
+                                                class="btn btn-outline-danger btn-sm"
+                                                title="Remove fact"
+                                                aria-label="Remove fact"
+                                                @onclick="() => RemoveFact(index)">
+                                            <i class="fa-regular fa-trash" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label" for="@($"snapshot-fact-title-{index}")">Title</label>
+                                        <input id="@($"snapshot-fact-title-{index}")" class="form-control" @bind="fact.Title" />
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label" for="@($"snapshot-fact-summary-{index}")">Summary</label>
+                                        <textarea id="@($"snapshot-fact-summary-{index}")" class="form-control" rows="2" @bind="fact.Summary"></textarea>
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label" for="@($"snapshot-fact-details-{index}")">Details</label>
+                                        <textarea id="@($"snapshot-fact-details-{index}")" class="form-control" rows="4" @bind="fact.Details"></textarea>
+                                    </div>
+
+                                    @RenderReferences("Linked characters", fact.CharacterIds, Draft.Characters)
+                                    @RenderReferences("Linked locations", fact.LocationIds, Draft.Locations)
+                                    @RenderReferences("Linked items", fact.ItemIds, Draft.Items)
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="d-flex flex-column gap-3">
+                    <div class="d-flex align-items-center justify-content-between gap-2">
+                        <div>
+                            <div class="fw-semibold">Timeline Entries</div>
+                            <div class="small text-body-secondary">These entries will be appended to the story timeline on commit.</div>
+                        </div>
+                        <button type="button"
+                                class="btn btn-outline-primary btn-sm"
+                                @onclick="AddTimelineEntry">
+                            <i class="fa-regular fa-plus" aria-hidden="true"></i>
+                        </button>
+                    </div>
+
+                    @if (_timelineEntries.Count == 0)
+                    {
+                        <div class="small text-body-secondary">No timeline entries in this draft.</div>
+                    }
+                    else
+                    {
+                        <div class="d-flex flex-column gap-3">
+                            @for (var index = 0; index < _timelineEntries.Count; index++)
+                            {
+                                var entry = _timelineEntries[index];
+
+                                <div class="d-flex flex-column gap-3">
+                                    <div class="d-flex align-items-center justify-content-between gap-2 @(index > 0 ? "border-top pt-3" : string.Empty)">
+                                        <div class="fw-semibold">Timeline Entry @(index + 1)</div>
+                                        <button type="button"
+                                                class="btn btn-outline-danger btn-sm"
+                                                title="Remove timeline entry"
+                                                aria-label="Remove timeline entry"
+                                                @onclick="() => RemoveTimelineEntry(index)">
+                                            <i class="fa-regular fa-trash" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label" for="@($"snapshot-timeline-when-{index}")">When</label>
+                                        <input id="@($"snapshot-timeline-when-{index}")" class="form-control" @bind="entry.WhenText" />
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label" for="@($"snapshot-timeline-title-{index}")">Title</label>
+                                        <input id="@($"snapshot-timeline-title-{index}")" class="form-control" @bind="entry.Title" />
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label" for="@($"snapshot-timeline-summary-{index}")">Summary</label>
+                                        <textarea id="@($"snapshot-timeline-summary-{index}")" class="form-control" rows="2" @bind="entry.Summary"></textarea>
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label" for="@($"snapshot-timeline-details-{index}")">Details</label>
+                                        <textarea id="@($"snapshot-timeline-details-{index}")" class="form-control" rows="4" @bind="entry.Details"></textarea>
+                                    </div>
+
+                                    @RenderReferences("Linked characters", entry.CharacterIds, Draft.Characters)
+                                    @RenderReferences("Linked locations", entry.LocationIds, Draft.Locations)
+                                    @RenderReferences("Linked items", entry.ItemIds, Draft.Items)
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <button type="button"
+                class="btn btn-outline-secondary"
+                disabled="@IsCommitting"
+                @onclick="HandleCloseAsync">
+            Cancel
+        </button>
+
+        <BusyButton Class="btn btn-primary"
+                    OnClick="CommitAsync"
+                    IsBusy="IsCommitting"
+                    BusyText="Committing..."
+                    Disabled="@(!CanCommit)">
+            Commit Snapshot
+        </BusyButton>
+    </FooterContent>
+</AppModal>
+
+@code {
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public bool IsLoading { get; set; }
+
+    [Parameter]
+    public bool IsCommitting { get; set; }
+
+    [Parameter]
+    public StoryChatSnapshotDraftView? Draft { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public EventCallback<CommitStoryChatSnapshotDraft> OnCommit { get; set; }
+
+    private readonly List<EditableSnapshotMessage> _messages = [];
+    private readonly List<EditableSnapshotFact> _facts = [];
+    private readonly List<EditableSnapshotTimelineEntry> _timelineEntries = [];
+    private string _narrativeSummary = string.Empty;
+    private StoryChatSnapshotDraftView? _loadedDraft;
+
+    private bool CanCommit =>
+        !IsLoading
+        && Draft is not null
+        && _messages.Count > 0
+        && !string.IsNullOrWhiteSpace(_narrativeSummary);
+
+    protected override void OnParametersSet()
+    {
+        if (Draft is null)
+        {
+            _loadedDraft = null;
+            return;
+        }
+
+        if (ReferenceEquals(_loadedDraft, Draft))
+            return;
+
+        _loadedDraft = Draft;
+        _narrativeSummary = Draft.NarrativeSummary;
+        _messages.Clear();
+        _messages.AddRange(Draft.Messages.Select(x => new EditableSnapshotMessage(x)));
+        _facts.Clear();
+        _facts.AddRange(Draft.Facts.Select(x => new EditableSnapshotFact(x)));
+        _timelineEntries.Clear();
+        _timelineEntries.AddRange(Draft.TimelineEntries.Select(x => new EditableSnapshotTimelineEntry(x)));
+    }
+
+    private Task HandleCloseAsync()
+    {
+        if (IsCommitting)
+            return Task.CompletedTask;
+
+        return OnClose.InvokeAsync();
+    }
+
+    private void AddFact() => _facts.Add(new EditableSnapshotFact());
+
+    private void RemoveFact(int index) => _facts.RemoveAt(index);
+
+    private void AddTimelineEntry() => _timelineEntries.Add(new EditableSnapshotTimelineEntry());
+
+    private void RemoveTimelineEntry(int index) => _timelineEntries.RemoveAt(index);
+
+    private Task CommitAsync()
+    {
+        if (!CanCommit || Draft is null)
+            return Task.CompletedTask;
+
+        return OnCommit.InvokeAsync(new CommitStoryChatSnapshotDraft(
+            Draft.ThreadId,
+            Draft.ThroughMessageId,
+            _narrativeSummary,
+            _facts
+                .Select(x => new StoryChatSnapshotFactDraftView(
+                    x.Title,
+                    x.Summary,
+                    x.Details,
+                    x.CharacterIds,
+                    x.LocationIds,
+                    x.ItemIds))
+                .ToList(),
+            _timelineEntries
+                .Select(x => new StoryChatSnapshotTimelineDraftView(
+                    x.WhenText,
+                    x.Title,
+                    x.Summary,
+                    x.Details,
+                    x.CharacterIds,
+                    x.LocationIds,
+                    x.ItemIds))
+                .ToList()));
+    }
+
+    private RenderFragment RenderReferences(
+        string label,
+        IReadOnlyList<Guid> ids,
+        IReadOnlyList<StoryChatSnapshotReferenceView> references) => builder =>
+    {
+        var names = references
+            .Where(x => ids.Contains(x.Id))
+            .Select(x => x.Name)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (names.Count == 0)
+            return;
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "small");
+        builder.OpenElement(2, "div");
+        builder.AddAttribute(3, "class", "text-body-secondary mb-2");
+        builder.AddContent(4, label);
+        builder.CloseElement();
+        builder.OpenElement(5, "div");
+        builder.AddAttribute(6, "class", "d-flex flex-wrap gap-2");
+
+        for (var index = 0; index < names.Count; index++)
+        {
+            builder.OpenElement(7 + (index * 3), "span");
+            builder.AddAttribute(8 + (index * 3), "class", "badge text-bg-light border text-body-secondary");
+            builder.AddContent(9 + (index * 3), names[index]);
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
+    private sealed class EditableSnapshotMessage(StoryChatSnapshotMessageSelectionView source)
+    {
+        public Guid MessageId { get; } = source.MessageId;
+
+        public string SpeakerName { get; } = source.SpeakerName;
+
+        public DateTime CreatedUtc { get; } = source.CreatedUtc;
+
+        public string Content { get; } = source.Content;
+    }
+
+    private sealed class EditableSnapshotFact
+    {
+        public EditableSnapshotFact()
+        {
+        }
+
+        public EditableSnapshotFact(StoryChatSnapshotFactDraftView source)
+        {
+            Title = source.Title;
+            Summary = source.Summary;
+            Details = source.Details;
+            CharacterIds = source.CharacterIds.ToList();
+            LocationIds = source.LocationIds.ToList();
+            ItemIds = source.ItemIds.ToList();
+        }
+
+        public string Title { get; set; } = string.Empty;
+
+        public string Summary { get; set; } = string.Empty;
+
+        public string Details { get; set; } = string.Empty;
+
+        public IReadOnlyList<Guid> CharacterIds { get; set; } = [];
+
+        public IReadOnlyList<Guid> LocationIds { get; set; } = [];
+
+        public IReadOnlyList<Guid> ItemIds { get; set; } = [];
+    }
+
+    private sealed class EditableSnapshotTimelineEntry
+    {
+        public EditableSnapshotTimelineEntry()
+        {
+        }
+
+        public EditableSnapshotTimelineEntry(StoryChatSnapshotTimelineDraftView source)
+        {
+            WhenText = source.WhenText;
+            Title = source.Title;
+            Summary = source.Summary;
+            Details = source.Details;
+            CharacterIds = source.CharacterIds.ToList();
+            LocationIds = source.LocationIds.ToList();
+            ItemIds = source.ItemIds.ToList();
+        }
+
+        public string? WhenText { get; set; }
+
+        public string Title { get; set; } = string.Empty;
+
+        public string Summary { get; set; } = string.Empty;
+
+        public string Details { get; set; } = string.Empty;
+
+        public IReadOnlyList<Guid> CharacterIds { get; set; } = [];
+
+        public IReadOnlyList<Guid> LocationIds { get; set; } = [];
+
+        public IReadOnlyList<Guid> ItemIds { get; set; } = [];
+    }
+}

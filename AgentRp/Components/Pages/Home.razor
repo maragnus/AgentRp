@@ -1,0 +1,1430 @@
+@page "/"
+@page "/chat/{ChatId:guid}"
+@implements IDisposable
+@inject IChatWorkspaceService ChatWorkspaceService
+@inject IStorySceneChatService StorySceneChatService
+@inject IStoryChatSnapshotService StoryChatSnapshotService
+@inject IActivityNotifier ActivityNotifier
+@inject IUserFeedbackService UserFeedbackService
+@inject NavigationManager NavigationManager
+@inject ILogger<Home> Logger
+@inject IJSRuntime JSRuntime
+
+<PageTitle>Story Scene Chat</PageTitle>
+
+@if (_isLoading)
+{
+    <div class="d-flex h-100 align-items-center justify-content-center px-3 py-4">
+        <div class="d-flex align-items-center gap-3">
+            <div class="spinner-border" role="status"></div>
+            <span>Loading story scene chat...</span>
+        </div>
+    </div>
+}
+else if (_chat is null)
+{
+    <div class="p-3 p-lg-4">
+        <div class="alert alert-danger mb-0">The selected story chat could not be loaded.</div>
+    </div>
+}
+else
+{
+    <div class="d-flex h-100 flex-column bg-body shadow-sm">
+        <div class="flex-shrink-0 border-bottom bg-body px-3 py-3 px-lg-4">
+            <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+                <div>
+                    <h1 class="h5 mb-1">@_chat.Title</h1>
+                    <div class="small text-body-secondary">
+                        <span>@(_chat.CurrentLocationName ?? "No current location")</span>
+                        <span class="mx-2">•</span>
+                        <span>@MessageCountText</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-grow-1 overflow-auto px-3 py-3 px-lg-4">
+            @if (_chat.Transcript.Count == 0)
+            {
+                <div class="d-flex h-100 align-items-center justify-content-center">
+                    <div class="col-12 col-xl-8">
+                        <div class="card border-0 bg-body-tertiary shadow-sm">
+                            <div class="card-body p-4 p-lg-5 text-center">
+                                <div class="display-6 mb-3 text-primary">
+                                    <i class="fa-regular fa-books" aria-hidden="true"></i>
+                                </div>
+                                <h2 class="h4 mb-2">Start the scene</h2>
+                                <p class="text-body-secondary mb-0">
+                                    Pick a speaker in the sidebar, then type to enable Direct or guided AI, or leave the textbox empty to let automatic AI continue the scene. AI posts run through planning and prose stages with live process details.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="d-flex flex-column gap-4">
+                    @if (_chat.RootBranchPoint is not null)
+                    {
+                        <div class="card border-0 bg-body-tertiary shadow-sm">
+                            <div class="card-body d-flex flex-column gap-3">
+                                <div class="d-flex align-items-center justify-content-between gap-3">
+                                    <div>
+                                        <div class="fw-semibold">@_chat.RootBranchPoint.Title</div>
+                                        <div class="small text-body-secondary">Pick which opening continuation to view.</div>
+                                    </div>
+                                    <span class="badge text-bg-light border text-body-secondary">@($"{_chat.RootBranchPoint.Options.Count} branches")</span>
+                                </div>
+
+                                <div class="d-flex flex-wrap gap-2">
+                                    @foreach (var option in _chat.RootBranchPoint.Options)
+                                    {
+                                        <BusyButton Class="@BuildBranchButtonClass(option)"
+                                                    OnClick="() => SelectBranchAsync(option.TargetLeafMessageId)"
+                                                    IsBusy="@(_switchingBranchLeafId == option.TargetLeafMessageId)"
+                                                    BusyText=""
+                                                    ShowBusyText="false"
+                                                    Disabled="@(_isSubmitting && _switchingBranchLeafId != option.TargetLeafMessageId)"
+                                                    title="@BuildBranchOptionTitle(option)"
+                                                    aria-label="@BuildBranchOptionTitle(option)">
+                                            <span class="fw-semibold">@option.SpeakerName</span>
+                                            <span class="mx-1">•</span>
+                                            <span>@option.Preview</span>
+                                        </BusyButton>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+
+                    @foreach (var node in _chat.Transcript)
+                    {
+                        var message = node.Message;
+                        var snapshot = node.Snapshot;
+                        var process = message?.Process;
+                        var processDurationText = process is null ? null : DescribeDuration(process.StartedUtc, process.CompletedUtc);
+                        var isExpanded = process is not null && IsProcessExpanded(process.RunId);
+                        var expandedStepId = process is null ? null : GetExpandedStepId(process.RunId);
+                        var cardClass = message is null ? string.Empty : BuildMessageCardClass(message);
+                        var isEditing = message is not null && _editingMessageId == message.MessageId;
+                        var isSnapshotExpanded = snapshot is not null && IsSnapshotExpanded(snapshot.SnapshotId);
+
+                        <div class="d-flex flex-column gap-3">
+                            @if (process is not null)
+                            {
+                                <div class="card border-0 bg-body-tertiary shadow-sm">
+                                    <div class="card-body p-0">
+                                        <button type="button"
+                                                class="btn btn-link w-100 p-3 text-start text-decoration-none text-reset"
+                                                aria-expanded="@isExpanded"
+                                                @onclick="() => ToggleProcessRun(process.RunId)">
+                                            <div class="d-flex align-items-start justify-content-between gap-3">
+                                                <div class="d-flex align-items-start gap-3">
+                                                    <div class="pt-1">
+                                                        <i class="fa-regular fa-gears text-body-secondary" aria-hidden="true"></i>
+                                                    </div>
+                                                    <div>
+                                                        <div class="fw-semibold">Process</div>
+                                                        <div class="small text-body-secondary">@process.Summary</div>
+                                                        @if (!string.IsNullOrWhiteSpace(process.ActiveStage))
+                                                        {
+                                                            <div class="small text-body-secondary">Active stage: @process.ActiveStage</div>
+                                                        }
+                                                    </div>
+                                                </div>
+
+                                                <div class="d-flex align-items-center gap-2">
+                                                    <span class="badge text-bg-light border text-body-secondary">@process.DisplayStatusText</span>
+                                                    <span class="badge text-bg-light border text-body-secondary">@processDurationText</span>
+                                                    <i class="fa-regular @(isExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                </div>
+                                            </div>
+                                        </button>
+
+                                        @if (isExpanded)
+                                        {
+                                            <div class="border-top px-3 py-3">
+                                                <div class="d-flex flex-column">
+                                                    @for (var stepIndex = 0; stepIndex < process.Steps.Count; stepIndex++)
+                                                    {
+                                                        var step = process.Steps[stepIndex];
+                                                        var isStepExpanded = expandedStepId == step.StepId;
+                                                        var stepDurationText = DescribeStepDuration(step);
+                                                        var stepSubtitle = GetProcessStepSubtitle(process, step);
+                                                        var stepBlocks = GetProcessStepBlocks(step);
+                                                        var stepDividerClass = stepIndex > 0 ? "border-top mt-2 pt-2" : string.Empty;
+                                                        var headerClass = step.IsActive ? "bg-primary-subtle" : string.Empty;
+                                                        var isAppearanceStep = IsAppearanceProcessStep(step);
+                                                        var processAppearanceEntry = isAppearanceStep ? GetProcessAppearanceEntry(process) : null;
+                                                        var processAppearanceCharacters = isAppearanceStep ? GetProcessAppearanceCharacters(process) : [];
+                                                        var isEditingProcessAppearance = processAppearanceEntry is not null && _editingAppearanceEntryId == processAppearanceEntry.AppearanceEntryId;
+                                                        var appearanceContextBlock = isAppearanceStep ? GetProcessStepBlock(step, "Appearance Context") : null;
+                                                        var isAppearanceContextExpanded = isAppearanceStep && IsAppearanceContextExpanded(process.RunId);
+
+                                                        <section class="@stepDividerClass">
+                                                            <button type="button"
+                                                                    class="btn btn-link w-100 px-0 py-2 text-start text-decoration-none text-reset @headerClass"
+                                                                    @onclick="() => ToggleProcessStep(process.RunId, step.StepId)">
+                                                                <div class="d-flex align-items-start gap-3">
+                                                                    <div class="pt-1">
+                                                                        <i class="@($"{step.IconCssClass} fa-fw text-body-secondary")" aria-hidden="true"></i>
+                                                                    </div>
+                                                                    <div class="flex-grow-1 w-100">
+                                                                        <div class="d-flex align-items-start justify-content-between gap-3">
+                                                                            <div class="w-100">
+                                                                                <div class="fw-semibold">@step.Title</div>
+                                                                                <div class="small text-body-secondary">@stepSubtitle</div>
+                                                                            </div>
+                                                                            <div class="d-flex align-items-center gap-3 ms-auto">
+                                                                                @if (!string.IsNullOrWhiteSpace(stepDurationText))
+                                                                                {
+                                                                                    <div class="small text-body-secondary text-nowrap">
+                                                                                        <i class="fa-regular fa-clock me-1" aria-hidden="true"></i>@stepDurationText
+                                                                                    </div>
+                                                                                }
+                                                                                <i class="fa-regular @(isStepExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </button>
+
+                                                            @if (isStepExpanded)
+                                                            {
+                                                                <div class="pt-2 pb-1 d-flex flex-column gap-3">
+                                                                    @if (isAppearanceStep)
+                                                                    {
+                                                                        <div class="d-flex flex-wrap gap-3 small text-body-secondary">
+                                                                            @if (processAppearanceEntry is not null)
+                                                                            {
+                                                                                <span>Recorded @processAppearanceEntry.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
+                                                                            }
+                                                                            <span>@(processAppearanceCharacters.Count == 1 ? "1 character" : $"{processAppearanceCharacters.Count} characters")</span>
+                                                                        </div>
+
+                                                                        @if (isEditingProcessAppearance && processAppearanceEntry is not null)
+                                                                        {
+                                                                            @foreach (var character in processAppearanceEntry.Characters)
+                                                                            {
+                                                                                <div>
+                                                                                    <label class="form-label" for="@GetAppearanceEditorId(processAppearanceEntry.AppearanceEntryId, character.CharacterId)">@character.CharacterName</label>
+                                                                                    <textarea id="@GetAppearanceEditorId(processAppearanceEntry.AppearanceEntryId, character.CharacterId)"
+                                                                                              class="form-control"
+                                                                                              rows="3"
+                                                                                              disabled="@_isSubmitting"
+                                                                                              @bind:get="GetAppearanceDraft(character.CharacterId)"
+                                                                                              @bind:set="value => SetAppearanceDraft(character.CharacterId, value)"></textarea>
+                                                                                </div>
+                                                                            }
+
+                                                                            <div class="d-flex justify-content-end gap-2">
+                                                                                <button type="button"
+                                                                                        class="btn btn-outline-secondary btn-sm"
+                                                                                        disabled="@_isSubmitting"
+                                                                                        @onclick="CancelAppearanceEdit">
+                                                                                    <i class="fa-regular fa-xmark" aria-hidden="true"></i>
+                                                                                </button>
+                                                                                <BusyButton Class="btn btn-primary btn-sm"
+                                                                                            OnClick="() => SaveAppearanceEditAsync(processAppearanceEntry)"
+                                                                                            IsBusy="@_isSubmitting"
+                                                                                            BusyText="Saving..."
+                                                                                            ShowBusyText="false"
+                                                                                            Disabled="@_isSubmitting">
+                                                                                    <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
+                                                                                </BusyButton>
+                                                                            </div>
+                                                                        }
+                                                                        else if (processAppearanceCharacters.Count > 0)
+                                                                        {
+                                                                            <div class="d-flex flex-column gap-3">
+                                                                                @foreach (var character in processAppearanceCharacters)
+                                                                                {
+                                                                                    <div>
+                                                                                        <div class="fw-semibold">@character.CharacterName</div>
+                                                                                        @if (string.IsNullOrWhiteSpace(character.CurrentAppearance))
+                                                                                        {
+                                                                                            <div class="small text-body-secondary">No current appearance has been captured yet.</div>
+                                                                                        }
+                                                                                        else
+                                                                                        {
+                                                                                            <div class="small">@character.CurrentAppearance</div>
+                                                                                        }
+                                                                                    </div>
+                                                                                }
+                                                                            </div>
+
+                                                                            @if (processAppearanceEntry?.CanEdit == true)
+                                                                            {
+                                                                                <div class="d-flex justify-content-end">
+                                                                                    <button type="button"
+                                                                                            class="btn btn-outline-secondary btn-sm"
+                                                                                            disabled="@_isSubmitting"
+                                                                                            @onclick="() => BeginAppearanceEdit(processAppearanceEntry)">
+                                                                                        <i class="fa-regular fa-pen" aria-hidden="true"></i>
+                                                                                    </button>
+                                                                                </div>
+                                                                            }
+                                                                        }
+                                                                        else
+                                                                        {
+                                                                            <div class="small">
+                                                                                <MarkdownContent Markdown="@step.Detail" />
+                                                                            </div>
+                                                                        }
+
+                                                                        @if (appearanceContextBlock is not null)
+                                                                        {
+                                                                            <div class="pt-2">
+                                                                                <button type="button"
+                                                                                        class="btn btn-link px-0 py-0 text-start text-decoration-none text-reset"
+                                                                                        @onclick="() => ToggleAppearanceContext(process.RunId)">
+                                                                                    <span class="fw-semibold">Context</span>
+                                                                                    <i class="fa-regular @(isAppearanceContextExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary ms-2" aria-hidden="true"></i>
+                                                                                </button>
+
+                                                                                @if (isAppearanceContextExpanded)
+                                                                                {
+                                                                                    <div class="pt-3">
+                                                                                        <MarkdownContent Markdown="@appearanceContextBlock.Content" />
+                                                                                    </div>
+                                                                                }
+                                                                            </div>
+                                                                        }
+                                                                    }
+                                                                    else if (stepBlocks.Count == 0)
+                                                                    {
+                                                                        <div class="small">
+                                                                            <MarkdownContent Markdown="@step.Detail" />
+                                                                        </div>
+                                                                    }
+                                                                    else
+                                                                    {
+                                                                        @for (var blockIndex = 0; blockIndex < stepBlocks.Count; blockIndex++)
+                                                                        {
+                                                                            var block = stepBlocks[blockIndex];
+
+                                                                            <div class="@(blockIndex > 0 ? "pt-3" : string.Empty)">
+                                                                                <div class="fw-semibold mb-2">@block.Title</div>
+                                                                                <MarkdownContent Markdown="@block.Content" />
+                                                                            </div>
+                                                                        }
+                                                                    }
+                                                                </div>
+                                                            }
+                                                        </section>
+                                                    }
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+
+                            @if (message is not null)
+                            {
+                                <div class="@cardClass">
+                                    <div class="card shadow-sm">
+                                        <div class="card-body d-flex flex-column gap-3">
+                                            <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 small text-body-secondary">
+                                                <div class="d-flex align-items-center gap-2">
+                                                    <span class="badge @(message.IsNarrator ? "text-bg-info" : message.IsSelectedSpeaker ? "text-bg-primary" : "text-bg-light border text-body-secondary")">
+                                                        @message.DisplaySpeakerName
+                                                    </span>
+
+                                                    @if (message.DisplaySpeakerName != message.CanonicalSpeakerName)
+                                                    {
+                                                        <span>as @message.CanonicalSpeakerName</span>
+                                                    }
+                                                </div>
+
+                                                <div class="d-flex align-items-center gap-2">
+                                                    <span>@message.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
+                                                    <span class="badge text-bg-light border text-body-secondary">@DescribeMode(message.GenerationMode)</span>
+                                                </div>
+                                            </div>
+
+                                            @if (isEditing)
+                                            {
+                                                <div>
+                                                    <label class="visually-hidden" for="@GetInlineEditorId(message.MessageId)">Edit message</label>
+                                                    <textarea id="@GetInlineEditorId(message.MessageId)"
+                                                              class="form-control"
+                                                              rows="5"
+                                                              @bind="_editingDraft"
+                                                              disabled="@_isSubmitting"></textarea>
+                                                </div>
+                                            }
+                                            else if (string.IsNullOrWhiteSpace(message.Content) && process is not null && process.Status == ProcessRunStatus.Running)
+                                            {
+                                                <div class="d-flex align-items-center gap-2 text-body-secondary">
+                                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                                    <span>@(process.ActiveStage ?? "Generating")...</span>
+                                                </div>
+                                            }
+                                            else if (message.IsNarrator)
+                                            {
+                                                <div class="fst-italic">
+                                                    <MarkdownContent Markdown="@message.Content" />
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <MarkdownContent Markdown="@message.Content" />
+                                            }
+                                        </div>
+
+                                        <div class="border-top px-3 py-2">
+                                            <div class="d-flex justify-content-end gap-2">
+                                                @if (isEditing)
+                                                {
+                                                    <button type="button"
+                                                            class="btn btn-outline-secondary btn-sm"
+                                                            title="Cancel edit"
+                                                            aria-label="Cancel edit"
+                                                            disabled="@_isSubmitting"
+                                                            @onclick="CancelInlineEdit">
+                                                        <i class="fa-regular fa-xmark" aria-hidden="true"></i>
+                                                    </button>
+
+                                                    <BusyButton Class="btn btn-outline-primary btn-sm"
+                                                                OnClick="SaveInlineEditAsync"
+                                                                IsBusy="@(_isSubmitting && _editingAction == StorySceneEditAction.Save)"
+                                                                BusyText=""
+                                                                ShowBusyText="false"
+                                                                Disabled="@(!message.CanSaveInPlace || !_editingMessageId.HasValue || string.IsNullOrWhiteSpace(_editingDraft) || (_isSubmitting && _editingAction != StorySceneEditAction.Save))"
+                                                                title="Save message"
+                                                                aria-label="Save message">
+                                                        <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
+                                                    </BusyButton>
+
+                                                    <BusyButton Class="btn btn-primary btn-sm"
+                                                                OnClick="CreateEditedBranchAsync"
+                                                                IsBusy="@(_isSubmitting && _editingAction == StorySceneEditAction.Branch)"
+                                                                BusyText=""
+                                                                ShowBusyText="false"
+                                                                Disabled="@(!_editingMessageId.HasValue || string.IsNullOrWhiteSpace(_editingDraft) || (_isSubmitting && _editingAction != StorySceneEditAction.Branch))"
+                                                                title="Submit as new branch"
+                                                                aria-label="Submit as new branch">
+                                                        <i class="fa-regular fa-code-branch" aria-hidden="true"></i>
+                                                    </BusyButton>
+
+                                                    @if (!message.CanSaveInPlace)
+                                                    {
+                                                        <div class="w-100 small text-body-secondary text-end">
+                                                            This message is already covered by a snapshot, so edits must create a branch.
+                                                        </div>
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    @if (message.IsSnapshotCandidate)
+                                                    {
+                                                        <button type="button"
+                                                                class="btn btn-outline-primary btn-sm"
+                                                                title="Create snapshot through this message"
+                                                                aria-label="Create snapshot through this message"
+                                                                disabled="@(_isSubmitting || _isSnapshotDraftLoading || _isCommittingSnapshot)"
+                                                                @onclick="() => OpenSnapshotDraftAsync(message)">
+                                                            <i class="fa-regular fa-compress" aria-hidden="true"></i>
+                                                        </button>
+                                                    }
+
+                                                    <button type="button"
+                                                            class="btn btn-outline-secondary btn-sm"
+                                                            title="Edit message"
+                                                            aria-label="Edit message"
+                                                            disabled="@_isSubmitting"
+                                                            @onclick="() => BeginInlineEdit(message)">
+                                                        <i class="fa-regular fa-pen" aria-hidden="true"></i>
+                                                    </button>
+
+                                                    <button type="button"
+                                                            class="btn btn-outline-secondary btn-sm"
+                                                            title="Copy message"
+                                                            aria-label="Copy message"
+                                                            @onclick="() => CopyMessageAsync(message.Content)">
+                                                        <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                                                    </button>
+
+                                                    <button type="button"
+                                                            class="btn btn-outline-danger btn-sm"
+                                                            title="Delete message"
+                                                            aria-label="Delete message"
+                                                            disabled="@_isSubmitting"
+                                                            @onclick="() => OpenDeleteModal(message)">
+                                                        <i class="fa-regular fa-trash" aria-hidden="true"></i>
+                                                    </button>
+                                                }
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                @if (node.NextBranchPoint is not null)
+                                {
+                                    <div class="card border-0 bg-body-tertiary shadow-sm">
+                                        <div class="card-body d-flex flex-column gap-3">
+                                            <div class="d-flex align-items-center justify-content-between gap-3">
+                                                <div>
+                                                    <div class="fw-semibold">@node.NextBranchPoint.Title</div>
+                                                    <div class="small text-body-secondary">Choose which continuation stays active after this point.</div>
+                                                </div>
+                                                <span class="badge text-bg-light border text-body-secondary">@($"{node.NextBranchPoint.Options.Count} branches")</span>
+                                            </div>
+
+                                            <div class="d-flex flex-wrap gap-2">
+                                                @foreach (var option in node.NextBranchPoint.Options)
+                                                {
+                                                    <BusyButton Class="@BuildBranchButtonClass(option)"
+                                                                OnClick="() => SelectBranchAsync(option.TargetLeafMessageId)"
+                                                                IsBusy="@(_switchingBranchLeafId == option.TargetLeafMessageId)"
+                                                                BusyText=""
+                                                                ShowBusyText="false"
+                                                                Disabled="@(_isSubmitting && _switchingBranchLeafId != option.TargetLeafMessageId)"
+                                                                title="@BuildBranchOptionTitle(option)"
+                                                                aria-label="@BuildBranchOptionTitle(option)">
+                                                        <span class="fw-semibold">@option.SpeakerName</span>
+                                                        <span class="mx-1">•</span>
+                                                        <span>@option.Preview</span>
+                                                    </BusyButton>
+                                                }
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                            }
+                            else if (snapshot is not null)
+                            {
+                                <div class="card border-0 bg-body-tertiary shadow-sm">
+                                    <div class="card-body p-0">
+                                        <button type="button"
+                                                class="btn btn-link w-100 p-3 text-start text-decoration-none text-reset"
+                                                aria-expanded="@isSnapshotExpanded"
+                                                @onclick="() => ToggleSnapshot(snapshot.SnapshotId)">
+                                            <div class="d-flex align-items-start justify-content-between gap-3">
+                                                <div class="d-flex align-items-start gap-3">
+                                                    <div class="pt-1">
+                                                        <i class="fa-regular fa-compress text-body-secondary" aria-hidden="true"></i>
+                                                    </div>
+                                                    <div>
+                                                        <div class="fw-semibold">Snapshot</div>
+                                                        <div class="small text-body-secondary">@snapshot.Summary</div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="d-flex align-items-center gap-2">
+                                                    <span class="badge text-bg-light border text-body-secondary">@snapshot.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
+                                                    <i class="fa-regular @(isSnapshotExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                </div>
+                                            </div>
+                                        </button>
+
+                                        <div class="border-top px-3 py-2 small text-body-secondary">
+                                            @($"{snapshot.IncludedMessageCount} messages, {snapshot.FactCount} facts, {snapshot.TimelineEntryCount} timeline entries")
+                                        </div>
+
+                                        @if (isSnapshotExpanded)
+                                        {
+                                            <div class="border-top px-3 py-3">
+                                                <div class="d-flex flex-column gap-3">
+                                                    <div class="small text-body-secondary">
+                                                        Committed @snapshot.CreatedUtc.ToShorthandDateWithRelativeDays()
+                                                    </div>
+
+                                                    <div class="border rounded bg-body px-3 py-3">
+                                                        <div class="fw-semibold mb-2">Narrative Summary</div>
+                                                        <div class="small">@snapshot.Summary</div>
+                                                    </div>
+
+                                                    <div class="border rounded bg-body px-3 py-3">
+                                                        <div class="fw-semibold mb-2">Facts</div>
+                                                        @if (snapshot.Facts.Count == 0)
+                                                        {
+                                                            <div class="small text-body-secondary">No facts in this snapshot.</div>
+                                                        }
+                                                        else
+                                                        {
+                                                            <div class="d-flex flex-column gap-3">
+                                                                @foreach (var fact in snapshot.Facts)
+                                                                {
+                                                                    <div>
+                                                                        <div class="fw-semibold">@fact.Title</div>
+                                                                        @if (!string.IsNullOrWhiteSpace(fact.Summary))
+                                                                        {
+                                                                            <div class="small text-body-secondary mt-1">@fact.Summary</div>
+                                                                        }
+                                                                        @if (!string.IsNullOrWhiteSpace(fact.Details))
+                                                                        {
+                                                                            <div class="small mt-1">@fact.Details</div>
+                                                                        }
+                                                                        @RenderSnapshotReferences("Characters", fact.CharacterNames)
+                                                                        @RenderSnapshotReferences("Locations", fact.LocationNames)
+                                                                        @RenderSnapshotReferences("Items", fact.ItemNames)
+                                                                    </div>
+                                                                }
+                                                            </div>
+                                                        }
+                                                    </div>
+
+                                                    <div class="border rounded bg-body px-3 py-3">
+                                                        <div class="fw-semibold mb-2">Timeline Entries</div>
+                                                        @if (snapshot.TimelineEntries.Count == 0)
+                                                        {
+                                                            <div class="small text-body-secondary">No timeline entries in this snapshot.</div>
+                                                        }
+                                                        else
+                                                        {
+                                                            <div class="d-flex flex-column gap-3">
+                                                                @foreach (var entry in snapshot.TimelineEntries)
+                                                                {
+                                                                    <div>
+                                                                        <div class="fw-semibold">@entry.Title</div>
+                                                                        @if (!string.IsNullOrWhiteSpace(entry.WhenText))
+                                                                        {
+                                                                            <div class="small text-body-secondary mt-1">@entry.WhenText</div>
+                                                                        }
+                                                                        @if (!string.IsNullOrWhiteSpace(entry.Summary))
+                                                                        {
+                                                                            <div class="small text-body-secondary mt-1">@entry.Summary</div>
+                                                                        }
+                                                                        @if (!string.IsNullOrWhiteSpace(entry.Details))
+                                                                        {
+                                                                            <div class="small mt-1">@entry.Details</div>
+                                                                        }
+                                                                        @RenderSnapshotReferences("Characters", entry.CharacterNames)
+                                                                        @RenderSnapshotReferences("Locations", entry.LocationNames)
+                                                                        @RenderSnapshotReferences("Items", entry.ItemNames)
+                                                                    </div>
+                                                                }
+                                                            </div>
+                                                        }
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="flex-shrink-0 border-top bg-body px-3 py-3 px-lg-4">
+            @if (!_chat.IsAiAvailable)
+            {
+                <div class="alert alert-info">Configure AI to enable chat functionality.</div>
+            }
+            else 
+            {
+                @if (!string.IsNullOrWhiteSpace(_errorMessage))
+                {
+                    <div class="alert alert-danger mb-3">@_errorMessage</div>
+                }
+
+                <div>
+                    <label class="visually-hidden" for="scene-message-input">Message or guidance</label>
+                    <textarea id="scene-message-input" style="field-sizing: content; height: auto;"
+                                class="form-control mb-2"
+                                rows="4"
+                                placeholder="Write a direct message or describe guidance for the next beat..."
+                                @bind="_draftText"
+                                @bind:event="oninput"
+                                disabled="@_isSubmitting"></textarea>
+                </div>
+
+                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                    <div class="d-flex flex-column">
+                        <div class="small text-body-secondary">Speaking as <strong>@_chat.SelectedSpeaker.Name</strong></div>
+                        <div class="small text-body-secondary">
+                            @if (_chat.IsAiAvailable && !string.IsNullOrWhiteSpace(_chat.SelectedAgentName))
+                            {
+                                <span>AI provider: @_chat.SelectedAgentName</span>
+                            }
+                            else
+                            {
+                                <span>AI provider unavailable</span>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="d-flex flex-wrap justify-content-end gap-2">
+                        <BusyButton Class="btn btn-primary"
+                                    OnClick="() => PostAsync(AiPostMode)"
+                                    IsBusy="@(_submittingMode == AiPostMode)"
+                                    BusyText="Generating..."
+                                    Disabled="@(!_chat.IsAiAvailable || (_isSubmitting && _submittingMode != AiPostMode))"
+                                    ShowBusyText="false"
+                                    title="@AiPostTitle"
+                                    aria-label="@AiPostTitle">
+                            <i class="fa-regular fa-wand-magic-sparkles me-2" aria-hidden="true"></i>
+                            @AiPostLabel
+                        </BusyButton>
+
+                        <BusyButton Class="btn btn-outline-primary"
+                                    OnClick="() => PostAsync(StoryScenePostMode.Manual)"
+                                    IsBusy="@(_submittingMode == StoryScenePostMode.Manual)"
+                                    BusyText="Posting..."
+                                    Disabled="@(!HasDraftText || (_isSubmitting && _submittingMode != StoryScenePostMode.Manual))"
+                                    ShowBusyText="false"
+                                    title="Direct posts your exact text"
+                                    aria-label="Direct posts your exact text">
+                            <i class="fa-regular fa-paper-plane" aria-hidden="true"></i>
+                        </BusyButton>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <StoryChatSnapshotModal IsOpen="@_isSnapshotModalOpen"
+                            IsLoading="@_isSnapshotDraftLoading"
+                            IsCommitting="@_isCommittingSnapshot"
+                            Draft="@_snapshotDraft"
+                            OnClose="CloseSnapshotDraftAsync"
+                            OnCommit="CommitSnapshotDraftAsync" />
+
+    <AppModal IsOpen="@_isDeleteModalOpen"
+              Title="@DeleteModalTitle"
+              DialogClass="modal-dialog modal-dialog-centered modal-fullscreen-sm-down"
+              OnClose="CloseDeleteModal">
+        <ChildContent>
+            @if (_deleteTargetMessage is not null)
+            {
+                <div class="d-flex flex-column gap-3">
+                    <div class="alert alert-warning mb-0">@DeleteModalSummary</div>
+
+                    <div class="small text-body-secondary">
+                        @_deleteTargetMessage.DisplaySpeakerName on @_deleteTargetMessage.CreatedUtc.ToShorthandDateWithRelativeDays()
+                    </div>
+
+                    <div class="border rounded bg-body-tertiary px-3 py-3">
+                        @if (_deleteTargetMessage.IsNarrator)
+                        {
+                            <div class="fst-italic">@_deleteTargetMessage.Content</div>
+                        }
+                        else
+                        {
+                            <div>@_deleteTargetMessage.Content</div>
+                        }
+                    </div>
+
+                    @if (_deleteTargetMessage.DeleteCapabilities.CanDeleteBranch)
+                    {
+                        <div class="small text-body-secondary">
+                            Deleting this branch removes @_deleteTargetMessage.DeleteCapabilities.DescendantCount descendant @BranchDescendantLabel in addition to the selected message.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="small text-body-secondary">
+                            This message has no descendant branch, so only the selected message will be removed.
+                        </div>
+                    }
+                </div>
+            }
+        </ChildContent>
+        <FooterContent>
+            <button type="button"
+                    class="btn btn-outline-secondary"
+                    disabled="@_isSubmitting"
+                    @onclick="CloseDeleteModal">
+                Cancel
+            </button>
+
+            @if (_deleteTargetMessage is not null)
+            {
+                <BusyButton Class="btn btn-outline-danger"
+                            OnClick='() => ConfirmDeleteAsync(StorySceneDeleteMode.SingleMessage)'
+                            IsBusy="@(_isSubmitting && _deleteMode == StorySceneDeleteMode.SingleMessage)"
+                            BusyText="Deleting..."
+                            Disabled="@(!_deleteTargetMessage.DeleteCapabilities.CanDeleteSingleMessage || (_isSubmitting && _deleteMode != StorySceneDeleteMode.SingleMessage))">
+                    Delete Message Only
+                </BusyButton>
+
+                @if (_deleteTargetMessage.DeleteCapabilities.CanDeleteBranch)
+                {
+                    <BusyButton Class="btn btn-danger"
+                                OnClick='() => ConfirmDeleteAsync(StorySceneDeleteMode.Branch)'
+                                IsBusy="@(_isSubmitting && _deleteMode == StorySceneDeleteMode.Branch)"
+                                BusyText="Deleting..."
+                                Disabled="@(_isSubmitting && _deleteMode != StorySceneDeleteMode.Branch)">
+                        Delete Branch
+                    </BusyButton>
+                }
+            }
+        </FooterContent>
+    </AppModal>
+}
+
+@code {
+    [Parameter]
+    public Guid? ChatId { get; set; }
+
+    [CascadingParameter]
+    private AppShellState? ShellState { get; set; }
+
+    private IDisposable? _workspaceSubscription;
+    private Guid? _appliedThreadId;
+    private bool _isLoading = true;
+    private bool _isSubmitting;
+    private StoryScenePostMode? _submittingMode;
+    private string _draftText = string.Empty;
+    private Guid? _editingMessageId;
+    private string _editingDraft = string.Empty;
+    private StorySceneEditAction? _editingAction;
+    private Guid? _editingAppearanceEntryId;
+    private Dictionary<Guid, string> _appearanceDrafts = [];
+    private Guid? _switchingBranchLeafId;
+    private bool _isSnapshotModalOpen;
+    private bool _isSnapshotDraftLoading;
+    private bool _isCommittingSnapshot;
+    private StoryChatSnapshotDraftView? _snapshotDraft;
+    private bool _isDeleteModalOpen;
+    private StorySceneMessageView? _deleteTargetMessage;
+    private StorySceneDeleteMode? _deleteMode;
+    private string? _errorMessage;
+    private StorySceneChatState? _chat;
+    private DateTime _processDurationNowUtc = DateTime.UtcNow;
+    private readonly Dictionary<Guid, bool> _expandedProcessRunStates = [];
+    private readonly Dictionary<Guid, Guid?> _expandedProcessStepIds = [];
+    private readonly Dictionary<Guid, bool> _expandedAppearanceContextStates = [];
+    private readonly Dictionary<Guid, bool> _expandedSnapshotStates = [];
+    private System.Threading.Timer? _processDurationRefreshTimer;
+    private bool HasDraftText => !string.IsNullOrWhiteSpace(_draftText);
+    private StoryScenePostMode AiPostMode => HasDraftText ? StoryScenePostMode.GuidedAi : StoryScenePostMode.AutomaticAi;
+    private string AiPostLabel => HasDraftText ? "Guided" : "Automatic";
+    private string AiPostTitle => HasDraftText
+        ? "Guided uses your text as planning guidance"
+        : "Automatic writes the next message without using the textbox";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _workspaceSubscription = ActivityNotifier.Subscribe(ActivityStreams.StoryChatWorkspace, _ => InvokeAsync(HandleWorkspaceUpdatedAsync));
+        await base.OnInitializedAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var requestedThreadId = ChatId;
+        var resolvedThreadId = await ChatWorkspaceService.ResolveWorkspaceThreadAsync(requestedThreadId, CancellationToken.None);
+
+        if (requestedThreadId != resolvedThreadId)
+        {
+            NavigationManager.NavigateTo($"/chat/{resolvedThreadId}", replace: true);
+            return;
+        }
+
+        if (_appliedThreadId != resolvedThreadId || _chat is null)
+        {
+            _isLoading = true;
+            await LoadChatAsync(resolvedThreadId);
+            _appliedThreadId = resolvedThreadId;
+            _isLoading = false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _workspaceSubscription?.Dispose();
+        _processDurationRefreshTimer?.Dispose();
+    }
+
+    private async Task HandleWorkspaceUpdatedAsync()
+    {
+        if (_appliedThreadId.HasValue)
+            await LoadChatAsync(_appliedThreadId.Value);
+    }
+
+    private async Task LoadChatAsync(Guid threadId)
+    {
+        _chat = await StorySceneChatService.GetChatStateAsync(threadId, CancellationToken.None);
+        _processDurationNowUtc = DateTime.UtcNow;
+
+        if (_chat is not null)
+        {
+            foreach (var process in _chat.Transcript.Select(x => x.Message).Where(x => x?.Process is not null).Select(x => x!.Process!))
+            {
+                _expandedProcessRunStates.TryAdd(process.RunId, false);
+                _expandedProcessStepIds.TryAdd(process.RunId, process.Steps.FirstOrDefault(x => x.IsActive)?.StepId ?? process.Steps.FirstOrDefault()?.StepId);
+                _expandedAppearanceContextStates.TryAdd(process.RunId, false);
+            }
+
+            foreach (var snapshot in _chat.Transcript.Select(x => x.Snapshot).Where(x => x is not null).Select(x => x!))
+                _expandedSnapshotStates.TryAdd(snapshot.SnapshotId, false);
+
+            if (_editingAppearanceEntryId.HasValue
+                && !_chat.Transcript.Any(x => x.Appearance?.AppearanceEntryId == _editingAppearanceEntryId.Value))
+                CancelAppearanceEdit();
+
+            ShellState?.SetMobileContentHeader(_chat.Title, MessageCountText);
+        }
+
+        SyncProcessDurationRefreshTimer();
+        StateHasChanged();
+    }
+
+    private void SyncProcessDurationRefreshTimer()
+    {
+        var hasRunningProcesses = _chat?.Transcript.Any(x => x.Message?.Process?.Status == ProcessRunStatus.Running) == true;
+
+        if (hasRunningProcesses)
+        {
+            _processDurationRefreshTimer ??= new System.Threading.Timer(_ => RefreshProcessDurations(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+            return;
+        }
+
+        _processDurationRefreshTimer?.Dispose();
+        _processDurationRefreshTimer = null;
+    }
+
+    private void RefreshProcessDurations()
+    {
+        _processDurationNowUtc = DateTime.UtcNow;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private async Task PostAsync(StoryScenePostMode mode)
+    {
+        if (_chat is null)
+            return;
+
+        _errorMessage = null;
+
+        if ((mode == StoryScenePostMode.GuidedAi || mode == StoryScenePostMode.AutomaticAi) && !_chat.IsAiAvailable)
+        {
+            _errorMessage = "This chat does not currently have an AI provider configured.";
+            return;
+        }
+
+        if (mode != StoryScenePostMode.AutomaticAi && !HasDraftText)
+        {
+            _errorMessage = mode == StoryScenePostMode.Manual
+                ? "Enter a message before posting."
+                : "Enter a guidance prompt before generating the message.";
+            return;
+        }
+
+        _submittingMode = mode;
+        _isSubmitting = true;
+
+        try
+        {
+            await StorySceneChatService.PostMessageAsync(
+                new PostStorySceneMessage(
+                    _chat.ThreadId,
+                    _chat.SelectedSpeaker.CharacterId,
+                    mode,
+                    mode == StoryScenePostMode.Manual ? _draftText : null,
+                    mode == StoryScenePostMode.GuidedAi ? _draftText : null),
+                CancellationToken.None);
+
+            _draftText = string.Empty;
+            await LoadChatAsync(_chat.ThreadId);
+            if (mode != StoryScenePostMode.Manual)
+                UserFeedbackService.ShowBackgroundSuccess(BuildPostSuccessMessage(mode), "Scene Updated");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Posting scene message failed for chat {ThreadId}.", _chat.ThreadId);
+            _errorMessage = exception.Message;
+            if (mode != StoryScenePostMode.Manual)
+                UserFeedbackService.ShowBackgroundError(_errorMessage, "Scene Message Failed");
+        }
+        finally
+        {
+            _isSubmitting = false;
+            _submittingMode = null;
+        }
+    }
+
+    private void BeginInlineEdit(StorySceneMessageView message)
+    {
+        _editingMessageId = message.MessageId;
+        _editingDraft = message.Content;
+        _editingAction = null;
+    }
+
+    private void CancelInlineEdit()
+    {
+        _editingMessageId = null;
+        _editingDraft = string.Empty;
+        _editingAction = null;
+    }
+
+    private void OpenDeleteModal(StorySceneMessageView message)
+    {
+        _deleteTargetMessage = message;
+        _deleteMode = null;
+        _isDeleteModalOpen = true;
+        _errorMessage = null;
+    }
+
+    private Task CloseDeleteModal()
+    {
+        if (_isSubmitting)
+            return Task.CompletedTask;
+
+        _isDeleteModalOpen = false;
+        _deleteTargetMessage = null;
+        _deleteMode = null;
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveInlineEditAsync()
+    {
+        if (_chat is null || !_editingMessageId.HasValue || string.IsNullOrWhiteSpace(_editingDraft))
+            return;
+
+        var editingMessage = _chat.Transcript
+            .Select(x => x.Message)
+            .FirstOrDefault(x => x?.MessageId == _editingMessageId.Value);
+        if (editingMessage is null || !editingMessage.CanSaveInPlace)
+        {
+            _errorMessage = "This message is already covered by a snapshot and can only be edited by creating a branch.";
+            return;
+        }
+
+        _isSubmitting = true;
+        _editingAction = StorySceneEditAction.Save;
+        _errorMessage = null;
+
+        try
+        {
+            await StorySceneChatService.UpdateMessageAsync(
+                new ChatMessageUpdate(_chat.ThreadId, _editingMessageId.Value, _editingDraft),
+                CancellationToken.None);
+
+            var editedMessageId = _editingMessageId.Value;
+            CancelInlineEdit();
+            await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving edited story scene message {MessageId} failed for chat {ThreadId}.", _editingMessageId, _chat.ThreadId);
+            _errorMessage = "Saving the edited message failed.";
+        }
+        finally
+        {
+            _isSubmitting = false;
+            _editingAction = null;
+        }
+    }
+
+    private async Task CreateEditedBranchAsync()
+    {
+        if (_chat is null || !_editingMessageId.HasValue || string.IsNullOrWhiteSpace(_editingDraft))
+            return;
+
+        _isSubmitting = true;
+        _editingAction = StorySceneEditAction.Branch;
+        _errorMessage = null;
+
+        try
+        {
+            await StorySceneChatService.CreateBranchAsync(
+                new BranchStorySceneMessage(_chat.ThreadId, _editingMessageId.Value, _editingDraft),
+                CancellationToken.None);
+
+            CancelInlineEdit();
+            await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Creating edited branch from message {MessageId} failed for chat {ThreadId}.", _editingMessageId, _chat.ThreadId);
+            _errorMessage = "Submitting the edited message as a new branch failed.";
+        }
+        finally
+        {
+            _isSubmitting = false;
+            _editingAction = null;
+        }
+    }
+
+    private async Task SelectBranchAsync(Guid leafMessageId)
+    {
+        if (_chat is null)
+            return;
+
+        _isSubmitting = true;
+        _switchingBranchLeafId = leafMessageId;
+        _errorMessage = null;
+
+        try
+        {
+            await StorySceneChatService.SelectBranchAsync(_chat.ThreadId, leafMessageId, CancellationToken.None);
+            await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Selecting branch leaf {LeafMessageId} failed for chat {ThreadId}.", leafMessageId, _chat.ThreadId);
+            _errorMessage = "Switching to the selected branch failed.";
+        }
+        finally
+        {
+            _isSubmitting = false;
+            _switchingBranchLeafId = null;
+        }
+    }
+
+    private async Task OpenSnapshotDraftAsync(StorySceneMessageView message)
+    {
+        if (_chat is null || !message.IsSnapshotCandidate)
+            return;
+
+        _isSnapshotModalOpen = true;
+        _isSnapshotDraftLoading = true;
+        _snapshotDraft = null;
+        _errorMessage = null;
+
+        try
+        {
+            _snapshotDraft = await StoryChatSnapshotService.CreateDraftAsync(
+                new CreateStoryChatSnapshotDraft(
+                    _chat.ThreadId,
+                    message.MessageId),
+                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Creating the snapshot draft failed for chat {ThreadId}.", _chat.ThreadId);
+            _isSnapshotModalOpen = false;
+            _errorMessage = "Creating the snapshot draft failed.";
+        }
+        finally
+        {
+            _isSnapshotDraftLoading = false;
+        }
+    }
+
+    private Task CloseSnapshotDraftAsync()
+    {
+        if (_isCommittingSnapshot)
+            return Task.CompletedTask;
+
+        _isSnapshotModalOpen = false;
+        _isSnapshotDraftLoading = false;
+        _snapshotDraft = null;
+        return Task.CompletedTask;
+    }
+
+    private async Task CommitSnapshotDraftAsync(CommitStoryChatSnapshotDraft request)
+    {
+        if (_chat is null)
+            return;
+
+        _isCommittingSnapshot = true;
+        _errorMessage = null;
+
+        try
+        {
+            var committedSnapshot = await StoryChatSnapshotService.CommitDraftAsync(request, CancellationToken.None);
+            _isSnapshotModalOpen = false;
+            _snapshotDraft = null;
+            await LoadChatAsync(_chat.ThreadId);
+            UserFeedbackService.ShowBackgroundSuccess(
+                $"Snapshot committed with {committedSnapshot.FactCount} facts and {committedSnapshot.TimelineEntryCount} timeline entries.",
+                "Snapshot Committed");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Committing the snapshot draft failed for chat {ThreadId}.", _chat.ThreadId);
+            _errorMessage = "Committing the snapshot draft failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Snapshot Commit Failed");
+        }
+        finally
+        {
+            _isCommittingSnapshot = false;
+        }
+    }
+
+    private async Task ConfirmDeleteAsync(StorySceneDeleteMode mode)
+    {
+        if (_chat is null || _deleteTargetMessage is null)
+            return;
+
+        _isSubmitting = true;
+        _deleteMode = mode;
+        _errorMessage = null;
+
+        try
+        {
+            var targetMessage = _deleteTargetMessage;
+
+            await StorySceneChatService.DeleteMessageAsync(
+                new DeleteStorySceneMessage(_chat.ThreadId, targetMessage.MessageId, mode),
+                CancellationToken.None);
+
+            _isDeleteModalOpen = false;
+            _deleteTargetMessage = null;
+            _deleteMode = null;
+            await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Deleting story scene message {MessageId} failed for chat {ThreadId}.", _deleteTargetMessage?.MessageId, _chat.ThreadId);
+            _errorMessage = mode == StorySceneDeleteMode.Branch
+                ? "Deleting the selected branch failed."
+                : "Deleting the selected message failed.";
+        }
+        finally
+        {
+            _isSubmitting = false;
+            _deleteMode = null;
+        }
+    }
+
+    private static string DescribeMode(StoryScenePostMode mode) => mode switch
+    {
+        StoryScenePostMode.Manual => "Direct",
+        StoryScenePostMode.GuidedAi => "Guided AI",
+        StoryScenePostMode.AutomaticAi => "Automatic AI",
+        _ => mode.ToString()
+    };
+
+    private static string BuildPostSuccessMessage(StoryScenePostMode mode) => mode switch
+    {
+        StoryScenePostMode.Manual => "The scene message was posted.",
+        StoryScenePostMode.GuidedAi => "The guided scene message was generated.",
+        StoryScenePostMode.AutomaticAi => "The automatic scene message was generated.",
+        _ => "The scene was updated."
+    };
+
+    private string BuildMessageCardClass(StorySceneMessageView message)
+    {
+        var classes = new List<string> { "story-scene-message" };
+
+        if (message.IsNarrator)
+            classes.Add("ms-lg-3");
+        else if (message.IsSelectedSpeaker)
+            classes.Add("ms-lg-5");
+
+        return string.Join(" ", classes);
+    }
+
+    private async Task CopyMessageAsync(string content)
+    {
+        _errorMessage = null;
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", content);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Copying scene message text failed.");
+            _errorMessage = "Copying the scene message failed.";
+        }
+    }
+
+    private void ToggleProcessRun(Guid runId)
+    {
+        var isExpanded = IsProcessExpanded(runId);
+        _expandedProcessRunStates[runId] = !isExpanded;
+    }
+
+    private bool IsProcessExpanded(Guid runId) =>
+        _expandedProcessRunStates.TryGetValue(runId, out var isExpanded) && isExpanded;
+
+    private string DescribeDuration(DateTime startedUtc, DateTime? completedUtc) =>
+        startedUtc.ToDurationText(completedUtc, _processDurationNowUtc);
+
+    private string? DescribeStepDuration(StorySceneProcessStepView step) =>
+        step.StartedUtc.HasValue ? step.StartedUtc.Value.ToDurationText(step.CompletedUtc, _processDurationNowUtc) : null;
+
+    private static string GetProcessStepSubtitle(StorySceneMessageProcessView process, StorySceneProcessStepView step)
+    {
+        if (IsAppearanceProcessStep(step)
+            && !string.IsNullOrWhiteSpace(process.Context?.Appearance?.LatestEntry?.Summary))
+            return process.Context.Appearance.LatestEntry.Summary;
+
+        if (string.Equals(step.Title, "Writing", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(process.Context?.Planner?.PlanningSummary))
+            return process.Context.Planner.PlanningSummary;
+
+        return step.Summary;
+    }
+
+    private static IReadOnlyList<StoryMessageProcessTextBlock> GetProcessStepBlocks(StorySceneProcessStepView step)
+    {
+        if (step.Artifact is null)
+            return [];
+
+        return step.Artifact.Inputs
+            .Concat(step.Artifact.Outputs)
+            .Where(block => !string.IsNullOrWhiteSpace(block.Content))
+            .ToList();
+    }
+
+    private static bool IsAppearanceProcessStep(StorySceneProcessStepView step) =>
+        string.Equals(step.Title, "Appearance", StringComparison.OrdinalIgnoreCase);
+
+    private static StorySceneAppearanceEntryView? GetProcessAppearanceEntry(StorySceneMessageProcessView process) =>
+        process.Context?.Appearance?.LatestEntry;
+
+    private static IReadOnlyList<StorySceneCharacterAppearanceView> GetProcessAppearanceCharacters(StorySceneMessageProcessView process)
+    {
+        var latestEntryCharacters = process.Context?.Appearance?.LatestEntry?.Characters;
+        if (latestEntryCharacters?.Count > 0)
+            return latestEntryCharacters;
+
+        return process.Context?.Appearance?.EffectiveCharacters ?? [];
+    }
+
+    private static StoryMessageProcessTextBlock? GetProcessStepBlock(StorySceneProcessStepView step, string title)
+    {
+        if (step.Artifact is null)
+            return null;
+
+        return step.Artifact.Inputs
+            .Concat(step.Artifact.Outputs)
+            .FirstOrDefault(block => string.Equals(block.Title, title, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void ToggleAppearanceContext(Guid runId)
+    {
+        var isExpanded = IsAppearanceContextExpanded(runId);
+        _expandedAppearanceContextStates[runId] = !isExpanded;
+    }
+
+    private bool IsAppearanceContextExpanded(Guid runId) =>
+        _expandedAppearanceContextStates.TryGetValue(runId, out var isExpanded) && isExpanded;
+
+    private void ToggleSnapshot(Guid snapshotId)
+    {
+        var isExpanded = IsSnapshotExpanded(snapshotId);
+        _expandedSnapshotStates[snapshotId] = !isExpanded;
+    }
+
+    private bool IsSnapshotExpanded(Guid snapshotId) =>
+        _expandedSnapshotStates.TryGetValue(snapshotId, out var isExpanded) && isExpanded;
+
+    private void ToggleProcessStep(Guid runId, Guid stepId)
+    {
+        var expandedStepId = GetExpandedStepId(runId);
+        _expandedProcessStepIds[runId] = expandedStepId == stepId ? null : stepId;
+    }
+
+    private Guid? GetExpandedStepId(Guid runId) =>
+        _expandedProcessStepIds.TryGetValue(runId, out var stepId) ? stepId : null;
+
+    private static string BuildBranchOptionTitle(StorySceneBranchOptionView option) =>
+        $"{option.SpeakerName}: {option.Preview}";
+
+    private static string BuildBranchButtonClass(StorySceneBranchOptionView option) =>
+        option.IsSelected ? "btn btn-primary btn-sm" : "btn btn-outline-secondary btn-sm";
+
+    private string DeleteModalTitle => _deleteTargetMessage?.DeleteCapabilities.CanDeleteBranch == true
+        ? "Delete Message or Branch"
+        : "Delete Message";
+
+    private string DeleteModalSummary => _deleteTargetMessage is null
+        ? string.Empty
+        : _deleteTargetMessage.DeleteCapabilities.DirectChildCount switch
+        {
+            0 => "Deleting this message removes only the selected message.",
+            1 => "Delete message only will keep the continuation by reconnecting its child. Delete branch will remove the selected message and all descendants.",
+            _ => "Delete message only will keep the direct continuations by reconnecting them upward. Delete branch will remove the selected message and all descendants."
+        };
+
+    private string BranchDescendantLabel => _deleteTargetMessage?.DeleteCapabilities.DescendantCount == 1
+        ? "message"
+        : "messages";
+
+    private static string DescribeDeleteItem(StorySceneMessageView message) =>
+        message.IsNarrator ? "narration message" : "message";
+
+    private string MessageCountText => _chat is null
+        ? "0 messages"
+        : _chat.Transcript.Count(x => x.Message is not null) == 1 ? "1 message" : $"{_chat.Transcript.Count(x => x.Message is not null)} messages";
+
+    private static string GetInlineEditorId(Guid messageId) => $"story-scene-inline-edit-{messageId:N}";
+
+    private static string GetAppearanceEditorId(Guid appearanceEntryId, Guid characterId) =>
+        $"story-scene-appearance-{appearanceEntryId:N}-{characterId:N}";
+
+    private void BeginAppearanceEdit(StorySceneAppearanceEntryView appearance)
+    {
+        _editingAppearanceEntryId = appearance.AppearanceEntryId;
+        _appearanceDrafts = appearance.Characters.ToDictionary(x => x.CharacterId, x => x.CurrentAppearance);
+    }
+
+    private void CancelAppearanceEdit()
+    {
+        _editingAppearanceEntryId = null;
+        _appearanceDrafts = [];
+    }
+
+    private string GetAppearanceDraft(Guid characterId) =>
+        _appearanceDrafts.TryGetValue(characterId, out var currentAppearance) ? currentAppearance : string.Empty;
+
+    private void SetAppearanceDraft(Guid characterId, string? value) =>
+        _appearanceDrafts[characterId] = value ?? string.Empty;
+
+    private async Task SaveAppearanceEditAsync(StorySceneAppearanceEntryView appearance)
+    {
+        if (_chat is null)
+            return;
+
+        _isSubmitting = true;
+        _errorMessage = null;
+
+        try
+        {
+            await StorySceneChatService.UpdateAppearanceEntryAsync(
+                new UpdateStorySceneAppearanceEntry(
+                    _chat.ThreadId,
+                    appearance.AppearanceEntryId,
+                    appearance.Characters
+                        .Select(character => new StorySceneCharacterAppearanceView(
+                            character.CharacterId,
+                            character.CharacterName,
+                            GetAppearanceDraft(character.CharacterId)))
+                        .ToList()),
+                CancellationToken.None);
+
+            CancelAppearanceEdit();
+            await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving latest appearance entry {AppearanceEntryId} failed for chat {ThreadId}.", appearance.AppearanceEntryId, _chat.ThreadId);
+            _errorMessage = "Saving the latest character appearance block failed.";
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private static RenderFragment RenderSnapshotReferences(string label, IReadOnlyList<string> names) => builder =>
+    {
+        if (names.Count == 0)
+            return;
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "small mt-2");
+        builder.OpenElement(2, "span");
+        builder.AddAttribute(3, "class", "text-body-secondary me-2");
+        builder.AddContent(4, $"{label}:");
+        builder.CloseElement();
+
+        for (var index = 0; index < names.Count; index++)
+        {
+            builder.OpenElement(5 + (index * 3), "span");
+            builder.AddAttribute(6 + (index * 3), "class", "badge text-bg-light border text-body-secondary me-1");
+            builder.AddContent(7 + (index * 3), names[index]);
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+    };
+
+    private enum StorySceneEditAction
+    {
+        Save,
+        Branch
+    }
+}

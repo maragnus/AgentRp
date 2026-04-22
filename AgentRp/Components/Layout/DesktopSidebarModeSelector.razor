@@ -1,0 +1,28 @@
+@namespace AgentRp.Components.Layout
+
+<button type="button"
+        class="btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button"
+        title="@ButtonTitle"
+        aria-label="@ButtonTitle"
+        @onclick="ShellState.ToggleDesktopSidebarMode">
+    <i class="@ButtonIconCssClass" aria-hidden="true"></i>
+</button>
+
+@code {
+    [CascadingParameter]
+    public required AppShellState ShellState { get; set; }
+
+    private string ButtonIconCssClass => ShellState.DesktopSidebarMode switch
+    {
+        DesktopSidebarMode.Wide => "fa-regular fa-bars",
+        DesktopSidebarMode.Narrow => "fa-regular fa-ellipsis-vertical",
+        _ => "fa-regular fa-dash"
+    };
+
+    private string ButtonTitle => ShellState.DesktopSidebarMode switch
+    {
+        DesktopSidebarMode.Wide => "Sidebar is wide. Click to make it narrow.",
+        DesktopSidebarMode.Narrow => "Sidebar is narrow. Click to hide it.",
+        _ => "Sidebar is hidden. Click to show it wide."
+    };
+}

@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="AgentRp/AgentRp.csproj" />
+  <Project Path="AgentRp.AppHost/AgentRp.AppHost.csproj" />
+  <Project Path="AgentRp.ServiceDefaults/AgentRp.ServiceDefaults.csproj" />
+</Solution>

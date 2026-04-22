@@ -1,0 +1,438 @@
+@inject IChatStoryService ChatStoryService
+@inject IStoryFieldGuidanceService StoryFieldGuidanceService
+@inject ILogger<StoryLocationsModal> Logger
+
+<AppModal IsOpen="IsOpen" Title="Locations" OnClose="CloseAsync">
+    @if (_isLoading)
+    {
+        <div class="d-flex align-items-center gap-3 py-3">
+            <div class="spinner-border spinner-border-sm" role="status"></div>
+            <span>Loading locations...</span>
+        </div>
+    }
+    else
+    {
+        <div class="row g-3">
+            <div class="col-12 col-lg-4">
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                    <div class="fw-semibold">Locations</div>
+                    <button type="button"
+                            class="btn btn-outline-primary btn-sm"
+                            title="@BuildCreateButtonTitle()"
+                            aria-label="@BuildCreateButtonTitle()"
+                            disabled="@IsCreatingLocation"
+                            @onclick="BeginCreate">
+                        <i class="fa-regular fa-plus" aria-hidden="true"></i>
+                    </button>
+                </div>
+
+                @if (_locations.Count == 0)
+                {
+                    <div class="alert alert-light border mb-0">No locations yet.</div>
+                }
+                else
+                {
+                    <div class="list-group">
+                        @foreach (var location in _locations)
+                        {
+                            var isSelected = _selectedLocationId == location.LocationId;
+
+                            <StoryEntitySelectorListItem Name="@location.Name"
+                                                         Summary="@location.Summary"
+                                                         IsSelected="@isSelected"
+                                                         OnClick="() => SelectLocation(location.LocationId)" />
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="col-12 col-lg-8">
+                <div class="d-flex flex-column gap-3">
+                    <InlineAlert Message="@_errorMessage" />
+
+                    <div>
+                        <div class="d-flex align-items-center justify-content-between gap-2">
+                            <label class="form-label mb-0" for="story-location-name">Name</label>
+                            <button type="button"
+                                    class="btn btn-outline-secondary btn-sm"
+                                    title="Edit name guidance"
+                                    aria-label="Edit name guidance"
+                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.Name)'>
+                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                        <input id="story-location-name" class="form-control" @bind="_name" />
+                        @RenderGuidanceSummary(StoryEntityFieldKey.Name)
+                    </div>
+
+                    <div>
+                        <div class="d-flex align-items-center justify-content-between gap-2">
+                            <label class="form-label mb-0" for="story-location-summary">Summary</label>
+                            <button type="button"
+                                    class="btn btn-outline-secondary btn-sm"
+                                    title="Edit summary guidance"
+                                    aria-label="Edit summary guidance"
+                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.Summary)'>
+                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                        <textarea id="story-location-summary" class="form-control" rows="2" @bind="_summary"></textarea>
+                        @RenderGuidanceSummary(StoryEntityFieldKey.Summary)
+                    </div>
+
+                    <div>
+                        <div class="d-flex align-items-center justify-content-between gap-2">
+                            <label class="form-label mb-0" for="story-location-details">Details</label>
+                            <button type="button"
+                                    class="btn btn-outline-secondary btn-sm"
+                                    title="Edit details guidance"
+                                    aria-label="Edit details guidance"
+                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.Details)'>
+                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                        <textarea id="story-location-details" class="form-control" rows="4" @bind="_details"></textarea>
+                        @RenderGuidanceSummary(StoryEntityFieldKey.Details)
+                    </div>
+
+                    <div class="form-check">
+                        <input id="story-location-current" class="form-check-input" type="checkbox" @bind="_isCurrentLocation" />
+                        <label class="form-check-label" for="story-location-current">Current location</label>
+                    </div>
+
+                    <div class="d-flex flex-wrap justify-content-between gap-2 border-top pt-3">
+                        <div class="d-flex gap-2">
+                            @if (_selectedLocationId.HasValue)
+                            {
+                                <BusyButton Class="btn btn-outline-danger"
+                                            IsBusy="_isDeleting"
+                                            Disabled="@(_isSaving || _isDeleting)"
+                                            BusyText="Deleting..."
+                                            OnClick="DeleteAsync">
+                                    <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
+                                    Delete
+                                </BusyButton>
+                            }
+                        </div>
+
+                        <div class="d-flex gap-2">
+                            @if (_selectedLocationId.HasValue && _wasCurrentLocation && !_isCurrentLocation)
+                            {
+                                <BusyButton Class="btn btn-outline-secondary"
+                                            IsBusy="_isClearingCurrent"
+                                            Disabled="@(_isSaving || _isDeleting || _isClearingCurrent)"
+                                            BusyText="Clearing..."
+                                            OnClick="ClearCurrentAsync">
+                                    <i class="fa-regular fa-location-slash me-2" aria-hidden="true"></i>
+                                    Clear Current
+                                </BusyButton>
+                            }
+
+                            <button type="button"
+                                    class="btn btn-outline-primary"
+                                    title="@BuildAiButtonTitle()"
+                                    aria-label="@BuildAiButtonTitle()"
+                                    @onclick="OpenAiAssist">
+                                <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                            </button>
+                            <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+                            <BusyButton Class="btn btn-primary"
+                                        IsBusy="_isSaving"
+                                        Disabled="@(_isSaving || _isDeleting || _isClearingCurrent)"
+                                        BusyText="Saving..."
+                                        OnClick="SaveAsync">
+                                <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                                Save
+                            </BusyButton>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</AppModal>
+
+<StoryEntityAiAssistModal ThreadId="ThreadId"
+                          IsOpen="_isAiAssistOpen"
+                          EntityKind="StoryEntityKind.Location"
+                          EntityId="_selectedLocationId"
+                          OnAccepted="HandleAiAcceptedAsync"
+                          OnClose="CloseAiAssistAsync" />
+<StoryFieldGuidanceModal IsOpen="_isGuidanceOpen"
+                         EntityKind="StoryEntityKind.Location"
+                         FieldKey="_selectedGuidanceFieldKey"
+                         OnSaved="HandleGuidanceSavedAsync"
+                         OnClose="CloseGuidanceAsync" />
+
+@code {
+    [Parameter]
+    public Guid ThreadId { get; set; }
+
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
+    private bool _isLoading;
+    private bool _isSaving;
+    private bool _isDeleting;
+    private bool _isClearingCurrent;
+    private bool _wasOpen;
+    private Guid? _loadedThreadId;
+    private Guid? _selectedLocationId;
+    private IReadOnlyList<StoryLocationEditorView> _locations = [];
+    private string _name = string.Empty;
+    private string _summary = string.Empty;
+    private string _details = string.Empty;
+    private bool _isCurrentLocation;
+    private bool _wasCurrentLocation;
+    private bool _isAiAssistOpen;
+    private bool _isGuidanceOpen;
+    private StoryEntityFieldKey _selectedGuidanceFieldKey = StoryEntityFieldKey.Name;
+    private IReadOnlyList<StoryEntityFieldGuidanceView> _fieldGuidance = [];
+    private string? _errorMessage;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!IsOpen)
+        {
+            _wasOpen = false;
+            return;
+        }
+
+        if (_wasOpen && _loadedThreadId == ThreadId)
+            return;
+
+        _wasOpen = true;
+        _loadedThreadId = ThreadId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync(Guid? selectedLocationId = null)
+    {
+        _isLoading = true;
+        try
+        {
+            var locationTask = ChatStoryService.GetLocationEditorsAsync(ThreadId, CancellationToken.None);
+            var guidanceTask = StoryFieldGuidanceService.GetGuidanceAsync(StoryEntityKind.Location, CancellationToken.None);
+            await Task.WhenAll(locationTask, guidanceTask);
+
+            _locations = locationTask.Result;
+            _fieldGuidance = guidanceTask.Result;
+
+            var targetLocationId = selectedLocationId
+                ?? _selectedLocationId
+                ?? _locations.FirstOrDefault()?.LocationId;
+            if (targetLocationId.HasValue)
+                SelectLocation(targetLocationId.Value);
+            else
+                BeginCreate();
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void BeginCreate()
+    {
+        _errorMessage = null;
+        _selectedLocationId = null;
+        _name = string.Empty;
+        _summary = string.Empty;
+        _details = string.Empty;
+        _isCurrentLocation = false;
+        _wasCurrentLocation = false;
+    }
+
+    private void SelectLocation(Guid locationId)
+    {
+        var location = _locations.FirstOrDefault(x => x.LocationId == locationId);
+        if (location is null)
+        {
+            BeginCreate();
+            return;
+        }
+
+        _errorMessage = null;
+        _selectedLocationId = location.LocationId;
+        _name = location.Name;
+        _summary = location.Summary;
+        _details = location.Details;
+        _isCurrentLocation = location.IsCurrent;
+        _wasCurrentLocation = location.IsCurrent;
+    }
+
+    private async Task SaveAsync()
+    {
+        _errorMessage = null;
+        _isSaving = true;
+        try
+        {
+            var savedLocation = await ChatStoryService.UpsertLocationAsync(
+                new UpsertLocation(ThreadId, _selectedLocationId, _name, _summary, _details, false),
+                CancellationToken.None);
+
+            if (_isCurrentLocation)
+                await ChatStoryService.SetCurrentLocationAsync(new SetCurrentLocation(ThreadId, savedLocation.LocationId), CancellationToken.None);
+            else if (_wasCurrentLocation)
+                await ChatStoryService.SetCurrentLocationAsync(new SetCurrentLocation(ThreadId, null), CancellationToken.None);
+
+            await LoadAsync(savedLocation.LocationId);
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving location {LocationName} failed for chat {ChatId}.", _name, ThreadId);
+            _errorMessage = $"Saving location '{BuildDisplayName()}' failed.";
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (!_selectedLocationId.HasValue)
+            return;
+
+        var displayName = BuildDisplayName();
+        _errorMessage = null;
+        _isDeleting = true;
+        try
+        {
+            await ChatStoryService.DeleteLocationAsync(new DeleteLocation(ThreadId, _selectedLocationId.Value), CancellationToken.None);
+            await LoadAsync();
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Deleting location {LocationId} failed for chat {ChatId}.", _selectedLocationId.Value, ThreadId);
+            _errorMessage = $"Deleting location '{displayName}' failed.";
+        }
+        finally
+        {
+            _isDeleting = false;
+        }
+    }
+
+    private async Task ClearCurrentAsync()
+    {
+        _errorMessage = null;
+        _isClearingCurrent = true;
+        try
+        {
+            await ChatStoryService.SetCurrentLocationAsync(new SetCurrentLocation(ThreadId, null), CancellationToken.None);
+            await LoadAsync(_selectedLocationId);
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Clearing current location failed for chat {ChatId}.", ThreadId);
+            _errorMessage = "Clearing the current location failed.";
+        }
+        finally
+        {
+            _isClearingCurrent = false;
+        }
+    }
+
+    private async Task NotifyChangedAsync()
+    {
+        if (OnChanged.HasDelegate)
+            await OnChanged.InvokeAsync();
+    }
+
+    private void OpenAiAssist() => _isAiAssistOpen = true;
+
+    private void OpenGuidance(StoryEntityFieldKey fieldKey)
+    {
+        _selectedGuidanceFieldKey = fieldKey;
+        _isGuidanceOpen = true;
+    }
+
+    private Task CloseAiAssistAsync()
+    {
+        _isAiAssistOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseGuidanceAsync()
+    {
+        _isGuidanceOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleAiAcceptedAsync(StoryEntityAcceptResult result)
+    {
+        _isAiAssistOpen = false;
+        await LoadAsync(result.EntityId);
+        await NotifyChangedAsync();
+    }
+
+    private async Task HandleGuidanceSavedAsync(StoryEntityFieldGuidanceView guidance)
+    {
+        _isGuidanceOpen = false;
+        _fieldGuidance = await StoryFieldGuidanceService.GetGuidanceAsync(StoryEntityKind.Location, CancellationToken.None);
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private bool IsCreatingLocation => !_selectedLocationId.HasValue;
+
+    private string BuildCreateButtonTitle() => IsCreatingLocation
+        ? "Already creating a new location"
+        : "Add location";
+
+    private string BuildAiButtonTitle() => _selectedLocationId.HasValue
+        ? "Edit location with prompt"
+        : "New location from prompt";
+
+    private string BuildDisplayName() => string.IsNullOrWhiteSpace(_name) ? "Untitled Location" : _name.Trim();
+
+    private RenderFragment RenderGuidanceSummary(StoryEntityFieldKey fieldKey) => builder =>
+    {
+        var guidance = _fieldGuidance.FirstOrDefault(x => x.FieldKey == fieldKey);
+        if (guidance is null)
+            return;
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "small text-body-secondary mt-1");
+        builder.AddContent(2, BuildGuidanceSummary(guidance.Guidance));
+        builder.CloseElement();
+    };
+
+    private static string BuildGuidanceSummary(StoryFieldGuidance guidance) =>
+        $"{FormatGuidanceFormat(guidance.Format)}, {FormatDetail(guidance.LevelOfDetail)}, {guidance.SuggestedLength.Minimum}-{guidance.SuggestedLength.Maximum} {FormatLengthMeasure(guidance.Format)}";
+
+    private static string FormatGuidanceFormat(StoryFieldGuidanceFormat guidanceFormat) => guidanceFormat switch
+    {
+        StoryFieldGuidanceFormat.Words => "list of words",
+        StoryFieldGuidanceFormat.Sentences => "sentences",
+        StoryFieldGuidanceFormat.Paragraphs => "paragraphs",
+        StoryFieldGuidanceFormat.BulletList => "bullet list",
+        _ => guidanceFormat.ToString()
+    };
+
+    private static string FormatDetail(StoryFieldGuidanceDetailLevel detailLevel) => detailLevel switch
+    {
+        StoryFieldGuidanceDetailLevel.Simple => "simple",
+        StoryFieldGuidanceDetailLevel.Medium => "medium detail",
+        StoryFieldGuidanceDetailLevel.Detailed => "detailed",
+        _ => detailLevel.ToString()
+    };
+
+    private static string FormatLengthMeasure(StoryFieldGuidanceFormat guidanceFormat) => guidanceFormat switch
+    {
+        StoryFieldGuidanceFormat.Words => "words",
+        StoryFieldGuidanceFormat.Sentences => "sentences",
+        StoryFieldGuidanceFormat.Paragraphs => "paragraphs",
+        StoryFieldGuidanceFormat.BulletList => "items",
+        _ => guidanceFormat.ToString().ToLowerInvariant()
+    };
+}

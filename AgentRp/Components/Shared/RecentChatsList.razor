@@ -1,0 +1,258 @@
+@implements IDisposable
+@inject IChatWorkspaceService ChatWorkspaceService
+@inject IActivityNotifier ActivityNotifier
+@inject IUserFeedbackService UserFeedbackService
+@inject NavigationManager NavigationManager
+@inject ILogger<RecentChatsList> Logger
+
+@if (_recentThreads.Count == 0)
+{
+    <p class="text-body-secondary small mb-0">No chats yet.</p>
+}
+else
+{
+    <div class="list-group list-group-flush gap-2">
+        @foreach (var thread in _recentThreads)
+        {
+            var isActive = IsActive(thread.Id);
+            var isEditing = _editingThreadId == thread.Id;
+            var isRenaming = _renamingThreadId == thread.Id;
+            var isStarring = _starringThreadIds.Contains(thread.Id);
+
+            <div class="@BuildThreadItemClass(isActive)">
+                <div class="d-flex align-items-start justify-content-between gap-3">
+                    @if (isEditing)
+                    {
+                        <div class="flex-grow-1">
+                            <div class="fw-semibold">Rename chat</div>
+                            <div class="@BuildThreadMetaClass(isActive)">Current title: @thread.Title</div>
+                        </div>
+                    }
+                    else
+                    {
+                        <a class="@BuildThreadLinkClass(isActive)"
+                           href="@($"/chat/{thread.Id}")"
+                           @onclick="HandleNavigateAsync">
+                            <div class="d-flex align-items-center gap-2">
+                                @if (thread.IsStarred)
+                                {
+                                    <i class="fa-solid fa-star text-warning" aria-hidden="true"></i>
+                                }
+
+                                <div class="fw-semibold text-truncate">@thread.Title</div>
+                            </div>
+                            <div class="@BuildThreadMetaClass(isActive)">
+                                @thread.UpdatedUtc.ToShorthandDateWithRelativeDays()
+                            </div>
+                        </a>
+                    }
+
+                    <div class="d-flex align-items-center gap-3 flex-shrink-0">
+                        <BusyButton Class="@BuildStarButtonClass(isActive, thread.IsStarred)"
+                                    OnClick="() => ToggleStarAsync(thread)"
+                                    IsBusy="@isStarring"
+                                    BusyText=""
+                                    ShowBusyText="false"
+                                    Disabled="@isRenaming"
+                                    title="@BuildStarButtonTitle(thread)"
+                                    aria-label="@BuildStarButtonTitle(thread)">
+                            <i class="@BuildStarIconClass(thread)" aria-hidden="true"></i>
+                        </BusyButton>
+
+                        <button type="button"
+                                class="@BuildActionButtonClass(isActive)"
+                                title="@(isEditing ? "Cancel rename" : $"Rename {thread.Title}")"
+                                aria-label="@(isEditing ? "Cancel rename" : $"Rename {thread.Title}")"
+                                disabled="@isRenaming"
+                                @onclick="() => ToggleRename(thread)">
+                            <i class="fa-regular @(isEditing ? "fa-xmark" : "fa-pen-to-square")" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+
+                @if (isEditing)
+                {
+                    <div class="input-group input-group-sm">
+                        <input class="form-control"
+                               value="@_editedTitle"
+                               maxlength="200"
+                               @oninput="HandleTitleInput"
+                               @onkeydown="args => HandleRenameKeyDownAsync(thread, args)"
+                               aria-label="Chat title" />
+                        <BusyButton Class="btn btn-primary"
+                                    OnClick="() => SaveTitleAsync(thread)"
+                                    IsBusy="@isRenaming"
+                                    Disabled="@IsRenameSaveDisabled(thread)"
+                                    BusyText="Saving...">
+                            Save
+                        </BusyButton>
+                        <button type="button"
+                                class="btn btn-outline-secondary"
+                                disabled="@isRenaming"
+                                @onclick="CancelRename">
+                            Cancel
+                        </button>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter]
+    public EventCallback OnNavigate { get; set; }
+
+    private readonly HashSet<Guid> _starringThreadIds = [];
+    private IDisposable? _subscription;
+    private IReadOnlyList<ChatThreadSummary> _recentThreads = [];
+    private Guid? _editingThreadId;
+    private Guid? _renamingThreadId;
+    private string _editedTitle = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _subscription = ActivityNotifier.Subscribe(ActivityStreams.SidebarChats, _ => InvokeAsync(LoadAsync));
+        await LoadAsync();
+    }
+
+    public void Dispose() => _subscription?.Dispose();
+
+    private async Task LoadAsync()
+    {
+        _recentThreads = await ChatWorkspaceService.GetRecentThreadsAsync(20, CancellationToken.None);
+
+        if (_editingThreadId.HasValue && _recentThreads.All(x => x.Id != _editingThreadId.Value))
+            CancelRename();
+
+        StateHasChanged();
+    }
+
+    private bool IsActive(Guid threadId)
+    {
+        var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        return path.Equals($"chat/{threadId}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task HandleNavigateAsync()
+    {
+        if (OnNavigate.HasDelegate)
+            await OnNavigate.InvokeAsync();
+    }
+
+    private void ToggleRename(ChatThreadSummary thread)
+    {
+        if (_editingThreadId == thread.Id)
+        {
+            CancelRename();
+            return;
+        }
+
+        _editingThreadId = thread.Id;
+        _editedTitle = thread.Title;
+    }
+
+    private void CancelRename()
+    {
+        _editingThreadId = null;
+        _renamingThreadId = null;
+        _editedTitle = string.Empty;
+    }
+
+    private void HandleTitleInput(ChangeEventArgs args) => _editedTitle = args.Value?.ToString() ?? string.Empty;
+
+    private async Task HandleRenameKeyDownAsync(ChatThreadSummary thread, KeyboardEventArgs args)
+    {
+        if (args.Key == "Enter")
+            await SaveTitleAsync(thread);
+
+        if (args.Key == "Escape" && _renamingThreadId != thread.Id)
+            CancelRename();
+    }
+
+    private async Task SaveTitleAsync(ChatThreadSummary thread)
+    {
+        var normalizedTitle = _editedTitle.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedTitle)
+            || string.Equals(normalizedTitle, thread.Title, StringComparison.Ordinal))
+            return;
+
+        _renamingThreadId = thread.Id;
+
+        try
+        {
+            await ChatWorkspaceService.RenameThreadAsync(thread.Id, normalizedTitle, CancellationToken.None);
+            UserFeedbackService.ShowBackgroundSuccess(
+                $"Renamed chat to \"{normalizedTitle}\".",
+                "Chat Renamed");
+            CancelRename();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Renaming chat {ChatId} failed.", thread.Id);
+            UserFeedbackService.ShowBackgroundError(
+                $"Saving the new title for \"{thread.Title}\" failed.",
+                "Rename Failed");
+            _renamingThreadId = null;
+        }
+    }
+
+    private async Task ToggleStarAsync(ChatThreadSummary thread)
+    {
+        if (!_starringThreadIds.Add(thread.Id))
+            return;
+
+        var isStarred = !thread.IsStarred;
+
+        try
+        {
+            await ChatWorkspaceService.SetThreadStarredAsync(thread.Id, isStarred, CancellationToken.None);
+            UserFeedbackService.ShowBackgroundSuccess(
+                isStarred
+                    ? $"Starred \"{thread.Title}\". Starred chats stay at the top of the list."
+                    : $"Removed the star from \"{thread.Title}\".",
+                isStarred ? "Chat Starred" : "Chat Unstarred");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Updating the star state for chat {ChatId} failed.", thread.Id);
+            UserFeedbackService.ShowBackgroundError(
+                $"Updating the star for \"{thread.Title}\" failed.",
+                "Star Update Failed");
+        }
+        finally
+        {
+            _starringThreadIds.Remove(thread.Id);
+        }
+    }
+
+    private bool IsRenameSaveDisabled(ChatThreadSummary thread)
+    {
+        var normalizedTitle = _editedTitle.Trim();
+        return string.IsNullOrWhiteSpace(normalizedTitle)
+            || string.Equals(normalizedTitle, thread.Title, StringComparison.Ordinal);
+    }
+
+    private static string BuildThreadItemClass(bool isActive) =>
+        $"list-group-item rounded-3 border-0 px-3 py-3 d-flex flex-column gap-3 {(isActive ? "active" : "bg-body-tertiary")}";
+
+    private static string BuildThreadLinkClass(bool isActive) =>
+        isActive
+            ? "flex-grow-1 text-decoration-none text-white"
+            : "flex-grow-1 text-decoration-none text-body";
+
+    private static string BuildThreadMetaClass(bool isActive) =>
+        isActive ? "small text-white-50" : "small text-body-secondary";
+
+    private static string BuildActionButtonClass(bool isActive) =>
+        $"btn btn-sm btn-link text-decoration-none p-0 border-0 {(isActive ? "text-white" : "text-body-secondary")}";
+
+    private static string BuildStarButtonClass(bool isActive, bool isStarred) =>
+        $"btn btn-sm btn-link text-decoration-none p-0 border-0 {(isActive ? "text-white" : isStarred ? "text-warning" : "text-body-secondary")}";
+
+    private static string BuildStarIconClass(ChatThreadSummary thread) =>
+        thread.IsStarred ? "fa-solid fa-star" : "fa-regular fa-star";
+
+    private static string BuildStarButtonTitle(ChatThreadSummary thread) =>
+        thread.IsStarred ? $"Unstar {thread.Title}" : $"Star {thread.Title}";
+}

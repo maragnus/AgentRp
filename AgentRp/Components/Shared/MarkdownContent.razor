@@ -1,0 +1,8 @@
+@inject IMarkdownRenderer MarkdownRenderer
+
+<div class="app-markdown">@((MarkupString)MarkdownRenderer.Render(Markdown))</div>
+
+@code {
+    [Parameter]
+    public string Markdown { get; set; } = string.Empty;
+}

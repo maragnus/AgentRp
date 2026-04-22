@@ -1,0 +1,509 @@
+@implements IDisposable
+@inject IChatWorkspaceService ChatWorkspaceService
+@inject IChatStoryService ChatStoryService
+@inject IStorySceneChatService StorySceneChatService
+@inject IThreadAgentService ThreadAgentService
+@inject IActivityNotifier ActivityNotifier
+@inject IUserFeedbackService UserFeedbackService
+@inject NavigationManager NavigationManager
+@inject ILogger<StorySidebarSection> Logger
+
+<div class="card border-0 bg-body-tertiary shadow-sm mb-3">
+    <div class="card-body d-flex flex-column gap-3 p-3">
+        <div class="d-flex align-items-start justify-content-between gap-3">
+            <div>
+                <div class="small text-uppercase text-body-secondary">Story</div>
+            </div>
+
+            <button type="button"
+                    class="btn btn-outline-secondary btn-sm"
+                    title="History"
+                    aria-label="History"
+                    @onclick="OpenHistoryModal">
+                <i class="fa-regular fa-timeline" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <InlineAlert Message="@_errorMessage" />
+
+        @if (_isLoading)
+        {
+            <div class="d-flex align-items-center gap-2 small text-body-secondary">
+                <div class="spinner-border spinner-border-sm" role="status"></div>
+                <span>Loading story details...</span>
+            </div>
+        }
+        else if (!_threadId.HasValue || _story is null)
+        {
+            <div class="small text-body-secondary">Story details appear here once a chat is available.</div>
+        }
+        else
+        {
+            <div>
+                <div class="small text-uppercase text-body-secondary mb-2">AI Provider</div>
+
+                @if (_story.AvailableAgents.Count == 0)
+                {
+                    <div class="small text-body-secondary">AI actions are unavailable until an Aspire-configured provider is enabled.</div>
+                }
+                else
+                {
+                    <div class="d-flex flex-column gap-2">
+                        @foreach (var agent in _story.AvailableAgents)
+                        {
+                            var agentButtonClass = string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal)
+                                ? "btn btn-primary btn-sm w-100"
+                                : "btn btn-outline-primary btn-sm w-100";
+                            var isSwitchingAgent = _switchingAgentNames.Contains(agent.Name);
+
+                            <BusyButton Class="@agentButtonClass"
+                                        IsBusy="@isSwitchingAgent"
+                                        Disabled="@(isSwitchingAgent || string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal))"
+                                        BusyText=""
+                                        ShowBusyText="false"
+                                        title="@(string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal) ? $"{agent.Name} is already selected" : $"Use {agent.Name} for AI actions")"
+                                        aria-label="@(string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal) ? $"{agent.Name} is already selected" : $"Use {agent.Name} for AI actions")"
+                                        OnClick="() => SelectAgentAsync(agent.Name)">
+                                @agent.Name
+                            </BusyButton>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div>
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-1">
+                    <div class="small text-uppercase text-body-secondary">Current Location</div>
+                    <button type="button"
+                            class="btn btn-outline-secondary btn-sm"
+                            title="Locations"
+                            aria-label="Locations"
+                            @onclick="OpenLocationsModal">
+                        <i class="fa-regular fa-location-dot" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="fw-semibold">@(_story.CurrentLocationName ?? "No current location")</div>
+            </div>
+
+            <div class="border-top pt-3">
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                    <div class="small text-uppercase text-body-secondary">Characters</div>
+                    <button type="button"
+                            class="btn btn-outline-primary btn-sm"
+                            title="Manage characters"
+                            aria-label="Manage characters"
+                            @onclick="OpenCharacterModal">
+                        <i class="fa-regular fa-pen-to-square" aria-hidden="true"></i>
+                    </button>
+                </div>
+
+                <div class="list-group list-group-flush">
+                    @foreach (var speaker in _story.Speakers)
+                    {
+                        var speakerRowClass = speaker.IsSelected
+                            ? "list-group-item bg-primary-subtle border-primary-subtle px-0 py-2"
+                            : "list-group-item bg-transparent px-0 py-2";
+                        var speakerButtonClass = speaker.IsSelected ? "btn btn-primary btn-sm" : "btn btn-outline-primary btn-sm";
+                        var speakerKey = GetSpeakerKey(speaker.CharacterId);
+
+                        <div class="@speakerRowClass">
+                            <div class="d-flex align-items-start justify-content-between gap-2">
+                                <div class="flex-grow-1 overflow-hidden">
+                                    <div class="fw-semibold text-truncate">@speaker.Name</div>
+                                </div>
+
+                                <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                                    <BusyButton Class="@speakerButtonClass"
+                                                ShowBusyText="false"
+                                                IsBusy="@_switchingSpeakerKeys.Contains(speakerKey)"
+                                                Disabled="@(_switchingSpeakerKeys.Contains(speakerKey) || speaker.IsSelected)"
+                                                BusyText=""
+                                                title="@(speaker.IsSelected ? $"{speaker.Name} is already the active speaker" : $"Speak as {speaker.Name}")"
+                                                aria-label="@(speaker.IsSelected ? $"{speaker.Name} is already the active speaker" : $"Speak as {speaker.Name}")"
+                                                OnClick="() => SelectSpeakerAsync(speaker)">
+                                        <i class="fa-regular fa-comments" aria-hidden="true"></i>
+                                    </BusyButton>
+
+                                    @if (!speaker.IsNarrator)
+                                    {
+                                        var character = _story.Characters.First(x => x.CharacterId == speaker.CharacterId!.Value);
+
+                                        <BusyButton Class="@($"btn btn-sm {(character.IsPresentInScene ? "btn-outline-success" : "btn-outline-secondary")}")"
+                                                    ShowBusyText="false"
+                                                    IsBusy="@_togglingCharacterIds.Contains(character.CharacterId)"
+                                                    Disabled="@_togglingCharacterIds.Contains(character.CharacterId)"
+                                                    BusyText=""
+                                                    title="@(character.IsPresentInScene ? "Remove from scene" : "Add to scene")"
+                                                    aria-label="@(character.IsPresentInScene ? $"Remove {character.Name} from scene" : $"Add {character.Name} to scene")"
+                                                    OnClick="() => ToggleCharacterScenePresenceAsync(character)">
+                                            <i class="fa-regular @(character.IsPresentInScene ? "fa-eye" : "fa-eye-slash")" aria-hidden="true"></i>
+                                        </BusyButton>
+                                        <button type="button"
+                                                class="btn btn-outline-secondary btn-sm"
+                                                title="Edit character"
+                                                aria-label="Edit character"
+                                                @onclick="() => OpenCharacterModal(character.CharacterId)">
+                                            <i class="fa-regular fa-pen" aria-hidden="true"></i>
+                                        </button>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    }
+
+                    @if (_story.Characters.Count == 0)
+                    {
+                        <div class="small text-body-secondary pt-2">No characters yet. Narrator is available as the active speaker.</div>
+                    }
+                </div>
+            </div>
+
+            <div class="border-top pt-3">
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                    <div class="small text-uppercase text-body-secondary">Scene Items</div>
+                    <button type="button"
+                            class="btn btn-outline-secondary btn-sm"
+                            title="Items"
+                            aria-label="Items"
+                            @onclick="OpenItemsModal">
+                        <i class="fa-regular fa-box-archive" aria-hidden="true"></i>
+                    </button>
+                </div>
+                @if (_story.SceneItems.Count == 0)
+                {
+                    <div class="small text-body-secondary">No major items are currently in the scene.</div>
+                }
+                else
+                {
+                    <div class="list-group list-group-flush">
+                        @foreach (var item in _story.SceneItems)
+                        {
+                            <div class="list-group-item bg-transparent px-0 py-2">
+                                <div class="d-flex align-items-start justify-content-between gap-2">
+                                    <div class="flex-grow-1 overflow-hidden">
+                                        <div class="fw-semibold text-truncate">@item.Name</div>
+                                    </div>
+
+                                    <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                                        <BusyButton Class="btn btn-outline-success btn-sm"
+                                                    ShowBusyText="false"
+                                                    IsBusy="@_togglingItemIds.Contains(item.ItemId)"
+                                                    Disabled="@_togglingItemIds.Contains(item.ItemId)"
+                                                    BusyText=""
+                                                    title="Remove from scene"
+                                                    aria-label="@($"Remove {item.Name} from scene")"
+                                                    OnClick="() => ToggleItemScenePresenceAsync(item)">
+                                            <i class="fa-regular fa-eye" aria-hidden="true"></i>
+                                        </BusyButton>
+                                        <button type="button"
+                                                class="btn btn-outline-secondary btn-sm"
+                                                title="Edit item"
+                                                aria-label="Edit item"
+                                                @onclick="() => OpenItemsModal(item.ItemId)">
+                                            <i class="fa-regular fa-pen" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@if (_threadId.HasValue)
+{
+    <StoryCharacterModal ThreadId="_threadId.Value"
+                         IsOpen="_isCharacterModalOpen"
+                         InitialCharacterId="_selectedCharacterIdForModal"
+                         StartInCreateMode="_startCharacterModalInCreateMode"
+                         OnClose="CloseCharacterModal"
+                         OnChanged="HandleStoryChangedAsync" />
+    <StoryLocationsModal ThreadId="_threadId.Value"
+                         IsOpen="_isLocationsModalOpen"
+                         OnClose="CloseLocationsModal"
+                         OnChanged="HandleStoryChangedAsync" />
+    <StoryItemsModal ThreadId="_threadId.Value"
+                     IsOpen="_isItemsModalOpen"
+                     InitialItemId="_selectedItemIdForModal"
+                     OnClose="CloseItemsModal"
+                     OnChanged="HandleStoryChangedAsync" />
+    <StoryHistoryModal ThreadId="_threadId.Value"
+                       IsOpen="_isHistoryModalOpen"
+                       OnClose="CloseHistoryModal"
+                       OnChanged="HandleStoryChangedAsync" />
+}
+
+@code {
+    private IDisposable? _storySubscription;
+    private IDisposable? _chatSubscription;
+    private bool _isLoading;
+    private Guid? _threadId;
+    private ChatStorySidebarView? _story;
+    private bool _isCharacterModalOpen;
+    private bool _isLocationsModalOpen;
+    private bool _isItemsModalOpen;
+    private bool _isHistoryModalOpen;
+    private Guid? _selectedCharacterIdForModal;
+    private Guid? _selectedItemIdForModal;
+    private bool _startCharacterModalInCreateMode;
+    private string? _errorMessage;
+    private HashSet<Guid> _togglingCharacterIds = [];
+    private HashSet<Guid> _togglingItemIds = [];
+    private HashSet<string> _switchingSpeakerKeys = [];
+    private HashSet<string> _switchingAgentNames = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _storySubscription = ActivityNotifier.Subscribe(ActivityStreams.SidebarStory, _ => InvokeAsync(LoadAsync));
+        _chatSubscription = ActivityNotifier.Subscribe(ActivityStreams.SidebarChats, _ => InvokeAsync(LoadAsync));
+        NavigationManager.LocationChanged += HandleLocationChanged;
+        await LoadAsync();
+    }
+
+    public void Dispose()
+    {
+        _storySubscription?.Dispose();
+        _chatSubscription?.Dispose();
+        NavigationManager.LocationChanged -= HandleLocationChanged;
+    }
+
+    private async void HandleLocationChanged(object? sender, LocationChangedEventArgs args) => await InvokeAsync(LoadAsync);
+
+    private async Task LoadAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            _threadId = await ResolveCurrentThreadIdAsync();
+            _story = _threadId.HasValue
+                ? await ChatStoryService.GetSidebarAsync(_threadId.Value, CancellationToken.None)
+                : null;
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task<Guid?> ResolveCurrentThreadIdAsync()
+    {
+        var relativePath = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        if (relativePath.StartsWith("chat/", StringComparison.OrdinalIgnoreCase)
+            && Guid.TryParse(relativePath["chat/".Length..], out var threadId))
+            return threadId;
+
+        if (!string.IsNullOrWhiteSpace(relativePath))
+            return null;
+
+        var recentThreads = await ChatWorkspaceService.GetRecentThreadsAsync(1, CancellationToken.None);
+        return recentThreads.FirstOrDefault()?.Id;
+    }
+
+    private void OpenCharacterModal()
+    {
+        _selectedCharacterIdForModal = null;
+        _startCharacterModalInCreateMode = false;
+        _isCharacterModalOpen = true;
+    }
+
+    private void OpenCharacterModal(Guid? characterId)
+    {
+        _selectedCharacterIdForModal = characterId;
+        _startCharacterModalInCreateMode = false;
+        _isCharacterModalOpen = true;
+    }
+
+    private void OpenLocationsModal() => _isLocationsModalOpen = true;
+
+    private void OpenItemsModal()
+    {
+        _selectedItemIdForModal = null;
+        _isItemsModalOpen = true;
+    }
+
+    private void OpenItemsModal(Guid? itemId)
+    {
+        _selectedItemIdForModal = itemId;
+        _isItemsModalOpen = true;
+    }
+
+    private void OpenHistoryModal() => _isHistoryModalOpen = true;
+
+    private Task CloseCharacterModal()
+    {
+        _isCharacterModalOpen = false;
+        _selectedCharacterIdForModal = null;
+        _startCharacterModalInCreateMode = false;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseLocationsModal()
+    {
+        _isLocationsModalOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseItemsModal()
+    {
+        _isItemsModalOpen = false;
+        _selectedItemIdForModal = null;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseHistoryModal()
+    {
+        _isHistoryModalOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private Task HandleStoryChangedAsync() => LoadAsync();
+
+    private async Task SelectSpeakerAsync(StorySidebarSpeakerView speaker)
+    {
+        if (!_threadId.HasValue)
+            return;
+
+        var speakerKey = GetSpeakerKey(speaker.CharacterId);
+        if (!_switchingSpeakerKeys.Add(speakerKey))
+            return;
+
+        _errorMessage = null;
+
+        try
+        {
+            await StorySceneChatService.SelectSpeakerAsync(_threadId.Value, speaker.CharacterId, CancellationToken.None);
+            await LoadAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Selecting speaker {SpeakerId} failed for chat {ChatId}.", speaker.CharacterId, _threadId.Value);
+            _errorMessage = $"Selecting {speaker.Name} as the active speaker failed.";
+        }
+        finally
+        {
+            _switchingSpeakerKeys.Remove(speakerKey);
+            StateHasChanged();
+        }
+    }
+
+    private async Task SelectAgentAsync(string agentName)
+    {
+        if (!_threadId.HasValue || !_switchingAgentNames.Add(agentName))
+            return;
+
+        _errorMessage = null;
+
+        try
+        {
+            await ThreadAgentService.SetSelectedAgentAsync(_threadId.Value, agentName, CancellationToken.None);
+            await LoadAsync();
+            UserFeedbackService.ShowBackgroundSuccess($"AI actions now use {agentName} for this chat.", "AI Provider Updated");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Selecting AI provider {AgentName} failed for chat {ChatId}.", agentName, _threadId.Value);
+            _errorMessage = $"Selecting the AI provider '{agentName}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "AI Provider Failed");
+        }
+        finally
+        {
+            _switchingAgentNames.Remove(agentName);
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleCharacterScenePresenceAsync(StoryCharacterListItemView character)
+    {
+        if (!_threadId.HasValue || !_togglingCharacterIds.Add(character.CharacterId))
+            return;
+
+        _errorMessage = null;
+
+        try
+        {
+            var charactersTask = ChatStoryService.GetCharactersAsync(_threadId.Value, CancellationToken.None);
+            var itemsTask = ChatStoryService.GetItemsAsync(_threadId.Value, CancellationToken.None);
+            await Task.WhenAll(charactersTask, itemsTask);
+
+            var presentCharacterIds = charactersTask.Result
+                .Where(x => x.IsPresentInScene && x.CharacterId != character.CharacterId)
+                .Select(x => x.CharacterId)
+                .ToList();
+            if (!character.IsPresentInScene)
+                presentCharacterIds.Add(character.CharacterId);
+
+            var presentItemIds = itemsTask.Result
+                .Where(x => x.IsPresentInScene)
+                .Select(x => x.ItemId)
+                .ToList();
+
+            await ChatStoryService.UpdateScenePresenceAsync(
+                new UpdateScenePresence(_threadId.Value, presentCharacterIds, presentItemIds),
+                CancellationToken.None);
+
+            await LoadAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Updating scene presence for character {CharacterId} failed for chat {ChatId}.", character.CharacterId, _threadId.Value);
+            _errorMessage = $"Updating scene presence for '{character.Name}' failed.";
+        }
+        finally
+        {
+            _togglingCharacterIds.Remove(character.CharacterId);
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleItemScenePresenceAsync(StoryItemListItemView item)
+    {
+        if (!_threadId.HasValue || !_togglingItemIds.Add(item.ItemId))
+            return;
+
+        _errorMessage = null;
+
+        try
+        {
+            var charactersTask = ChatStoryService.GetCharactersAsync(_threadId.Value, CancellationToken.None);
+            var itemsTask = ChatStoryService.GetItemsAsync(_threadId.Value, CancellationToken.None);
+            await Task.WhenAll(charactersTask, itemsTask);
+
+            var presentCharacterIds = charactersTask.Result
+                .Where(x => x.IsPresentInScene)
+                .Select(x => x.CharacterId)
+                .ToList();
+            var presentItems = itemsTask.Result
+                .Where(x => x.IsPresentInScene)
+                .ToList();
+            var isPresentInScene = presentItems.Any(x => x.ItemId == item.ItemId);
+            var presentItemIds = presentItems
+                .Where(x => x.ItemId != item.ItemId)
+                .Select(x => x.ItemId)
+                .ToList();
+            if (!isPresentInScene)
+                presentItemIds.Add(item.ItemId);
+
+            await ChatStoryService.UpdateScenePresenceAsync(
+                new UpdateScenePresence(_threadId.Value, presentCharacterIds, presentItemIds),
+                CancellationToken.None);
+
+            await LoadAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Updating scene presence for item {ItemId} failed for chat {ChatId}.", item.ItemId, _threadId.Value);
+            _errorMessage = $"Updating scene presence for '{item.Name}' failed.";
+        }
+        finally
+        {
+            _togglingItemIds.Remove(item.ItemId);
+            StateHasChanged();
+        }
+    }
+
+    private static string GetSpeakerKey(Guid? characterId) => characterId?.ToString("N") ?? "narrator";
+}

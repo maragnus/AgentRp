@@ -1,0 +1,42 @@
+<button type="button"
+        class="@ButtonClass"
+        @onclick="HandleClickAsync">
+    <div class="d-flex align-items-start justify-content-between gap-2">
+        <div class="text-start flex-grow-1 overflow-hidden">
+            <div class="fw-semibold text-truncate">@Name</div>
+
+            @if (!string.IsNullOrWhiteSpace(Summary))
+            {
+                <div class="small d-block text-truncate @(IsSelected ? "text-white-50" : "text-body-secondary")">@Summary</div>
+            }
+        </div>
+
+        @if (StatusContent is not null)
+        {
+            <div class="flex-shrink-0">
+                @StatusContent
+            </div>
+        }
+    </div>
+</button>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Name { get; set; } = string.Empty;
+
+    [Parameter]
+    public string Summary { get; set; } = string.Empty;
+
+    [Parameter]
+    public bool IsSelected { get; set; }
+
+    [Parameter]
+    public EventCallback OnClick { get; set; }
+
+    [Parameter]
+    public RenderFragment? StatusContent { get; set; }
+
+    private string ButtonClass => $"list-group-item list-group-item-action{(IsSelected ? " active" : string.Empty)}";
+
+    private Task HandleClickAsync() => OnClick.InvokeAsync();
+}

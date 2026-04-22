@@ -1,0 +1,220 @@
+@inject IStoryFieldGuidanceService StoryFieldGuidanceService
+@inject ILogger<StoryFieldGuidanceModal> Logger
+
+<AppModal IsOpen="IsOpen" Title="@BuildTitle()" DialogClass="modal-lg modal-dialog-scrollable modal-fullscreen-sm-down" OnClose="CloseAsync">
+    <ChildContent>
+        @if (_isLoading)
+        {
+            <div class="d-flex align-items-center gap-3 py-4">
+                <div class="spinner-border" role="status"></div>
+                <span>Loading field guidance...</span>
+            </div>
+        }
+        else
+        {
+            <div class="d-flex flex-column gap-3">
+                <InlineAlert Message="@_errorMessage" />
+
+                <div class="alert alert-light border mb-0">
+                    <div class="fw-semibold mb-1">@_fieldLabel</div>
+                    <div class="small text-body-secondary">These defaults shape how AI drafts and refinements format this field.</div>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-12 col-md-6">
+                        <label class="form-label" for="@_formatInputId">Format</label>
+                        <select id="@_formatInputId" class="form-select" @bind="_guidanceFormat">
+                            @foreach (var option in Enum.GetValues<StoryFieldGuidanceFormat>())
+                            {
+                                <option value="@option">@FormatGuidanceFormat(option)</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="col-12 col-md-6">
+                        <label class="form-label" for="@_detailInputId">Level of Detail</label>
+                        <select id="@_detailInputId" class="form-select" @bind="_detailLevel">
+                            @foreach (var option in Enum.GetValues<StoryFieldGuidanceDetailLevel>())
+                            {
+                                <option value="@option">@FormatDetailLevel(option)</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div class="col-6 col-md-6">
+                        <label class="form-label" for="@_minimumInputId">Minimum</label>
+                        <input id="@_minimumInputId" class="form-control" type="number" min="1" @bind="_minimum" />
+                    </div>
+
+                    <div class="col-6 col-md-6">
+                        <label class="form-label" for="@_maximumInputId">Maximum</label>
+                        <input id="@_maximumInputId" class="form-control" type="number" min="1" @bind="_maximum" />
+                    </div>
+                </div>
+
+                <div>
+                    <label class="form-label" for="@_exampleInputId">Example</label>
+                    <textarea id="@_exampleInputId" class="form-control" rows="5" @bind="_example"></textarea>
+                </div>
+
+                <div class="small text-body-secondary">
+                    Active summary: @BuildSummary()
+                </div>
+            </div>
+        }
+    </ChildContent>
+
+    <FooterContent>
+        <div class="w-100 d-flex justify-content-end gap-2">
+            <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+            <BusyButton Class="btn btn-primary"
+                        IsBusy="_isSaving"
+                        Disabled="@(_isLoading || _isSaving)"
+                        BusyText="Saving..."
+                        OnClick="SaveAsync">
+                <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                Save Guidance
+            </BusyButton>
+        </div>
+    </FooterContent>
+</AppModal>
+
+@code {
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public StoryEntityKind EntityKind { get; set; }
+
+    [Parameter]
+    public StoryEntityFieldKey FieldKey { get; set; }
+
+    [Parameter]
+    public EventCallback<StoryEntityFieldGuidanceView> OnSaved { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    private readonly string _formatInputId = $"story-field-guidance-format-{Guid.NewGuid():N}";
+    private readonly string _detailInputId = $"story-field-guidance-detail-{Guid.NewGuid():N}";
+    private readonly string _minimumInputId = $"story-field-guidance-minimum-{Guid.NewGuid():N}";
+    private readonly string _maximumInputId = $"story-field-guidance-maximum-{Guid.NewGuid():N}";
+    private readonly string _exampleInputId = $"story-field-guidance-example-{Guid.NewGuid():N}";
+    private bool _wasOpen;
+    private StoryEntityKind _loadedEntityKind;
+    private StoryEntityFieldKey _loadedFieldKey;
+    private bool _isLoading;
+    private bool _isSaving;
+    private string _fieldLabel = string.Empty;
+    private StoryFieldGuidanceFormat _guidanceFormat;
+    private StoryFieldGuidanceDetailLevel _detailLevel;
+    private int _minimum = 1;
+    private int _maximum = 1;
+    private string _example = string.Empty;
+    private string? _errorMessage;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!IsOpen)
+        {
+            _wasOpen = false;
+            return;
+        }
+
+        if (_wasOpen && _loadedEntityKind == EntityKind && _loadedFieldKey == FieldKey)
+            return;
+
+        _wasOpen = true;
+        _loadedEntityKind = EntityKind;
+        _loadedFieldKey = FieldKey;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            var guidance = await StoryFieldGuidanceService.GetGuidanceAsync(EntityKind, FieldKey, CancellationToken.None);
+            _fieldLabel = guidance.Label;
+            _guidanceFormat = guidance.Guidance.Format;
+            _detailLevel = guidance.Guidance.LevelOfDetail;
+            _minimum = guidance.Guidance.SuggestedLength.Minimum;
+            _maximum = guidance.Guidance.SuggestedLength.Maximum;
+            _example = guidance.Guidance.Example;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        _errorMessage = null;
+        _isSaving = true;
+        try
+        {
+            var updated = await StoryFieldGuidanceService.UpdateGuidanceAsync(
+                new UpdateStoryEntityFieldGuidance(
+                    EntityKind,
+                    FieldKey,
+                    new StoryFieldGuidance(
+                        _guidanceFormat,
+                        _detailLevel,
+                        new StoryFieldGuidanceLength(_minimum, _maximum),
+                        _example.Trim())),
+                CancellationToken.None);
+
+            if (OnSaved.HasDelegate)
+                await OnSaved.InvokeAsync(updated);
+
+            await CloseAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving field guidance failed for {EntityKind} {FieldKey}.", EntityKind, FieldKey);
+            _errorMessage = $"Saving guidance for '{_fieldLabel}' failed.";
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private Task CloseAsync()
+    {
+        _errorMessage = null;
+        return OnClose.InvokeAsync();
+    }
+
+    private string BuildTitle() => $"{_fieldLabel} Guidance";
+
+    private string BuildSummary() => $"{FormatGuidanceFormat(_guidanceFormat)}, {FormatDetailLevel(_detailLevel)}, {_minimum}-{_maximum} {FormatLengthMeasure(_guidanceFormat)}";
+
+    private static string FormatGuidanceFormat(StoryFieldGuidanceFormat guidanceFormat) => guidanceFormat switch
+    {
+        StoryFieldGuidanceFormat.Words => "List of words",
+        StoryFieldGuidanceFormat.Sentences => "Sentences",
+        StoryFieldGuidanceFormat.Paragraphs => "Paragraphs",
+        StoryFieldGuidanceFormat.BulletList => "Bullet list of items",
+        _ => guidanceFormat.ToString()
+    };
+
+    private static string FormatDetailLevel(StoryFieldGuidanceDetailLevel detailLevel) => detailLevel switch
+    {
+        StoryFieldGuidanceDetailLevel.Simple => "Simple",
+        StoryFieldGuidanceDetailLevel.Medium => "Medium",
+        StoryFieldGuidanceDetailLevel.Detailed => "Detailed",
+        _ => detailLevel.ToString()
+    };
+
+    private static string FormatLengthMeasure(StoryFieldGuidanceFormat guidanceFormat) => guidanceFormat switch
+    {
+        StoryFieldGuidanceFormat.Words => "words",
+        StoryFieldGuidanceFormat.Sentences => "sentences",
+        StoryFieldGuidanceFormat.Paragraphs => "paragraphs",
+        StoryFieldGuidanceFormat.BulletList => "items",
+        _ => guidanceFormat.ToString().ToLowerInvariant()
+    };
+}

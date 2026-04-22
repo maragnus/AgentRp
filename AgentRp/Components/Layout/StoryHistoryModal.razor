@@ -1,0 +1,914 @@
+@inject IChatStoryService ChatStoryService
+@inject IStoryFieldGuidanceService StoryFieldGuidanceService
+@inject ILogger<StoryHistoryModal> Logger
+
+<AppModal IsOpen="IsOpen" Title="History" OnClose="CloseAsync" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down">
+    @if (_isLoading)
+    {
+        <div class="d-flex align-items-center gap-3 py-3">
+            <div class="spinner-border spinner-border-sm" role="status"></div>
+            <span>Loading history...</span>
+        </div>
+    }
+    else
+    {
+        <ul class="nav nav-tabs mb-3">
+            <li class="nav-item">
+                <button type="button"
+                        class="nav-link @(_activeTab == StoryHistoryTab.Facts ? "active" : string.Empty)"
+                        @onclick="() => SetActiveTab(StoryHistoryTab.Facts)">
+                    Facts
+                </button>
+            </li>
+            <li class="nav-item">
+                <button type="button"
+                        class="nav-link @(_activeTab == StoryHistoryTab.Timeline ? "active" : string.Empty)"
+                        @onclick="() => SetActiveTab(StoryHistoryTab.Timeline)">
+                    Timeline
+                </button>
+            </li>
+        </ul>
+
+        <InlineAlert Message="@_errorMessage" CssClass="alert alert-danger mb-3" />
+
+        @if (_activeTab == StoryHistoryTab.Facts)
+        {
+            <div class="row g-3">
+                <div class="col-12 col-lg-4">
+                    <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                        <div class="fw-semibold">Canonical Facts</div>
+                        <button type="button"
+                                class="btn btn-outline-primary btn-sm"
+                                title="Add fact"
+                                aria-label="Add fact"
+                                @onclick="BeginCreateFact">
+                            <i class="fa-regular fa-plus" aria-hidden="true"></i>
+                        </button>
+                    </div>
+
+                    @if (_history?.Facts.Count is not > 0)
+                    {
+                        <div class="alert alert-light border mb-0">No facts yet.</div>
+                    }
+                    else
+                    {
+                        <div class="list-group">
+                            @foreach (var fact in _history!.Facts)
+                            {
+                                var isSelected = _selectedFactId == fact.FactId;
+
+                                <button type="button"
+                                        class="list-group-item list-group-item-action @(isSelected ? "active" : string.Empty)"
+                                        @onclick="() => SelectFact(fact.FactId)">
+                                    <div class="d-flex align-items-start justify-content-between gap-2">
+                                        <div class="text-start">
+                                            <div class="fw-semibold">@fact.Title</div>
+                                            @if (!string.IsNullOrWhiteSpace(fact.Summary))
+                                            {
+                                                <div class="small @(isSelected ? "text-white-50" : "text-body-secondary")">@fact.Summary</div>
+                                            }
+                                        </div>
+                                        <span class="badge text-bg-light border text-body-secondary">#@fact.SortOrder</span>
+                                    </div>
+                                </button>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="col-12 col-lg-8">
+                    <div class="d-flex flex-column gap-3">
+                        <div>
+                            <div class="d-flex align-items-center justify-content-between gap-2">
+                                <label class="form-label mb-0" for="story-fact-title">Title</label>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit title guidance"
+                                        aria-label="Edit title guidance"
+                                        @onclick='() => OpenGuidance(StoryEntityKind.HistoryFact, StoryEntityFieldKey.Title)'>
+                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                            <input id="story-fact-title" class="form-control" @bind="_factTitle" />
+                            @RenderGuidanceSummary(_factFieldGuidance, StoryEntityFieldKey.Title)
+                        </div>
+
+                        <div>
+                            <div class="d-flex align-items-center justify-content-between gap-2">
+                                <label class="form-label mb-0" for="story-fact-summary">Summary</label>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit summary guidance"
+                                        aria-label="Edit summary guidance"
+                                        @onclick='() => OpenGuidance(StoryEntityKind.HistoryFact, StoryEntityFieldKey.Summary)'>
+                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                            <textarea id="story-fact-summary" class="form-control" rows="2" @bind="_factSummary"></textarea>
+                            @RenderGuidanceSummary(_factFieldGuidance, StoryEntityFieldKey.Summary)
+                        </div>
+
+                        <div>
+                            <div class="d-flex align-items-center justify-content-between gap-2">
+                                <label class="form-label mb-0" for="story-fact-details">Details</label>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit details guidance"
+                                        aria-label="Edit details guidance"
+                                        @onclick='() => OpenGuidance(StoryEntityKind.HistoryFact, StoryEntityFieldKey.Details)'>
+                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                            <textarea id="story-fact-details" class="form-control" rows="4" @bind="_factDetails"></textarea>
+                            @RenderGuidanceSummary(_factFieldGuidance, StoryEntityFieldKey.Details)
+                        </div>
+
+                        <div class="row g-3 border-top pt-3">
+                            <div class="col-12 col-md-4">
+                                <div class="fw-semibold mb-2">Characters</div>
+                                @if (_characters.Count == 0)
+                                {
+                                    <div class="small text-body-secondary">No characters available.</div>
+                                }
+                                else
+                                {
+                                    @foreach (var character in _characters)
+                                    {
+                                        <div class="form-check">
+                                            <input id="@($"fact-character-{character.CharacterId}")"
+                                                   class="form-check-input"
+                                                   type="checkbox"
+                                                   checked="@_factCharacterIds.Contains(character.CharacterId)"
+                                                   @onchange="args => ToggleSelection(_factCharacterIds, character.CharacterId, args)" />
+                                            <label class="form-check-label" for="@($"fact-character-{character.CharacterId}")">@character.Name</label>
+                                        </div>
+                                    }
+                                }
+                            </div>
+
+                            <div class="col-12 col-md-4">
+                                <div class="fw-semibold mb-2">Locations</div>
+                                @if (_locations.Count == 0)
+                                {
+                                    <div class="small text-body-secondary">No locations available.</div>
+                                }
+                                else
+                                {
+                                    @foreach (var location in _locations)
+                                    {
+                                        <div class="form-check">
+                                            <input id="@($"fact-location-{location.LocationId}")"
+                                                   class="form-check-input"
+                                                   type="checkbox"
+                                                   checked="@_factLocationIds.Contains(location.LocationId)"
+                                                   @onchange="args => ToggleSelection(_factLocationIds, location.LocationId, args)" />
+                                            <label class="form-check-label" for="@($"fact-location-{location.LocationId}")">@location.Name</label>
+                                        </div>
+                                    }
+                                }
+                            </div>
+
+                            <div class="col-12 col-md-4">
+                                <div class="fw-semibold mb-2">Items</div>
+                                @if (_items.Count == 0)
+                                {
+                                    <div class="small text-body-secondary">No items available.</div>
+                                }
+                                else
+                                {
+                                    @foreach (var item in _items)
+                                    {
+                                        <div class="form-check">
+                                            <input id="@($"fact-item-{item.ItemId}")"
+                                                   class="form-check-input"
+                                                   type="checkbox"
+                                                   checked="@_factItemIds.Contains(item.ItemId)"
+                                                   @onchange="args => ToggleSelection(_factItemIds, item.ItemId, args)" />
+                                            <label class="form-check-label" for="@($"fact-item-{item.ItemId}")">@item.Name</label>
+                                        </div>
+                                    }
+                                }
+                            </div>
+                        </div>
+
+                        <div class="d-flex flex-wrap justify-content-between gap-2 border-top pt-3">
+                            <div class="d-flex gap-2">
+                                @if (_selectedFactId.HasValue)
+                                {
+                                    <BusyButton Class="btn btn-outline-danger"
+                                                IsBusy="_isDeleting"
+                                                Disabled="@(_isSaving || _isDeleting)"
+                                                BusyText="Deleting..."
+                                                OnClick="DeleteFactAsync">
+                                        <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
+                                        Delete
+                                    </BusyButton>
+                                }
+                            </div>
+
+                            <div class="d-flex gap-2">
+                                <button type="button"
+                                        class="btn btn-outline-primary"
+                                        title="@BuildAiButtonTitle()"
+                                        aria-label="@BuildAiButtonTitle()"
+                                        @onclick="OpenAiAssist">
+                                    <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+                                <BusyButton Class="btn btn-primary"
+                                            IsBusy="_isSaving"
+                                            Disabled="@(_isSaving || _isDeleting)"
+                                            BusyText="Saving..."
+                                            OnClick="SaveFactAsync">
+                                    <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                                    Save
+                                </BusyButton>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="row g-3">
+                <div class="col-12 col-lg-4">
+                    <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                        <div class="fw-semibold">Timeline</div>
+                        <button type="button"
+                                class="btn btn-outline-primary btn-sm"
+                                title="Add timeline entry"
+                                aria-label="Add timeline entry"
+                                @onclick="BeginCreateTimelineEntry">
+                            <i class="fa-regular fa-plus" aria-hidden="true"></i>
+                        </button>
+                    </div>
+
+                    @if (_history?.TimelineEntries.Count is not > 0)
+                    {
+                        <div class="alert alert-light border mb-0">No timeline entries yet.</div>
+                    }
+                    else
+                    {
+                        <div class="list-group">
+                            @foreach (var entry in _history!.TimelineEntries)
+                            {
+                                var isSelected = _selectedTimelineEntryId == entry.TimelineEntryId;
+
+                                <button type="button"
+                                        class="list-group-item list-group-item-action @(isSelected ? "active" : string.Empty)"
+                                        @onclick="() => SelectTimelineEntry(entry.TimelineEntryId)">
+                                    <div class="d-flex flex-column text-start gap-1">
+                                        <div class="d-flex align-items-start justify-content-between gap-2">
+                                            <div class="fw-semibold">@entry.Title</div>
+                                            <span class="badge text-bg-light border text-body-secondary">#@entry.SortOrder</span>
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(entry.WhenText))
+                                        {
+                                            <div class="small @(isSelected ? "text-white-50" : "text-body-secondary")">@entry.WhenText</div>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(entry.Summary))
+                                        {
+                                            <div class="small @(isSelected ? "text-white-50" : "text-body-secondary")">@entry.Summary</div>
+                                        }
+                                    </div>
+                                </button>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <div class="col-12 col-lg-8">
+                    <div class="d-flex flex-column gap-3">
+                        <div class="row g-3">
+                            <div class="col-12 col-md-8">
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <label class="form-label mb-0" for="story-timeline-title">Title</label>
+                                    <button type="button"
+                                            class="btn btn-outline-secondary btn-sm"
+                                            title="Edit title guidance"
+                                            aria-label="Edit title guidance"
+                                            @onclick='() => OpenGuidance(StoryEntityKind.TimelineEntry, StoryEntityFieldKey.Title)'>
+                                        <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <input id="story-timeline-title" class="form-control" @bind="_timelineTitle" />
+                                @RenderGuidanceSummary(_timelineFieldGuidance, StoryEntityFieldKey.Title)
+                            </div>
+
+                            <div class="col-12 col-md-4">
+                                <label class="form-label" for="story-timeline-order">Sort Order</label>
+                                <input id="story-timeline-order" class="form-control" type="number" min="1" @bind="_timelineSortOrder" />
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="d-flex align-items-center justify-content-between gap-2">
+                                <label class="form-label mb-0" for="story-timeline-when">When</label>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit when guidance"
+                                        aria-label="Edit when guidance"
+                                        @onclick='() => OpenGuidance(StoryEntityKind.TimelineEntry, StoryEntityFieldKey.WhenText)'>
+                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                            <input id="story-timeline-when" class="form-control" @bind="_timelineWhenText" />
+                            @RenderGuidanceSummary(_timelineFieldGuidance, StoryEntityFieldKey.WhenText)
+                        </div>
+
+                        <div>
+                            <div class="d-flex align-items-center justify-content-between gap-2">
+                                <label class="form-label mb-0" for="story-timeline-summary">Summary</label>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit summary guidance"
+                                        aria-label="Edit summary guidance"
+                                        @onclick='() => OpenGuidance(StoryEntityKind.TimelineEntry, StoryEntityFieldKey.Summary)'>
+                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                            <textarea id="story-timeline-summary" class="form-control" rows="2" @bind="_timelineSummary"></textarea>
+                            @RenderGuidanceSummary(_timelineFieldGuidance, StoryEntityFieldKey.Summary)
+                        </div>
+
+                        <div>
+                            <div class="d-flex align-items-center justify-content-between gap-2">
+                                <label class="form-label mb-0" for="story-timeline-details">Details</label>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit details guidance"
+                                        aria-label="Edit details guidance"
+                                        @onclick='() => OpenGuidance(StoryEntityKind.TimelineEntry, StoryEntityFieldKey.Details)'>
+                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                            <textarea id="story-timeline-details" class="form-control" rows="4" @bind="_timelineDetails"></textarea>
+                            @RenderGuidanceSummary(_timelineFieldGuidance, StoryEntityFieldKey.Details)
+                        </div>
+
+                        <div class="row g-3 border-top pt-3">
+                            <div class="col-12 col-md-4">
+                                <div class="fw-semibold mb-2">Characters</div>
+                                @if (_characters.Count == 0)
+                                {
+                                    <div class="small text-body-secondary">No characters available.</div>
+                                }
+                                else
+                                {
+                                    @foreach (var character in _characters)
+                                    {
+                                        <div class="form-check">
+                                            <input id="@($"timeline-character-{character.CharacterId}")"
+                                                   class="form-check-input"
+                                                   type="checkbox"
+                                                   checked="@_timelineCharacterIds.Contains(character.CharacterId)"
+                                                   @onchange="args => ToggleSelection(_timelineCharacterIds, character.CharacterId, args)" />
+                                            <label class="form-check-label" for="@($"timeline-character-{character.CharacterId}")">@character.Name</label>
+                                        </div>
+                                    }
+                                }
+                            </div>
+
+                            <div class="col-12 col-md-4">
+                                <div class="fw-semibold mb-2">Locations</div>
+                                @if (_locations.Count == 0)
+                                {
+                                    <div class="small text-body-secondary">No locations available.</div>
+                                }
+                                else
+                                {
+                                    @foreach (var location in _locations)
+                                    {
+                                        <div class="form-check">
+                                            <input id="@($"timeline-location-{location.LocationId}")"
+                                                   class="form-check-input"
+                                                   type="checkbox"
+                                                   checked="@_timelineLocationIds.Contains(location.LocationId)"
+                                                   @onchange="args => ToggleSelection(_timelineLocationIds, location.LocationId, args)" />
+                                            <label class="form-check-label" for="@($"timeline-location-{location.LocationId}")">@location.Name</label>
+                                        </div>
+                                    }
+                                }
+                            </div>
+
+                            <div class="col-12 col-md-4">
+                                <div class="fw-semibold mb-2">Items</div>
+                                @if (_items.Count == 0)
+                                {
+                                    <div class="small text-body-secondary">No items available.</div>
+                                }
+                                else
+                                {
+                                    @foreach (var item in _items)
+                                    {
+                                        <div class="form-check">
+                                            <input id="@($"timeline-item-{item.ItemId}")"
+                                                   class="form-check-input"
+                                                   type="checkbox"
+                                                   checked="@_timelineItemIds.Contains(item.ItemId)"
+                                                   @onchange="args => ToggleSelection(_timelineItemIds, item.ItemId, args)" />
+                                            <label class="form-check-label" for="@($"timeline-item-{item.ItemId}")">@item.Name</label>
+                                        </div>
+                                    }
+                                }
+                            </div>
+                        </div>
+
+                        <div class="d-flex flex-wrap justify-content-between gap-2 border-top pt-3">
+                            <div class="d-flex gap-2">
+                                @if (_selectedTimelineEntryId.HasValue)
+                                {
+                                    <BusyButton Class="btn btn-outline-danger"
+                                                IsBusy="_isDeleting"
+                                                Disabled="@(_isSaving || _isDeleting)"
+                                                BusyText="Deleting..."
+                                                OnClick="DeleteTimelineEntryAsync">
+                                        <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
+                                        Delete
+                                    </BusyButton>
+                                }
+                            </div>
+
+                            <div class="d-flex gap-2">
+                                <button type="button"
+                                        class="btn btn-outline-primary"
+                                        title="@BuildAiButtonTitle()"
+                                        aria-label="@BuildAiButtonTitle()"
+                                        @onclick="OpenAiAssist">
+                                    <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+                                <BusyButton Class="btn btn-primary"
+                                            IsBusy="_isSaving"
+                                            Disabled="@(_isSaving || _isDeleting)"
+                                            BusyText="Saving..."
+                                            OnClick="SaveTimelineEntryAsync">
+                                    <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                                    Save
+                                </BusyButton>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+</AppModal>
+
+<StoryEntityAiAssistModal ThreadId="ThreadId"
+                          IsOpen="_isAiAssistOpen"
+                          EntityKind="@ActiveAiEntityKind"
+                          EntityId="@ActiveAiEntityId"
+                          OnAccepted="HandleAiAcceptedAsync"
+                          OnClose="CloseAiAssistAsync" />
+<StoryFieldGuidanceModal IsOpen="_isGuidanceOpen"
+                         EntityKind="_selectedGuidanceEntityKind"
+                         FieldKey="_selectedGuidanceFieldKey"
+                         OnSaved="HandleGuidanceSavedAsync"
+                         OnClose="CloseGuidanceAsync" />
+
+@code {
+    [Parameter]
+    public Guid ThreadId { get; set; }
+
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
+    private bool _isLoading;
+    private bool _isSaving;
+    private bool _isDeleting;
+    private bool _wasOpen;
+    private Guid? _loadedThreadId;
+    private StoryHistoryTab _activeTab = StoryHistoryTab.Facts;
+    private StoryHistoryView? _history;
+    private IReadOnlyList<StoryCharacterEditorView> _characters = [];
+    private IReadOnlyList<StoryLocationEditorView> _locations = [];
+    private IReadOnlyList<StoryItemEditorView> _items = [];
+    private IReadOnlyList<StoryEntityFieldGuidanceView> _factFieldGuidance = [];
+    private IReadOnlyList<StoryEntityFieldGuidanceView> _timelineFieldGuidance = [];
+    private string? _errorMessage;
+    private Guid? _selectedFactId;
+    private string _factTitle = string.Empty;
+    private string _factSummary = string.Empty;
+    private string _factDetails = string.Empty;
+    private HashSet<Guid> _factCharacterIds = [];
+    private HashSet<Guid> _factLocationIds = [];
+    private HashSet<Guid> _factItemIds = [];
+    private Guid? _selectedTimelineEntryId;
+    private int _timelineSortOrder = 1;
+    private string _timelineWhenText = string.Empty;
+    private string _timelineTitle = string.Empty;
+    private string _timelineSummary = string.Empty;
+    private string _timelineDetails = string.Empty;
+    private HashSet<Guid> _timelineCharacterIds = [];
+    private HashSet<Guid> _timelineLocationIds = [];
+    private HashSet<Guid> _timelineItemIds = [];
+    private bool _isAiAssistOpen;
+    private bool _isGuidanceOpen;
+    private StoryEntityKind _selectedGuidanceEntityKind = StoryEntityKind.HistoryFact;
+    private StoryEntityFieldKey _selectedGuidanceFieldKey = StoryEntityFieldKey.Title;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!IsOpen)
+        {
+            _wasOpen = false;
+            return;
+        }
+
+        if (_wasOpen && _loadedThreadId == ThreadId)
+            return;
+
+        _wasOpen = true;
+        _loadedThreadId = ThreadId;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync(Guid? selectedFactId = null, Guid? selectedTimelineEntryId = null)
+    {
+        _isLoading = true;
+        try
+        {
+            var historyTask = ChatStoryService.GetHistoryAsync(ThreadId, CancellationToken.None);
+            var characterTask = ChatStoryService.GetCharactersAsync(ThreadId, CancellationToken.None);
+            var locationTask = ChatStoryService.GetLocationEditorsAsync(ThreadId, CancellationToken.None);
+            var itemTask = ChatStoryService.GetItemsAsync(ThreadId, CancellationToken.None);
+            var factGuidanceTask = StoryFieldGuidanceService.GetGuidanceAsync(StoryEntityKind.HistoryFact, CancellationToken.None);
+            var timelineGuidanceTask = StoryFieldGuidanceService.GetGuidanceAsync(StoryEntityKind.TimelineEntry, CancellationToken.None);
+            await Task.WhenAll(historyTask, characterTask, locationTask, itemTask, factGuidanceTask, timelineGuidanceTask);
+
+            _history = historyTask.Result ?? new StoryHistoryView([], []);
+            _characters = characterTask.Result;
+            _locations = locationTask.Result;
+            _items = itemTask.Result;
+            _factFieldGuidance = factGuidanceTask.Result;
+            _timelineFieldGuidance = timelineGuidanceTask.Result;
+
+            if (_activeTab == StoryHistoryTab.Facts)
+            {
+                var targetFactId = selectedFactId
+                    ?? _selectedFactId
+                    ?? _history.Facts.FirstOrDefault()?.FactId;
+                if (targetFactId.HasValue)
+                    SelectFact(targetFactId.Value);
+                else
+                    BeginCreateFact();
+            }
+            else
+            {
+                var targetTimelineEntryId = selectedTimelineEntryId
+                    ?? _selectedTimelineEntryId
+                    ?? _history.TimelineEntries.FirstOrDefault()?.TimelineEntryId;
+                if (targetTimelineEntryId.HasValue)
+                    SelectTimelineEntry(targetTimelineEntryId.Value);
+                else
+                    BeginCreateTimelineEntry();
+            }
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void SetActiveTab(StoryHistoryTab tab)
+    {
+        _errorMessage = null;
+        _activeTab = tab;
+        if (tab == StoryHistoryTab.Facts)
+        {
+            if (_history?.Facts.Count > 0)
+                SelectFact(_selectedFactId ?? _history.Facts[0].FactId);
+            else
+                BeginCreateFact();
+        }
+        else
+        {
+            if (_history?.TimelineEntries.Count > 0)
+                SelectTimelineEntry(_selectedTimelineEntryId ?? _history.TimelineEntries[0].TimelineEntryId);
+            else
+                BeginCreateTimelineEntry();
+        }
+    }
+
+    private void BeginCreateFact()
+    {
+        _errorMessage = null;
+        _selectedFactId = null;
+        _factTitle = string.Empty;
+        _factSummary = string.Empty;
+        _factDetails = string.Empty;
+        _factCharacterIds = [];
+        _factLocationIds = [];
+        _factItemIds = [];
+    }
+
+    private void SelectFact(Guid factId)
+    {
+        var fact = _history?.Facts.FirstOrDefault(x => x.FactId == factId);
+        if (fact is null)
+        {
+            BeginCreateFact();
+            return;
+        }
+
+        _errorMessage = null;
+        _selectedFactId = fact.FactId;
+        _factTitle = fact.Title;
+        _factSummary = fact.Summary;
+        _factDetails = fact.Details;
+        _factCharacterIds = [.. fact.CharacterIds];
+        _factLocationIds = [.. fact.LocationIds];
+        _factItemIds = [.. fact.ItemIds];
+    }
+
+    private void BeginCreateTimelineEntry()
+    {
+        _errorMessage = null;
+        _selectedTimelineEntryId = null;
+        _timelineSortOrder = (_history?.TimelineEntries.Count ?? 0) + 1;
+        _timelineWhenText = string.Empty;
+        _timelineTitle = string.Empty;
+        _timelineSummary = string.Empty;
+        _timelineDetails = string.Empty;
+        _timelineCharacterIds = [];
+        _timelineLocationIds = [];
+        _timelineItemIds = [];
+    }
+
+    private void SelectTimelineEntry(Guid timelineEntryId)
+    {
+        var entry = _history?.TimelineEntries.FirstOrDefault(x => x.TimelineEntryId == timelineEntryId);
+        if (entry is null)
+        {
+            BeginCreateTimelineEntry();
+            return;
+        }
+
+        _errorMessage = null;
+        _selectedTimelineEntryId = entry.TimelineEntryId;
+        _timelineSortOrder = entry.SortOrder;
+        _timelineWhenText = entry.WhenText ?? string.Empty;
+        _timelineTitle = entry.Title;
+        _timelineSummary = entry.Summary;
+        _timelineDetails = entry.Details;
+        _timelineCharacterIds = [.. entry.CharacterIds];
+        _timelineLocationIds = [.. entry.LocationIds];
+        _timelineItemIds = [.. entry.ItemIds];
+    }
+
+    private async Task SaveFactAsync()
+    {
+        _errorMessage = null;
+        _isSaving = true;
+        try
+        {
+            var savedFact = await ChatStoryService.UpsertHistoryFactAsync(
+                new UpsertHistoryFact(
+                    ThreadId,
+                    _selectedFactId,
+                    _factTitle,
+                    _factSummary,
+                    _factDetails,
+                    _factCharacterIds.ToList(),
+                    _factLocationIds.ToList(),
+                    _factItemIds.ToList()),
+                CancellationToken.None);
+
+            await LoadAsync(savedFact.FactId, _selectedTimelineEntryId);
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving history fact {FactTitle} failed for chat {ChatId}.", _factTitle, ThreadId);
+            _errorMessage = $"Saving history fact '{BuildFactDisplayName()}' failed.";
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task DeleteFactAsync()
+    {
+        if (!_selectedFactId.HasValue)
+            return;
+
+        var displayName = BuildFactDisplayName();
+        _errorMessage = null;
+        _isDeleting = true;
+        try
+        {
+            await ChatStoryService.DeleteHistoryFactAsync(new DeleteHistoryFact(ThreadId, _selectedFactId.Value), CancellationToken.None);
+            await LoadAsync(null, _selectedTimelineEntryId);
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Deleting history fact {FactId} failed for chat {ChatId}.", _selectedFactId.Value, ThreadId);
+            _errorMessage = $"Deleting history fact '{displayName}' failed.";
+        }
+        finally
+        {
+            _isDeleting = false;
+        }
+    }
+
+    private async Task SaveTimelineEntryAsync()
+    {
+        _errorMessage = null;
+        _isSaving = true;
+        try
+        {
+            var savedEntry = await ChatStoryService.UpsertTimelineEntryAsync(
+                new UpsertTimelineEntry(
+                    ThreadId,
+                    _selectedTimelineEntryId,
+                    _timelineSortOrder,
+                    _timelineWhenText,
+                    _timelineTitle,
+                    _timelineSummary,
+                    _timelineDetails,
+                    _timelineCharacterIds.ToList(),
+                    _timelineLocationIds.ToList(),
+                    _timelineItemIds.ToList()),
+                CancellationToken.None);
+
+            await LoadAsync(_selectedFactId, savedEntry.TimelineEntryId);
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving timeline entry {TimelineTitle} failed for chat {ChatId}.", _timelineTitle, ThreadId);
+            _errorMessage = $"Saving timeline entry '{BuildTimelineDisplayName()}' failed.";
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task DeleteTimelineEntryAsync()
+    {
+        if (!_selectedTimelineEntryId.HasValue)
+            return;
+
+        var displayName = BuildTimelineDisplayName();
+        _errorMessage = null;
+        _isDeleting = true;
+        try
+        {
+            await ChatStoryService.DeleteTimelineEntryAsync(new DeleteTimelineEntry(ThreadId, _selectedTimelineEntryId.Value), CancellationToken.None);
+            await LoadAsync(_selectedFactId, null);
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Deleting timeline entry {TimelineEntryId} failed for chat {ChatId}.", _selectedTimelineEntryId.Value, ThreadId);
+            _errorMessage = $"Deleting timeline entry '{displayName}' failed.";
+        }
+        finally
+        {
+            _isDeleting = false;
+        }
+    }
+
+    private void ToggleSelection(HashSet<Guid> ids, Guid id, ChangeEventArgs args)
+    {
+        var isSelected = args.Value is bool boolValue && boolValue;
+        if (isSelected)
+            ids.Add(id);
+        else
+            ids.Remove(id);
+    }
+
+    private async Task NotifyChangedAsync()
+    {
+        if (OnChanged.HasDelegate)
+            await OnChanged.InvokeAsync();
+    }
+
+    private void OpenAiAssist() => _isAiAssistOpen = true;
+
+    private void OpenGuidance(StoryEntityKind entityKind, StoryEntityFieldKey fieldKey)
+    {
+        _selectedGuidanceEntityKind = entityKind;
+        _selectedGuidanceFieldKey = fieldKey;
+        _isGuidanceOpen = true;
+    }
+
+    private Task CloseAiAssistAsync()
+    {
+        _isAiAssistOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseGuidanceAsync()
+    {
+        _isGuidanceOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleAiAcceptedAsync(StoryEntityAcceptResult result)
+    {
+        _isAiAssistOpen = false;
+        if (result.EntityKind == StoryEntityKind.HistoryFact)
+        {
+            _activeTab = StoryHistoryTab.Facts;
+            await LoadAsync(result.EntityId, _selectedTimelineEntryId);
+        }
+        else
+        {
+            _activeTab = StoryHistoryTab.Timeline;
+            await LoadAsync(_selectedFactId, result.EntityId);
+        }
+
+        await NotifyChangedAsync();
+    }
+
+    private async Task HandleGuidanceSavedAsync(StoryEntityFieldGuidanceView guidance)
+    {
+        _isGuidanceOpen = false;
+        if (guidance.EntityKind == StoryEntityKind.HistoryFact)
+            _factFieldGuidance = await StoryFieldGuidanceService.GetGuidanceAsync(StoryEntityKind.HistoryFact, CancellationToken.None);
+        else if (guidance.EntityKind == StoryEntityKind.TimelineEntry)
+            _timelineFieldGuidance = await StoryFieldGuidanceService.GetGuidanceAsync(StoryEntityKind.TimelineEntry, CancellationToken.None);
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private string BuildFactDisplayName() => string.IsNullOrWhiteSpace(_factTitle) ? "Untitled Fact" : _factTitle.Trim();
+
+    private string BuildTimelineDisplayName() => string.IsNullOrWhiteSpace(_timelineTitle) ? "Untitled Timeline Entry" : _timelineTitle.Trim();
+
+    private string BuildAiButtonTitle() => _activeTab switch
+    {
+        StoryHistoryTab.Facts when _selectedFactId.HasValue => "Edit fact with prompt",
+        StoryHistoryTab.Facts => "New fact from prompt",
+        StoryHistoryTab.Timeline when _selectedTimelineEntryId.HasValue => "Edit timeline entry with prompt",
+        StoryHistoryTab.Timeline => "New timeline entry from prompt",
+        _ => "Open AI assist"
+    };
+
+    private StoryEntityKind ActiveAiEntityKind => _activeTab == StoryHistoryTab.Facts
+        ? StoryEntityKind.HistoryFact
+        : StoryEntityKind.TimelineEntry;
+
+    private Guid? ActiveAiEntityId => _activeTab == StoryHistoryTab.Facts
+        ? _selectedFactId
+        : _selectedTimelineEntryId;
+
+    private RenderFragment RenderGuidanceSummary(IReadOnlyList<StoryEntityFieldGuidanceView> guidanceSet, StoryEntityFieldKey fieldKey) => builder =>
+    {
+        var guidance = guidanceSet.FirstOrDefault(x => x.FieldKey == fieldKey);
+        if (guidance is null)
+            return;
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "small text-body-secondary mt-1");
+        builder.AddContent(2, BuildGuidanceSummary(guidance.Guidance));
+        builder.CloseElement();
+    };
+
+    private static string BuildGuidanceSummary(StoryFieldGuidance guidance) =>
+        $"{FormatGuidanceFormat(guidance.Format)}, {FormatDetail(guidance.LevelOfDetail)}, {guidance.SuggestedLength.Minimum}-{guidance.SuggestedLength.Maximum} {FormatLengthMeasure(guidance.Format)}";
+
+    private static string FormatGuidanceFormat(StoryFieldGuidanceFormat guidanceFormat) => guidanceFormat switch
+    {
+        StoryFieldGuidanceFormat.Words => "list of words",
+        StoryFieldGuidanceFormat.Sentences => "sentences",
+        StoryFieldGuidanceFormat.Paragraphs => "paragraphs",
+        StoryFieldGuidanceFormat.BulletList => "bullet list",
+        _ => guidanceFormat.ToString()
+    };
+
+    private static string FormatDetail(StoryFieldGuidanceDetailLevel detailLevel) => detailLevel switch
+    {
+        StoryFieldGuidanceDetailLevel.Simple => "simple",
+        StoryFieldGuidanceDetailLevel.Medium => "medium detail",
+        StoryFieldGuidanceDetailLevel.Detailed => "detailed",
+        _ => detailLevel.ToString()
+    };
+
+    private static string FormatLengthMeasure(StoryFieldGuidanceFormat guidanceFormat) => guidanceFormat switch
+    {
+        StoryFieldGuidanceFormat.Words => "words",
+        StoryFieldGuidanceFormat.Sentences => "sentences",
+        StoryFieldGuidanceFormat.Paragraphs => "paragraphs",
+        StoryFieldGuidanceFormat.BulletList => "items",
+        _ => guidanceFormat.ToString().ToLowerInvariant()
+    };
+
+    private enum StoryHistoryTab
+    {
+        Facts,
+        Timeline
+    }
+}

@@ -1,0 +1,12 @@
+@if (!string.IsNullOrWhiteSpace(Message))
+{
+    <div class="@CssClass" role="alert">@Message</div>
+}
+
+@code {
+    [Parameter]
+    public string? Message { get; set; }
+
+    [Parameter]
+    public string CssClass { get; set; } = "alert alert-danger mb-0";
+}
