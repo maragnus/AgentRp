@@ -170,12 +170,16 @@ public sealed class StoryChatAppearanceService(
             : StoryChatAppearanceDocumentNormalizer.Normalize(ChatStoryJson.Deserialize(latestEntry.AppearanceJson, StoryChatAppearanceDocument.Empty)).Characters
                 .ToDictionary(x => x.CharacterId, x => x.CurrentAppearance);
 
-        return presentCharacters
-            .Select(character => new StorySceneCharacterAppearanceView(
-                character.Id,
-                character.Name,
-                storedLookup.TryGetValue(character.Id, out var currentAppearance) ? currentAppearance : string.Empty))
-            .ToList();
+        var characters = new List<StorySceneCharacterAppearanceView>();
+        foreach (var character in presentCharacters)
+        {
+            if (!storedLookup.TryGetValue(character.Id, out var currentAppearance) || string.IsNullOrWhiteSpace(currentAppearance))
+                continue;
+
+            characters.Add(new StorySceneCharacterAppearanceView(character.Id, character.Name, currentAppearance));
+        }
+
+        return characters;
     }
 
     private static IReadOnlyList<StorySceneCharacterAppearanceView> BuildUpdatedCharacters(
@@ -188,12 +192,16 @@ public sealed class StoryChatAppearanceService(
             .ToList();
         var requestedLookup = requestCharacters.ToDictionary(x => x.CharacterId, x => NormalizeAppearanceText(x.CurrentAppearance));
 
-        return presentCharacters
-            .Select(character => new StorySceneCharacterAppearanceView(
-                character.Id,
-                character.Name,
-                requestedLookup.TryGetValue(character.Id, out var currentAppearance) ? currentAppearance : string.Empty))
-            .ToList();
+        var characters = new List<StorySceneCharacterAppearanceView>();
+        foreach (var character in presentCharacters)
+        {
+            if (!requestedLookup.TryGetValue(character.Id, out var currentAppearance) || string.IsNullOrWhiteSpace(currentAppearance))
+                continue;
+
+            characters.Add(new StorySceneCharacterAppearanceView(character.Id, character.Name, currentAppearance));
+        }
+
+        return characters;
     }
 
     private static IReadOnlyList<StorySceneCharacterAppearanceView> ResolveCharactersFromResponse(
@@ -210,10 +218,20 @@ public sealed class StoryChatAppearanceService(
             .ToDictionary(x => x.Key, x => x.Last())
         ?? [];
 
-        return fallbackCharacters
-            .Select(character => mappedCharacters.TryGetValue(character.CharacterId, out var mappedCharacter)
-                ? mappedCharacter
-                : character)
+        var resolvedCharacters = fallbackCharacters.ToDictionary(x => x.CharacterId);
+        foreach (var mappedCharacter in mappedCharacters.Values)
+        {
+            if (string.IsNullOrWhiteSpace(mappedCharacter.CurrentAppearance))
+                resolvedCharacters.Remove(mappedCharacter.CharacterId);
+            else
+                resolvedCharacters[mappedCharacter.CharacterId] = mappedCharacter;
+        }
+
+        return story.Characters.Entries
+            .Where(x => !x.IsArchived && story.Scene.PresentCharacterIds.Contains(x.Id))
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .Where(x => resolvedCharacters.ContainsKey(x.Id))
+            .Select(x => resolvedCharacters[x.Id])
             .ToList();
     }
 
@@ -230,7 +248,8 @@ public sealed class StoryChatAppearanceService(
         if (character is null)
             return null;
 
-        return new StorySceneCharacterAppearanceView(character.Id, character.Name, response.CurrentAppearance?.Trim() ?? string.Empty);
+        var currentAppearance = response.HasCurrentPhysicalDetails ? response.CurrentAppearance?.Trim() ?? string.Empty : string.Empty;
+        return new StorySceneCharacterAppearanceView(character.Id, character.Name, currentAppearance);
     }
 
     private static IReadOnlyList<StorySceneTranscriptMessage> BuildTranscriptSinceLatestEntry(
@@ -264,6 +283,7 @@ public sealed class StoryChatAppearanceService(
         var document = StoryChatAppearanceDocumentNormalizer.Normalize(ChatStoryJson.Deserialize(entry.AppearanceJson, StoryChatAppearanceDocument.Empty));
         var characters = effectiveCharactersOverride
             ?? document.Characters
+                .Where(x => !string.IsNullOrWhiteSpace(x.CurrentAppearance))
                 .Select(x => new StorySceneCharacterAppearanceView(
                     x.CharacterId,
                     story.Characters.Entries.FirstOrDefault(character => character.Id == x.CharacterId)?.Name ?? "Unknown Character",
@@ -303,31 +323,35 @@ public sealed class StoryChatAppearanceService(
         string? suggestedSummary,
         IReadOnlyList<StorySceneCharacterAppearanceView> characters)
     {
-        var trimmedSummary = suggestedSummary?.Trim();
-        if (!string.IsNullOrWhiteSpace(trimmedSummary))
-            return trimmedSummary;
-
         var namedCharacters = characters
             .Where(x => !string.IsNullOrWhiteSpace(x.CurrentAppearance))
             .Select(x => x.CharacterName)
             .ToList();
-        if (namedCharacters.Count == 0)
-            return "Current appearance captured for the active scene cast.";
-        if (namedCharacters.Count == 1)
-            return $"Current appearance updated for {namedCharacters[0]}.";
+        var trimmedSummary = suggestedSummary?.Trim();
+        if (namedCharacters.Count > 0 && !string.IsNullOrWhiteSpace(trimmedSummary))
+            return trimmedSummary;
 
-        return $"Current appearance updated for {string.Join(", ", namedCharacters)}.";
+        if (namedCharacters.Count == 0)
+            return "No current physical details are captured for the active scene cast.";
+        if (namedCharacters.Count == 1)
+            return $"Current physical details updated for {namedCharacters[0]}.";
+
+        return $"Current physical details updated for {string.Join(", ", namedCharacters)}.";
     }
 
     private static string NormalizeAppearanceText(string? value) => value?.Trim() ?? string.Empty;
 
     private static string BuildAppearanceSystemPrompt() =>
         """
-        You resolve current in-scene character appearance from story transcript.
+        You resolve current in-scene character appearance and visible physical state from story transcript.
         Return structured output only.
-        For each character currently in the scene, provide a concise, but full current appearance summary.
-        Include clothing, hairstyle, makeup, relative location, body language, and other immediately visible features when supported by context.
-        Preserve prior appearance details when recent transcript does not contradict them.
+        For each character currently in the scene, decide whether there are supported current physical details.
+        Current physical details include clothing, hairstyle, makeup, relative location, body language, and visible physical state such as exhausted, overheated, sweaty, drenched, cold, wounded, or trembling.
+        Use only the transcript and prior current appearance as evidence.
+        Do not copy, paraphrase, or summarize a character's general appearance as current appearance.
+        Preserve prior current appearance and physical state when recent transcript does not contradict them.
+        Set hasCurrentPhysicalDetails to false and leave currentAppearance empty when a character has no supported current physical details or state.
+        The summary should mention only characters with hasCurrentPhysicalDetails true.
         Use intuition and context to infer changes but DO NOT invent changes that are not grounded in the transcript or provided prior state.
         """;
 
@@ -345,8 +369,7 @@ public sealed class StoryChatAppearanceService(
         {
             var latestCharacter = latestCharacters.FirstOrDefault(x => x.CharacterId == character.Id);
             builder.AppendLine($"- {character.Name}");
-            builder.AppendLine($"  General appearance: {character.GeneralAppearance}");
-            builder.AppendLine($"  Prior current appearance: {latestCharacter?.CurrentAppearance ?? "Unknown"}");
+            builder.AppendLine($"  Prior current appearance/state: {latestCharacter?.CurrentAppearance ?? "None"}");
         }
 
         builder.AppendLine();
@@ -362,7 +385,8 @@ public sealed class StoryChatAppearanceService(
         }
 
         builder.AppendLine();
-        builder.AppendLine("Return the full latest current appearance for every character currently in the scene.");
+        builder.AppendLine("Return one decision for every character currently in the scene.");
+        builder.AppendLine("Only set hasCurrentPhysicalDetails to true when currentAppearance contains specific current appearance or visible physical state supported by the transcript or prior current appearance/state.");
         return builder.ToString().TrimEnd();
     }
 
@@ -448,5 +472,6 @@ public sealed class StoryChatAppearanceService(
 
     private sealed record AppearanceStageCharacterResponse(
         string CharacterName,
+        bool HasCurrentPhysicalDetails,
         string? CurrentAppearance);
 }

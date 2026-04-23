@@ -82,6 +82,7 @@ public sealed class ChatStoryService(
         var corePersonality = NormalizeOptionalValue(command.CorePersonality);
         var relationships = NormalizeOptionalValue(command.Relationships);
         var preferencesBeliefs = NormalizeOptionalValue(command.PreferencesBeliefs);
+        var privateMotivations = NormalizeOptionalValue(command.PrivateMotivations);
         var documents = story.Characters.Entries.ToList();
         var characterId = command.CharacterId ?? Guid.NewGuid();
         var document = new StoryCharacterDocument(
@@ -92,6 +93,7 @@ public sealed class ChatStoryService(
             corePersonality,
             relationships,
             preferencesBeliefs,
+            privateMotivations,
             command.IsArchived);
 
         ReplaceOrAdd(documents, document, x => x.Id);
@@ -512,6 +514,7 @@ public sealed class ChatStoryService(
         document.CorePersonality,
         document.Relationships,
         document.PreferencesBeliefs,
+        document.PrivateMotivations,
         story.Scene.PresentCharacterIds.Contains(document.Id));
 
     private static IReadOnlyList<StoryLocationListItemView> MapLocationList(ChatStory story) =>

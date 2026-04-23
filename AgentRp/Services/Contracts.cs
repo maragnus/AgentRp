@@ -127,6 +127,7 @@ public sealed record StoryCharacterEditorView(
     string CorePersonality,
     string Relationships,
     string PreferencesBeliefs,
+    string PrivateMotivations,
     bool IsPresentInScene);
 
 public sealed record StoryLocationEditorView(
@@ -179,6 +180,7 @@ public sealed record UpsertCharacter(
     string CorePersonality,
     string Relationships,
     string PreferencesBeliefs,
+    string PrivateMotivations,
     bool IsPresentInScene,
     bool IsArchived);
 
@@ -559,7 +561,8 @@ public sealed record StorySceneActorContext(
     string Name,
     bool IsNarrator,
     string Summary,
-    string Details);
+    string Details,
+    string HiddenKnowledge);
 
 public sealed record StorySceneLocationContext(
     Guid? LocationId,

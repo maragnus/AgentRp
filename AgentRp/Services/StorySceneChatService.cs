@@ -504,9 +504,12 @@ public sealed class StorySceneChatService(
             options: new ChatOptions { Temperature = 0.9f },
             cancellationToken: cancellationToken);
         var prose = response.Text?.Trim();
+        var normalizedProse = string.IsNullOrWhiteSpace(prose)
+            ? string.Empty
+            : StripLeadingActorLabel(prose, request.Context.Actor);
 
-        if (!string.IsNullOrWhiteSpace(prose))
-            return prose;
+        if (!string.IsNullOrWhiteSpace(normalizedProse))
+            return normalizedProse;
 
         throw new InvalidOperationException($"Writing the scene message as {request.Context.Actor.Name} failed because the prose stage returned an empty message.");
     }
@@ -791,7 +794,8 @@ public sealed class StorySceneChatService(
                 "Narrator",
                 true,
                 "An always-present narrator who injects reliable scene facts and framing details.",
-                "Speak in concise descriptive prose. Introduce or clarify facts without inventing contradictions.");
+                "Speak in concise descriptive prose. Introduce or clarify facts without inventing contradictions.",
+                BuildNarratorHiddenKnowledge(characters));
         }
 
         var character = characters.FirstOrDefault(x => x.Id == speakerCharacterId.Value)
@@ -803,13 +807,28 @@ public sealed class StorySceneChatService(
         details.AppendLine($"Core personality: {character.CorePersonality}");
         details.AppendLine($"Relationships: {character.Relationships}");
         details.AppendLine($"Preferences / beliefs: {character.PreferencesBeliefs}");
+        if (!string.IsNullOrWhiteSpace(character.PrivateMotivations))
+            details.AppendLine($"Private motivations: {character.PrivateMotivations}");
 
         return new StorySceneActorContext(
             character.Id,
             character.Name,
             false,
             character.Summary,
-            details.ToString().TrimEnd());
+            details.ToString().TrimEnd(),
+            string.Empty);
+    }
+
+    private static string BuildNarratorHiddenKnowledge(IReadOnlyList<StoryCharacterDocument> characters)
+    {
+        var hiddenDetails = characters
+            .Where(x => !string.IsNullOrWhiteSpace(x.PrivateMotivations))
+            .Select(x => $"{x.Name}: {x.PrivateMotivations}")
+            .ToList();
+
+        return hiddenDetails.Count == 0
+            ? string.Empty
+            : string.Join(Environment.NewLine, hiddenDetails);
     }
 
     private static IReadOnlyList<StorySceneSpeakerView> BuildSpeakers(
@@ -1112,6 +1131,8 @@ public sealed class StorySceneChatService(
         builder.AppendLine($"Narrator actor: {context.Actor.IsNarrator}");
         builder.AppendLine($"Actor summary: {context.Actor.Summary}");
         builder.AppendLine($"Actor details: {context.Actor.Details}");
+        if (!string.IsNullOrWhiteSpace(context.Actor.HiddenKnowledge))
+            builder.AppendLine($"Hidden knowledge: {context.Actor.HiddenKnowledge}");
         builder.AppendLine($"Current location: {context.CurrentLocation?.Name ?? "None"}");
 
         if (context.CurrentLocation is not null)
@@ -1185,7 +1206,7 @@ public sealed class StorySceneChatService(
         var builder = new StringBuilder();
         if (appearance.EffectiveCharacters.Count == 0)
         {
-            builder.AppendLine("Character appearances have not yet been resolved for this scene. Define them based on the transcript and character's general appearances.");
+            builder.AppendLine("No current appearance or physical state details have been captured for this scene yet.");
         }
         else
         {
@@ -1213,6 +1234,21 @@ public sealed class StorySceneChatService(
             yield return text.Substring(index, length);
             index += length;
         }
+    }
+
+    private static string StripLeadingActorLabel(string text, StorySceneActorContext actor)
+    {
+        if (actor.IsNarrator)
+            return text;
+
+        if (!text.StartsWith(actor.Name, StringComparison.Ordinal))
+            return text;
+
+        var labelEndIndex = actor.Name.Length;
+        if (text.Length == labelEndIndex || text[labelEndIndex] != ':')
+            return text;
+
+        return text[(labelEndIndex + 1)..].TrimStart();
     }
 
     private static string BuildHistorySummary(ChatStoryHistoryDocument history)

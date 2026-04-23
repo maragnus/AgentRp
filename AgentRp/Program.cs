@@ -28,6 +28,7 @@ builder.Services.AddScoped<IStoryChatSnapshotService, StoryChatSnapshotService>(
 builder.Services.AddScoped<IStoryChatAppearanceService, StoryChatAppearanceService>();
 builder.Services.AddScoped<IStorySceneChatService, StorySceneChatService>();
 builder.Services.AddScoped<IStoryEntityAiAssistService, StoryEntityAiAssistService>();
+builder.Services.AddScoped<IStoryCharacterPrivateMotivationsService, StoryCharacterPrivateMotivationsService>();
 builder.Services.AddScoped<IStoryFieldGuidanceService, StoryFieldGuidanceService>();
 
 var app = builder.Build();

@@ -1,0 +1,409 @@
+@inject IStoryCharacterPrivateMotivationsService StoryCharacterPrivateMotivationsService
+@inject IThreadAgentService ThreadAgentService
+@inject IUserFeedbackService UserFeedbackService
+@inject ILogger<StoryCharacterPrivateMotivationsModal> Logger
+
+<AppModal IsOpen="IsOpen" Title="@BuildTitle()" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down" OnClose="CloseAsync">
+    <ChildContent>
+        <div class="d-flex flex-column gap-3">
+            <InlineAlert Message="@_errorMessage" />
+
+            @if (!_isAiAvailable)
+            {
+                <div class="alert alert-light border mb-0">
+                    <div class="fw-semibold mb-1">AI Unavailable</div>
+                    <div class="small text-body-secondary">This chat does not currently have an Aspire-configured AI provider enabled.</div>
+                </div>
+            }
+
+            <div class="d-flex flex-column gap-1">
+                <div class="fw-semibold">Hidden drives for @BuildDisplayName()</div>
+                <div class="small text-body-secondary">Generate grounded internal motivations, keep the ones you like, then preview and apply a short narrative back into the character form.</div>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_optionsReviewSummary))
+            {
+                <div class="alert alert-light border mb-0">
+                    <div class="fw-semibold mb-1">Idea Review</div>
+                    <div>@_optionsReviewSummary</div>
+                </div>
+            }
+
+            @if (_options.Count == 0)
+            {
+                <div class="alert alert-light border mb-0">
+                    <div class="fw-semibold mb-1">No ideas generated yet</div>
+                    <div class="small text-body-secondary">Use the brain generator to explore secret wants, wounds, fears, aspirations, and contradictions tied to this character.</div>
+                </div>
+            }
+            else
+            {
+                <div class="d-flex align-items-center justify-content-between gap-2">
+                    <div class="small text-body-secondary">@BuildSelectionSummary()</div>
+                    <div class="small text-body-secondary">Checked options stay selected when you generate more.</div>
+                </div>
+
+                @foreach (var category in GetCategoryOrder())
+                {
+                    var options = _options.Where(x => x.Option.Category == category).ToList();
+                    if (options.Count == 0)
+                        continue;
+
+                    <div class="border rounded p-3">
+                        <div class="fw-semibold mb-2">@FormatCategory(category)</div>
+                        <div class="d-flex flex-column gap-2">
+                            @foreach (var option in options)
+                            {
+                                var checkboxId = $"private-motivation-{option.Id:N}";
+                                <div class="form-check">
+                                    <input id="@checkboxId"
+                                           class="form-check-input"
+                                           type="checkbox"
+                                           checked="@option.IsSelected"
+                                           @onchange="args => ToggleSelected(option.Id, args)" />
+                                    <label class="form-check-label" for="@checkboxId">
+                                        <span class="fw-semibold d-block">@option.Option.Label</span>
+                                        <span class="d-block">@option.Option.Explanation</span>
+                                        <span class="small text-body-secondary d-block">@option.Option.WhyItFits</span>
+                                    </label>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            }
+
+            @if (!string.IsNullOrWhiteSpace(_previewReviewSummary) || !string.IsNullOrWhiteSpace(_previewNarrative))
+            {
+                <div class="border rounded p-3">
+                    <div class="d-flex flex-column gap-2">
+                        @if (!string.IsNullOrWhiteSpace(_previewReviewSummary))
+                        {
+                            <div class="small text-body-secondary">@_previewReviewSummary</div>
+                        }
+
+                        <div>
+                            <label class="form-label" for="@_previewInputId">Preview narrative</label>
+                            <textarea id="@_previewInputId" class="form-control" rows="6" @bind="_previewNarrative"></textarea>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </ChildContent>
+
+    <FooterContent>
+        <div class="w-100 d-flex flex-wrap justify-content-between gap-2">
+            <div class="d-flex align-items-center gap-2">
+                @if (!string.IsNullOrWhiteSpace(_selectedAgentName))
+                {
+                    <div class="small text-body-secondary">Using @_selectedAgentName</div>
+                }
+            </div>
+
+            <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+                <BusyButton Class="btn btn-outline-primary"
+                            IsBusy="_isGenerating"
+                            BusyText="@BuildGenerateBusyText()"
+                            Disabled="@(!_isAiAvailable || _isGenerating || _isPreviewing || _isApplying)"
+                            OnClick="GenerateAsync">
+                    <i class="fa-regular fa-brain me-2" aria-hidden="true"></i>
+                    @BuildGenerateButtonText()
+                </BusyButton>
+                <BusyButton Class="btn btn-outline-primary"
+                            IsBusy="_isPreviewing"
+                            BusyText="Previewing..."
+                            Disabled="@(!_isAiAvailable || _isGenerating || _isPreviewing || _isApplying || _options.All(x => !x.IsSelected))"
+                            OnClick="PreviewAsync">
+                    <i class="fa-regular fa-eye me-2" aria-hidden="true"></i>
+                    Preview Narrative
+                </BusyButton>
+                <BusyButton Class="btn btn-primary"
+                            IsBusy="_isApplying"
+                            BusyText="Applying..."
+                            Disabled="@(_isGenerating || _isPreviewing || _isApplying || string.IsNullOrWhiteSpace(_previewNarrative))"
+                            OnClick="ApplyAsync">
+                    <i class="fa-regular fa-check me-2" aria-hidden="true"></i>
+                    Apply
+                </BusyButton>
+            </div>
+        </div>
+    </FooterContent>
+</AppModal>
+
+@code {
+    [Parameter]
+    public Guid ThreadId { get; set; }
+
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public StoryCharacterDraftContext Character { get; set; } = new(
+        null,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        false);
+
+    [Parameter]
+    public EventCallback<string> OnApplied { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    private readonly string _previewInputId = $"story-private-motivations-preview-{Guid.NewGuid():N}";
+    private bool _wasOpen;
+    private bool _isAiAvailable;
+    private bool _isGenerating;
+    private bool _isPreviewing;
+    private bool _isApplying;
+    private string? _selectedAgentName;
+    private string? _optionsReviewSummary;
+    private string? _previewReviewSummary;
+    private string _previewNarrative = string.Empty;
+    private string? _errorMessage;
+    private List<OptionSelectionView> _options = [];
+
+    protected override void OnParametersSet()
+    {
+        if (!IsOpen)
+        {
+            _wasOpen = false;
+            return;
+        }
+
+        if (_wasOpen)
+            return;
+
+        _wasOpen = true;
+        ResetState();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!IsOpen)
+            return;
+
+        try
+        {
+            var selection = await ThreadAgentService.GetSelectionAsync(ThreadId, CancellationToken.None);
+            _isAiAvailable = selection.IsAiAvailable;
+            _selectedAgentName = selection.SelectedAgentName;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Loading AI provider selection failed for private motivations in chat {ThreadId}.", ThreadId);
+            _isAiAvailable = false;
+            _selectedAgentName = null;
+        }
+    }
+
+    private async Task GenerateAsync()
+    {
+        if (!_isAiAvailable)
+        {
+            _errorMessage = "Generating private motivations failed because this chat does not have an AI provider configured.";
+            return;
+        }
+
+        _errorMessage = null;
+        _isGenerating = true;
+        try
+        {
+            var result = await StoryCharacterPrivateMotivationsService.GenerateOptionsAsync(
+                new GenerateStoryCharacterPrivateMotivationOptions(
+                    ThreadId,
+                    Character,
+                    _options.Select(x => x.Option).ToList()),
+                CancellationToken.None);
+
+            _optionsReviewSummary = result.ReviewSummary;
+            AppendOptions(result.Options);
+            ClearPreview();
+
+            if (result.Options.Count == 0)
+            {
+                UserFeedbackService.ShowBackgroundInfo(
+                    $"No new distinct private motivation ideas were found for '{BuildDisplayName()}'.",
+                    "No New Ideas");
+            }
+            else
+            {
+                UserFeedbackService.ShowBackgroundSuccess(
+                    $"Generated {result.Options.Count} private motivation ideas for '{BuildDisplayName()}'.",
+                    "Ideas Ready");
+            }
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Generating private motivations failed for character {CharacterName} in chat {ThreadId}.", Character.Name, ThreadId);
+            _errorMessage = $"Generating private motivations for '{BuildDisplayName()}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Private Motivations Failed");
+        }
+        finally
+        {
+            _isGenerating = false;
+        }
+    }
+
+    private async Task PreviewAsync()
+    {
+        if (!_isAiAvailable)
+        {
+            _errorMessage = "Previewing private motivations failed because this chat does not have an AI provider configured.";
+            return;
+        }
+
+        var selectedOptions = _options.Where(x => x.IsSelected).Select(x => x.Option).ToList();
+        if (selectedOptions.Count == 0)
+        {
+            _errorMessage = $"Previewing private motivations for '{BuildDisplayName()}' failed because no ideas were selected.";
+            return;
+        }
+
+        _errorMessage = null;
+        _isPreviewing = true;
+        try
+        {
+            var preview = await StoryCharacterPrivateMotivationsService.ComposeNarrativeAsync(
+                new ComposeStoryCharacterPrivateMotivations(ThreadId, Character, selectedOptions),
+                CancellationToken.None);
+
+            _previewReviewSummary = preview.ReviewSummary;
+            _previewNarrative = preview.Narrative;
+            UserFeedbackService.ShowBackgroundSuccess(
+                $"Generated a private motivations preview for '{BuildDisplayName()}'.",
+                "Preview Ready");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Previewing private motivations failed for character {CharacterName} in chat {ThreadId}.", Character.Name, ThreadId);
+            _errorMessage = $"Previewing private motivations for '{BuildDisplayName()}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Preview Failed");
+        }
+        finally
+        {
+            _isPreviewing = false;
+        }
+    }
+
+    private async Task ApplyAsync()
+    {
+        var narrative = _previewNarrative.Trim();
+        if (string.IsNullOrWhiteSpace(narrative))
+        {
+            _errorMessage = $"Applying private motivations for '{BuildDisplayName()}' failed because the preview narrative was empty.";
+            return;
+        }
+
+        _errorMessage = null;
+        _isApplying = true;
+        try
+        {
+            if (OnApplied.HasDelegate)
+                await OnApplied.InvokeAsync(narrative);
+
+            UserFeedbackService.ShowBackgroundSuccess(
+                $"Applied private motivations to '{BuildDisplayName()}'. Save the character to persist them.",
+                "Private Motivations Applied");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Applying private motivations failed for character {CharacterName} in chat {ThreadId}.", Character.Name, ThreadId);
+            _errorMessage = $"Applying private motivations to '{BuildDisplayName()}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Apply Failed");
+        }
+        finally
+        {
+            _isApplying = false;
+        }
+    }
+
+    private void ToggleSelected(Guid optionId, ChangeEventArgs args)
+    {
+        var option = _options.FirstOrDefault(x => x.Id == optionId);
+        if (option is null)
+            return;
+
+        option.IsSelected = args.Value is bool value && value;
+        ClearPreview();
+    }
+
+    private void AppendOptions(IReadOnlyList<StoryCharacterPrivateMotivationOption> options)
+    {
+        foreach (var option in options)
+            _options.Add(new OptionSelectionView(Guid.NewGuid(), option, false));
+    }
+
+    private void ClearPreview()
+    {
+        _previewReviewSummary = null;
+        _previewNarrative = string.Empty;
+    }
+
+    private void ResetState()
+    {
+        _errorMessage = null;
+        _optionsReviewSummary = null;
+        _previewReviewSummary = null;
+        _previewNarrative = string.Empty;
+        _options = [];
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private string BuildTitle() => $"Private Motivations: {BuildDisplayName()}";
+
+    private string BuildDisplayName() =>
+        string.IsNullOrWhiteSpace(Character.Name) ? "Untitled Character" : Character.Name.Trim();
+
+    private string BuildSelectionSummary()
+    {
+        var selectedCount = _options.Count(x => x.IsSelected);
+        return selectedCount == 0
+            ? $"{_options.Count} ideas available"
+            : $"{selectedCount} selected of {_options.Count} ideas";
+    }
+
+    private string BuildGenerateButtonText() => _options.Count == 0 ? "Generate Ideas" : "Generate More";
+
+    private string BuildGenerateBusyText() => _options.Count == 0 ? "Generating..." : "Generating more...";
+
+    private static IReadOnlyList<StoryCharacterPrivateMotivationCategory> GetCategoryOrder() =>
+    [
+        StoryCharacterPrivateMotivationCategory.SecretDesireOrCrush,
+        StoryCharacterPrivateMotivationCategory.WhyTheyLashOut,
+        StoryCharacterPrivateMotivationCategory.FearOfLoss,
+        StoryCharacterPrivateMotivationCategory.OldWound,
+        StoryCharacterPrivateMotivationCategory.UnadmittedTruth,
+        StoryCharacterPrivateMotivationCategory.BiggestAspiration,
+        StoryCharacterPrivateMotivationCategory.ContradictionOrCompulsion
+    ];
+
+    private static string FormatCategory(StoryCharacterPrivateMotivationCategory category) => category switch
+    {
+        StoryCharacterPrivateMotivationCategory.SecretDesireOrCrush => "Secret Desire or Crush",
+        StoryCharacterPrivateMotivationCategory.WhyTheyLashOut => "Why They Lash Out",
+        StoryCharacterPrivateMotivationCategory.FearOfLoss => "Fear of Losing Something",
+        StoryCharacterPrivateMotivationCategory.OldWound => "Old Wound",
+        StoryCharacterPrivateMotivationCategory.UnadmittedTruth => "What They Will Not Admit Out Loud",
+        StoryCharacterPrivateMotivationCategory.BiggestAspiration => "Biggest Aspiration",
+        StoryCharacterPrivateMotivationCategory.ContradictionOrCompulsion => "Contradiction or Compulsion",
+        _ => category.ToString()
+    };
+
+    private sealed class OptionSelectionView(Guid id, StoryCharacterPrivateMotivationOption option, bool isSelected)
+    {
+        public Guid Id { get; } = id;
+
+        public StoryCharacterPrivateMotivationOption Option { get; } = option;
+
+        public bool IsSelected { get; set; } = isSelected;
+    }
+}

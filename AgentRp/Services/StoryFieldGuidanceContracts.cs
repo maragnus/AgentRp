@@ -11,6 +11,7 @@ public enum StoryEntityFieldKey
     CorePersonality,
     Relationships,
     PreferencesBeliefs,
+    PrivateMotivations,
     Details,
     WhenText
 }

@@ -151,6 +151,30 @@
                         @RenderGuidanceSummary(StoryEntityFieldKey.PreferencesBeliefs)
                     </div>
 
+                    <div>
+                        <div class="d-flex align-items-center justify-content-between gap-2">
+                            <label class="form-label mb-0" for="story-character-private-motivations">Private Motivations</label>
+                            <div class="d-flex gap-2">
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Generate private motivations"
+                                        aria-label="Generate private motivations"
+                                        @onclick="OpenPrivateMotivations">
+                                    <i class="fa-regular fa-brain" aria-hidden="true"></i>
+                                </button>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit private motivations guidance"
+                                        aria-label="Edit private motivations guidance"
+                                        @onclick='() => OpenGuidance(StoryEntityFieldKey.PrivateMotivations)'>
+                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <textarea id="story-character-private-motivations" class="form-control" rows="4" @bind="_privateMotivations"></textarea>
+                        @RenderGuidanceSummary(StoryEntityFieldKey.PrivateMotivations)
+                    </div>
+
                     <div class="form-check">
                         <input id="story-character-presence" class="form-check-input" type="checkbox" @bind="_isPresentInScene" />
                         <label class="form-check-label" for="story-character-presence">Currently in the scene</label>
@@ -207,6 +231,11 @@
                          FieldKey="_selectedGuidanceFieldKey"
                          OnSaved="HandleGuidanceSavedAsync"
                          OnClose="CloseGuidanceAsync" />
+<StoryCharacterPrivateMotivationsModal ThreadId="ThreadId"
+                                       IsOpen="_isPrivateMotivationsOpen"
+                                       Character="BuildDraftContext()"
+                                       OnApplied="HandlePrivateMotivationsAppliedAsync"
+                                       OnClose="ClosePrivateMotivationsAsync" />
 
 @code {
     [Parameter]
@@ -240,9 +269,11 @@
     private string _corePersonality = string.Empty;
     private string _relationships = string.Empty;
     private string _preferencesBeliefs = string.Empty;
+    private string _privateMotivations = string.Empty;
     private bool _isPresentInScene;
     private bool _isAiAssistOpen;
     private bool _isGuidanceOpen;
+    private bool _isPrivateMotivationsOpen;
     private StoryEntityFieldKey _selectedGuidanceFieldKey = StoryEntityFieldKey.Name;
     private IReadOnlyList<StoryEntityFieldGuidanceView> _fieldGuidance = [];
     private string? _errorMessage;
@@ -301,6 +332,7 @@
         _corePersonality = string.Empty;
         _relationships = string.Empty;
         _preferencesBeliefs = string.Empty;
+        _privateMotivations = string.Empty;
         _isPresentInScene = false;
     }
 
@@ -321,6 +353,7 @@
         _corePersonality = character.CorePersonality;
         _relationships = character.Relationships;
         _preferencesBeliefs = character.PreferencesBeliefs;
+        _privateMotivations = character.PrivateMotivations;
         _isPresentInScene = character.IsPresentInScene;
     }
 
@@ -340,6 +373,7 @@
                     _corePersonality,
                     _relationships,
                     _preferencesBeliefs,
+                    _privateMotivations,
                     _isPresentInScene,
                     false),
                 CancellationToken.None);
@@ -391,6 +425,8 @@
 
     private void OpenAiAssist() => _isAiAssistOpen = true;
 
+    private void OpenPrivateMotivations() => _isPrivateMotivationsOpen = true;
+
     private void OpenGuidance(StoryEntityFieldKey fieldKey)
     {
         _selectedGuidanceFieldKey = fieldKey;
@@ -409,11 +445,24 @@
         return Task.CompletedTask;
     }
 
+    private Task ClosePrivateMotivationsAsync()
+    {
+        _isPrivateMotivationsOpen = false;
+        return Task.CompletedTask;
+    }
+
     private async Task HandleAiAcceptedAsync(StoryEntityAcceptResult result)
     {
         _isAiAssistOpen = false;
         await LoadAsync(result.EntityId);
         await NotifyChangedAsync();
+    }
+
+    private Task HandlePrivateMotivationsAppliedAsync(string narrative)
+    {
+        _privateMotivations = narrative;
+        _isPrivateMotivationsOpen = false;
+        return Task.CompletedTask;
     }
 
     private Task CloseAsync() => OnClose.InvokeAsync();
@@ -429,6 +478,17 @@
     private string BuildAiButtonTitle() => _selectedCharacterId.HasValue
         ? "Edit character with prompt"
         : "New character from prompt";
+
+    private StoryCharacterDraftContext BuildDraftContext() => new(
+        _selectedCharacterId,
+        _name,
+        _summary,
+        _generalAppearance,
+        _corePersonality,
+        _relationships,
+        _preferencesBeliefs,
+        _privateMotivations,
+        _isPresentInScene);
 
     private async Task HandleGuidanceSavedAsync(StoryEntityFieldGuidanceView guidance)
     {

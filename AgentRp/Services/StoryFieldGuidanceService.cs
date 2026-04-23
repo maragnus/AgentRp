@@ -224,6 +224,15 @@ public static class StoryFieldGuidanceRegistry
                 new StoryFieldGuidanceLength(3, 6),
                 "- Hates wasted motion\n- Believes loyalty must be earned")),
         new(
+            StoryEntityKind.Character,
+            StoryEntityFieldKey.PrivateMotivations,
+            "Private Motivations",
+            new StoryFieldGuidance(
+                StoryFieldGuidanceFormat.Paragraphs,
+                StoryFieldGuidanceDetailLevel.Medium,
+                new StoryFieldGuidanceLength(1, 2),
+                "She masks her tenderness with sarcasm because wanting people too badly has always made her feel weak. What she cannot admit is that she wants one person in particular to choose her first, and every cruel remark is a preemptive strike against being left behind again.")),
+        new(
             StoryEntityKind.Location,
             StoryEntityFieldKey.Name,
             "Name",

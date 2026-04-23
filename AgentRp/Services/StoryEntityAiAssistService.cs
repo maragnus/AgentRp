@@ -78,6 +78,8 @@ public sealed class StoryEntityAiAssistService(
         }
 
         var guidance = await storyFieldGuidanceService.GetGuidanceAsync(entityKind, cancellationToken);
+        if (entityKind == StoryEntityKind.Character)
+            guidance = guidance.Where(x => x.FieldKey != StoryEntityFieldKey.PrivateMotivations).ToList();
         var messages = BuildMessages(snapshot, entityKind, entityId, trimmedPrompt, priorSession, guidance);
         var chatOptions = BuildChatOptions(snapshot);
         var promptHistory = priorPrompts.Concat([trimmedPrompt]).ToList();
@@ -247,6 +249,15 @@ public sealed class StoryEntityAiAssistService(
         CharacterAiDraftView draft,
         CancellationToken cancellationToken)
     {
+        var privateMotivations = string.Empty;
+        if (request.Session.EntityId.HasValue)
+        {
+            privateMotivations = (await chatStoryService.GetCharactersAsync(request.ThreadId, cancellationToken))
+                .FirstOrDefault(x => x.CharacterId == request.Session.EntityId.Value)?
+                .PrivateMotivations
+                ?? string.Empty;
+        }
+
         var saved = await chatStoryService.UpsertCharacterAsync(
             new UpsertCharacter(
                 request.ThreadId,
@@ -257,6 +268,7 @@ public sealed class StoryEntityAiAssistService(
                 draft.CorePersonality,
                 draft.Relationships,
                 draft.PreferencesBeliefs,
+                privateMotivations,
                 draft.IsPresentInScene,
                 false),
             cancellationToken);
@@ -458,6 +470,7 @@ public sealed class StoryEntityAiAssistService(
         Character relationships must be written from the target character's perspective.
         In each relationship bullet, identify what the other person or place is to the target and how the target sees, treats, or relates to them.
         Do not reverse the direction by describing mainly how the other person sees the target.
+        Private motivations are read-only context for the author and should inform tone and continuity, but must never be proposed as a new editable field in the structured response.
         """,
         _ => string.Empty
     };
@@ -880,6 +893,7 @@ public sealed class StoryEntityAiAssistService(
                 Core personality: {{character.CorePersonality}}
                 Relationships: {{character.Relationships}}
                 Preferences / beliefs: {{character.PreferencesBeliefs}}
+                Private motivations: {{character.PrivateMotivations}}
                 Present in scene: {{Scene.PresentCharacterIds.Contains(character.Id)}}
                 """;
         }

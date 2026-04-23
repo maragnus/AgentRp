@@ -104,6 +104,7 @@ public sealed record StoryCharacterDocument(
     string CorePersonality,
     string Relationships,
     string PreferencesBeliefs,
+    string PrivateMotivations,
     bool IsArchived);
 
 public sealed record StoryLocationDocument(
@@ -239,6 +240,7 @@ public static class StoryDocumentNormalizer
         NormalizeText(document?.CorePersonality),
         NormalizeText(document?.Relationships),
         NormalizeText(document?.PreferencesBeliefs),
+        NormalizeText(document?.PrivateMotivations),
         document?.IsArchived ?? false);
 
     private static StoryLocationDocument Normalize(StoryLocationDocument? document) => new(
