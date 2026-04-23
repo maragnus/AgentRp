@@ -1,0 +1,75 @@
+@if (Navigator.Options.Count > 1)
+{
+    var previousOption = GetAdjacentOption(-1);
+    var nextOption = GetAdjacentOption(1);
+
+    <div class="@ContainerClass">
+        <BusyButton Class="btn btn-outline-secondary btn-sm app-message-action-button"
+                    OnClick="() => SelectBranchAsync(previousOption)"
+                    IsBusy="@IsSwitchingTo(previousOption)"
+                    BusyText=""
+                    ShowBusyText="false"
+                    Disabled="@(Disabled || previousOption is null)"
+                    title="@BuildOptionTitle("Previous branch", previousOption)"
+                    aria-label="@BuildOptionTitle("Previous branch", previousOption)">
+            <i class="fa-regular fa-chevron-left" aria-hidden="true"></i>
+        </BusyButton>
+
+        <span class="badge text-bg-light border text-body-secondary app-branch-count">
+            @Navigator.SelectedOptionNumber/@Navigator.Options.Count
+        </span>
+
+        <BusyButton Class="btn btn-outline-secondary btn-sm app-message-action-button"
+                    OnClick="() => SelectBranchAsync(nextOption)"
+                    IsBusy="@IsSwitchingTo(nextOption)"
+                    BusyText=""
+                    ShowBusyText="false"
+                    Disabled="@(Disabled || nextOption is null)"
+                    title="@BuildOptionTitle("Next branch", nextOption)"
+                    aria-label="@BuildOptionTitle("Next branch", nextOption)">
+            <i class="fa-regular fa-chevron-right" aria-hidden="true"></i>
+        </BusyButton>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public StorySceneBranchNavigatorView Navigator { get; set; } = null!;
+
+    [Parameter]
+    public Guid? SwitchingBranchLeafId { get; set; }
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    [Parameter]
+    public string ContainerClass { get; set; } = "d-flex align-items-center gap-1";
+
+    [Parameter]
+    public EventCallback<Guid> OnSelectBranch { get; set; }
+
+    private StorySceneBranchOptionView? GetAdjacentOption(int offset)
+    {
+        var selectedIndex = Math.Clamp(Navigator.SelectedOptionNumber - 1, 0, Navigator.Options.Count - 1);
+        var targetIndex = selectedIndex + offset;
+
+        if (targetIndex < 0 || targetIndex >= Navigator.Options.Count)
+            return null;
+
+        return Navigator.Options[targetIndex];
+    }
+
+    private bool IsSwitchingTo(StorySceneBranchOptionView? option) =>
+        option is not null && SwitchingBranchLeafId == option.TargetLeafMessageId;
+
+    private async Task SelectBranchAsync(StorySceneBranchOptionView? option)
+    {
+        if (option is null)
+            return;
+
+        await OnSelectBranch.InvokeAsync(option.TargetLeafMessageId);
+    }
+
+    private static string BuildOptionTitle(string action, StorySceneBranchOptionView? option) =>
+        option is null ? action : $"{action}: {option.SpeakerName}: {option.Preview}";
+}

@@ -40,6 +40,17 @@ else
                         <span>@MessageCountText</span>
                     </div>
                 </div>
+
+                @if (_chat.RootBranchNavigator is not null)
+                {
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="small text-body-secondary">Opening branches</span>
+                        <StoryBranchNavigator Navigator="@_chat.RootBranchNavigator"
+                                              SwitchingBranchLeafId="@_switchingBranchLeafId"
+                                              Disabled="@_isSubmitting"
+                                              OnSelectBranch="SelectBranchAsync" />
+                    </div>
+                }
             </div>
         </div>
 
@@ -65,39 +76,6 @@ else
             else
             {
                 <div class="d-flex flex-column gap-4">
-                    @if (_chat.RootBranchPoint is not null)
-                    {
-                        <div class="card border-0 bg-body-tertiary shadow-sm">
-                            <div class="card-body d-flex flex-column gap-3">
-                                <div class="d-flex align-items-center justify-content-between gap-3">
-                                    <div>
-                                        <div class="fw-semibold">@_chat.RootBranchPoint.Title</div>
-                                        <div class="small text-body-secondary">Pick which opening continuation to view.</div>
-                                    </div>
-                                    <span class="badge text-bg-light border text-body-secondary">@($"{_chat.RootBranchPoint.Options.Count} branches")</span>
-                                </div>
-
-                                <div class="d-flex flex-wrap gap-2">
-                                    @foreach (var option in _chat.RootBranchPoint.Options)
-                                    {
-                                        <BusyButton Class="@BuildBranchButtonClass(option)"
-                                                    OnClick="() => SelectBranchAsync(option.TargetLeafMessageId)"
-                                                    IsBusy="@(_switchingBranchLeafId == option.TargetLeafMessageId)"
-                                                    BusyText=""
-                                                    ShowBusyText="false"
-                                                    Disabled="@(_isSubmitting && _switchingBranchLeafId != option.TargetLeafMessageId)"
-                                                    title="@BuildBranchOptionTitle(option)"
-                                                    aria-label="@BuildBranchOptionTitle(option)">
-                                            <span class="fw-semibold">@option.SpeakerName</span>
-                                            <span class="mx-1">•</span>
-                                            <span>@option.Preview</span>
-                                        </BusyButton>
-                                    }
-                                </div>
-                            </div>
-                        </div>
-                    }
-
                     @foreach (var node in _chat.Transcript)
                     {
                         var message = node.Message;
@@ -375,124 +353,103 @@ else
                                         </div>
 
                                         <div class="border-top px-3 py-2">
-                                            <div class="d-flex justify-content-end gap-2">
-                                                @if (isEditing)
-                                                {
-                                                    <button type="button"
-                                                            class="btn btn-outline-secondary btn-sm"
-                                                            title="Cancel edit"
-                                                            aria-label="Cancel edit"
-                                                            disabled="@_isSubmitting"
-                                                            @onclick="CancelInlineEdit">
-                                                        <i class="fa-regular fa-xmark" aria-hidden="true"></i>
-                                                    </button>
-
-                                                    <BusyButton Class="btn btn-outline-primary btn-sm"
-                                                                OnClick="SaveInlineEditAsync"
-                                                                IsBusy="@(_isSubmitting && _editingAction == StorySceneEditAction.Save)"
-                                                                BusyText=""
-                                                                ShowBusyText="false"
-                                                                Disabled="@(!message.CanSaveInPlace || !_editingMessageId.HasValue || string.IsNullOrWhiteSpace(_editingDraft) || (_isSubmitting && _editingAction != StorySceneEditAction.Save))"
-                                                                title="Save message"
-                                                                aria-label="Save message">
-                                                        <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
-                                                    </BusyButton>
-
-                                                    <BusyButton Class="btn btn-primary btn-sm"
-                                                                OnClick="CreateEditedBranchAsync"
-                                                                IsBusy="@(_isSubmitting && _editingAction == StorySceneEditAction.Branch)"
-                                                                BusyText=""
-                                                                ShowBusyText="false"
-                                                                Disabled="@(!_editingMessageId.HasValue || string.IsNullOrWhiteSpace(_editingDraft) || (_isSubmitting && _editingAction != StorySceneEditAction.Branch))"
-                                                                title="Submit as new branch"
-                                                                aria-label="Submit as new branch">
-                                                        <i class="fa-regular fa-code-branch" aria-hidden="true"></i>
-                                                    </BusyButton>
-
-                                                    @if (!message.CanSaveInPlace)
+                                            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                                                <div class="d-flex align-items-center gap-2">
+                                                    @if (message.BranchNavigator is not null)
                                                     {
-                                                        <div class="w-100 small text-body-secondary text-end">
-                                                            This message is already covered by a snapshot, so edits must create a branch.
-                                                        </div>
+                                                        <StoryBranchNavigator Navigator="@message.BranchNavigator"
+                                                                              SwitchingBranchLeafId="@_switchingBranchLeafId"
+                                                                              Disabled="@_isSubmitting"
+                                                                              OnSelectBranch="SelectBranchAsync" />
                                                     }
-                                                }
-                                                else
-                                                {
-                                                    @if (message.IsSnapshotCandidate)
+                                                </div>
+
+                                                <div class="d-flex align-items-center justify-content-end gap-2 ms-auto">
+                                                    @if (isEditing)
                                                     {
                                                         <button type="button"
-                                                                class="btn btn-outline-primary btn-sm"
-                                                                title="Create snapshot through this message"
-                                                                aria-label="Create snapshot through this message"
-                                                                disabled="@(_isSubmitting || _isSnapshotDraftLoading || _isCommittingSnapshot)"
-                                                                @onclick="() => OpenSnapshotDraftAsync(message)">
-                                                            <i class="fa-regular fa-compress" aria-hidden="true"></i>
+                                                                class="btn btn-outline-secondary btn-sm"
+                                                                title="Cancel edit"
+                                                                aria-label="Cancel edit"
+                                                                disabled="@_isSubmitting"
+                                                                @onclick="CancelInlineEdit">
+                                                            <i class="fa-regular fa-xmark" aria-hidden="true"></i>
+                                                        </button>
+
+                                                        <BusyButton Class="btn btn-outline-primary btn-sm"
+                                                                    OnClick="SaveInlineEditAsync"
+                                                                    IsBusy="@(_isSubmitting && _editingAction == StorySceneEditAction.Save)"
+                                                                    BusyText=""
+                                                                    ShowBusyText="false"
+                                                                    Disabled="@(!message.CanSaveInPlace || !_editingMessageId.HasValue || string.IsNullOrWhiteSpace(_editingDraft) || (_isSubmitting && _editingAction != StorySceneEditAction.Save))"
+                                                                    title="Save message"
+                                                                    aria-label="Save message">
+                                                            <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
+                                                        </BusyButton>
+
+                                                        <BusyButton Class="btn btn-primary btn-sm"
+                                                                    OnClick="CreateEditedBranchAsync"
+                                                                    IsBusy="@(_isSubmitting && _editingAction == StorySceneEditAction.Branch)"
+                                                                    BusyText=""
+                                                                    ShowBusyText="false"
+                                                                    Disabled="@(!_editingMessageId.HasValue || string.IsNullOrWhiteSpace(_editingDraft) || (_isSubmitting && _editingAction != StorySceneEditAction.Branch))"
+                                                                    title="Submit as new branch"
+                                                                    aria-label="Submit as new branch">
+                                                            <i class="fa-regular fa-code-branch" aria-hidden="true"></i>
+                                                        </BusyButton>
+                                                    }
+                                                    else
+                                                    {
+                                                        @if (message.IsSnapshotCandidate)
+                                                        {
+                                                            <button type="button"
+                                                                    class="btn btn-outline-primary btn-sm"
+                                                                    title="Create snapshot through this message"
+                                                                    aria-label="Create snapshot through this message"
+                                                                    disabled="@(_isSubmitting || _isSnapshotDraftLoading || _isCommittingSnapshot)"
+                                                                    @onclick="() => OpenSnapshotDraftAsync(message)">
+                                                                <i class="fa-regular fa-compress" aria-hidden="true"></i>
+                                                            </button>
+                                                        }
+
+                                                        <button type="button"
+                                                                class="btn btn-outline-secondary btn-sm"
+                                                                title="Edit message"
+                                                                aria-label="Edit message"
+                                                                disabled="@_isSubmitting"
+                                                                @onclick="() => BeginInlineEdit(message)">
+                                                            <i class="fa-regular fa-pen" aria-hidden="true"></i>
+                                                        </button>
+
+                                                        <button type="button"
+                                                                class="btn btn-outline-secondary btn-sm"
+                                                                title="Copy message"
+                                                                aria-label="Copy message"
+                                                                @onclick="() => CopyMessageAsync(message.Content)">
+                                                            <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                                                        </button>
+
+                                                        <button type="button"
+                                                                class="btn btn-outline-danger btn-sm"
+                                                                title="Delete message"
+                                                                aria-label="Delete message"
+                                                                disabled="@_isSubmitting"
+                                                                @onclick="() => OpenDeleteModal(message)">
+                                                            <i class="fa-regular fa-trash" aria-hidden="true"></i>
                                                         </button>
                                                     }
+                                                </div>
 
-                                                    <button type="button"
-                                                            class="btn btn-outline-secondary btn-sm"
-                                                            title="Edit message"
-                                                            aria-label="Edit message"
-                                                            disabled="@_isSubmitting"
-                                                            @onclick="() => BeginInlineEdit(message)">
-                                                        <i class="fa-regular fa-pen" aria-hidden="true"></i>
-                                                    </button>
-
-                                                    <button type="button"
-                                                            class="btn btn-outline-secondary btn-sm"
-                                                            title="Copy message"
-                                                            aria-label="Copy message"
-                                                            @onclick="() => CopyMessageAsync(message.Content)">
-                                                        <i class="fa-regular fa-copy" aria-hidden="true"></i>
-                                                    </button>
-
-                                                    <button type="button"
-                                                            class="btn btn-outline-danger btn-sm"
-                                                            title="Delete message"
-                                                            aria-label="Delete message"
-                                                            disabled="@_isSubmitting"
-                                                            @onclick="() => OpenDeleteModal(message)">
-                                                        <i class="fa-regular fa-trash" aria-hidden="true"></i>
-                                                    </button>
+                                                @if (isEditing && !message.CanSaveInPlace)
+                                                {
+                                                    <div class="w-100 small text-body-secondary text-end">
+                                                        This message is already covered by a snapshot, so edits must create a branch.
+                                                    </div>
                                                 }
                                             </div>
                                         </div>
                                     </div>
                                 </div>
-
-                                @if (node.NextBranchPoint is not null)
-                                {
-                                    <div class="card border-0 bg-body-tertiary shadow-sm">
-                                        <div class="card-body d-flex flex-column gap-3">
-                                            <div class="d-flex align-items-center justify-content-between gap-3">
-                                                <div>
-                                                    <div class="fw-semibold">@node.NextBranchPoint.Title</div>
-                                                    <div class="small text-body-secondary">Choose which continuation stays active after this point.</div>
-                                                </div>
-                                                <span class="badge text-bg-light border text-body-secondary">@($"{node.NextBranchPoint.Options.Count} branches")</span>
-                                            </div>
-
-                                            <div class="d-flex flex-wrap gap-2">
-                                                @foreach (var option in node.NextBranchPoint.Options)
-                                                {
-                                                    <BusyButton Class="@BuildBranchButtonClass(option)"
-                                                                OnClick="() => SelectBranchAsync(option.TargetLeafMessageId)"
-                                                                IsBusy="@(_switchingBranchLeafId == option.TargetLeafMessageId)"
-                                                                BusyText=""
-                                                                ShowBusyText="false"
-                                                                Disabled="@(_isSubmitting && _switchingBranchLeafId != option.TargetLeafMessageId)"
-                                                                title="@BuildBranchOptionTitle(option)"
-                                                                aria-label="@BuildBranchOptionTitle(option)">
-                                                        <span class="fw-semibold">@option.SpeakerName</span>
-                                                        <span class="mx-1">•</span>
-                                                        <span>@option.Preview</span>
-                                                    </BusyButton>
-                                                }
-                                            </div>
-                                        </div>
-                                    </div>
-                                }
                             }
                             else if (snapshot is not null)
                             {
@@ -1056,11 +1013,13 @@ else
         {
             await StorySceneChatService.SelectBranchAsync(_chat.ThreadId, leafMessageId, CancellationToken.None);
             await LoadChatAsync(_chat.ThreadId);
+            UserFeedbackService.ShowBackgroundSuccess("The selected branch is now active.", "Branch Selected");
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Selecting branch leaf {LeafMessageId} failed for chat {ThreadId}.", leafMessageId, _chat.ThreadId);
             _errorMessage = "Switching to the selected branch failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Branch Switch Failed");
         }
         finally
         {
@@ -1309,12 +1268,6 @@ else
 
     private Guid? GetExpandedStepId(Guid runId) =>
         _expandedProcessStepIds.TryGetValue(runId, out var stepId) ? stepId : null;
-
-    private static string BuildBranchOptionTitle(StorySceneBranchOptionView option) =>
-        $"{option.SpeakerName}: {option.Preview}";
-
-    private static string BuildBranchButtonClass(StorySceneBranchOptionView option) =>
-        option.IsSelected ? "btn btn-primary btn-sm" : "btn btn-outline-secondary btn-sm";
 
     private string DeleteModalTitle => _deleteTargetMessage?.DeleteCapabilities.CanDeleteBranch == true
         ? "Delete Message or Branch"

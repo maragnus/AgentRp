@@ -78,9 +78,8 @@ public sealed class StorySceneChatService(
             .ToLookup(x => x.ParentMessageId);
         var descendantCounts = BuildDescendantCounts(messages);
         var transcript = BuildTranscript(path, childrenLookup, descendantCounts, selectedSpeakerId, characters, processMap, snapshotCandidateMessageIds, snapshots, appearanceEntries);
-        var rootBranchPoint = BuildBranchPoint(
+        var rootBranchNavigator = BuildBranchNavigator(
             parentMessageId: null,
-            title: "Opening branches",
             selectedBranchMessageId: path.FirstOrDefault()?.Id,
             branchMessages: childrenLookup[null].ToList(),
             allMessages: messages,
@@ -98,7 +97,7 @@ public sealed class StorySceneChatService(
             selectedLeafMessageId,
             selectedSpeaker,
             speakers,
-            rootBranchPoint,
+            rootBranchNavigator,
             transcript,
             selectedAgentName,
             agentCatalog.HasEnabledAgents);
@@ -865,7 +864,8 @@ public sealed class StorySceneChatService(
         Guid? selectedSpeakerId,
         IReadOnlyList<StoryCharacterDocument> characters,
         IReadOnlyDictionary<Guid, StorySceneMessageProcessView> processMap,
-        IReadOnlySet<Guid> snapshotCandidateMessageIds)
+        IReadOnlySet<Guid> snapshotCandidateMessageIds,
+        StorySceneBranchNavigatorView? branchNavigator)
     {
         var canonicalSpeakerName = ResolveSpeakerName(message, characters);
         var isSelectedSpeaker = selectedSpeakerId == message.SpeakerCharacterId
@@ -885,6 +885,7 @@ public sealed class StorySceneChatService(
             isSelectedSpeaker,
             canSaveInPlace,
             canSaveInPlace,
+            branchNavigator,
             new StorySceneDeleteCapabilitiesView(
                 DirectChildCount: directChildCount,
                 DescendantCount: descendantCount,
@@ -918,9 +919,8 @@ public sealed class StorySceneChatService(
             var message = selectedPath[index];
             var selectedBranchMessageId = index < selectedPath.Count - 1 ? selectedPath[index + 1].Id : (Guid?)null;
             var children = childrenLookup[message.Id].ToList();
-            var nextBranchPoint = BuildBranchPoint(
+            var branchNavigator = BuildBranchNavigator(
                 message.Id,
-                "Alternate continuations",
                 selectedBranchMessageId,
                 children,
                 childrenLookup.SelectMany(x => x).DistinctBy(x => x.Id).OrderBy(x => x.CreatedUtc).ToList(),
@@ -938,10 +938,10 @@ public sealed class StorySceneChatService(
                     selectedSpeakerId,
                     characters,
                     processMap,
-                    snapshotCandidateMessageIds),
+                    snapshotCandidateMessageIds,
+                    branchNavigator),
                 null,
-                messageAppearance,
-                nextBranchPoint));
+                messageAppearance));
 
             var messageSnapshots = snapshotsByMessageId.TryGetValue(message.Id, out var snapshotsForMessage)
                 ? snapshotsForMessage.Select(snapshot => new TranscriptArtifact(snapshot.CreatedUtc, snapshot, null)).ToList()
@@ -953,17 +953,15 @@ public sealed class StorySceneChatService(
                     sequence++,
                     null,
                     artifact.Snapshot,
-                    artifact.Appearance,
-                    null));
+                    artifact.Appearance));
             }
         }
 
         return transcript;
     }
 
-    private static StorySceneBranchPointView? BuildBranchPoint(
+    private static StorySceneBranchNavigatorView? BuildBranchNavigator(
         Guid? parentMessageId,
-        string title,
         Guid? selectedBranchMessageId,
         IReadOnlyList<DbChatMessage> branchMessages,
         IReadOnlyList<DbChatMessage> allMessages,
@@ -981,8 +979,12 @@ public sealed class StorySceneChatService(
                 branchMessage.CreatedUtc,
                 selectedBranchMessageId == branchMessage.Id))
             .ToList();
+        var selectedOptionIndex = options.FindIndex(x => x.IsSelected);
 
-        return new StorySceneBranchPointView(parentMessageId, title, options);
+        return new StorySceneBranchNavigatorView(
+            parentMessageId,
+            options,
+            selectedOptionIndex < 0 ? 1 : selectedOptionIndex + 1);
     }
 
     private static StorySceneMessageProcessView MapProcess(ProcessRun source)

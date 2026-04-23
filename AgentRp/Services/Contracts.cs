@@ -480,10 +480,10 @@ public sealed record StorySceneBranchOptionView(
     DateTime CreatedUtc,
     bool IsSelected);
 
-public sealed record StorySceneBranchPointView(
+public sealed record StorySceneBranchNavigatorView(
     Guid? ParentMessageId,
-    string Title,
-    IReadOnlyList<StorySceneBranchOptionView> Options);
+    IReadOnlyList<StorySceneBranchOptionView> Options,
+    int SelectedOptionNumber);
 
 public enum StorySceneDeleteMode
 {
@@ -515,6 +515,7 @@ public sealed record StorySceneMessageView(
     bool IsSelectedSpeaker,
     bool CanSaveInPlace,
     bool IsSnapshotCandidate,
+    StorySceneBranchNavigatorView? BranchNavigator,
     StorySceneDeleteCapabilitiesView DeleteCapabilities,
     StorySceneMessageProcessView? Process);
 
@@ -522,8 +523,7 @@ public sealed record StorySceneTranscriptNodeView(
     int Sequence,
     StorySceneMessageView? Message,
     StorySceneSnapshotView? Snapshot,
-    StorySceneAppearanceEntryView? Appearance,
-    StorySceneBranchPointView? NextBranchPoint);
+    StorySceneAppearanceEntryView? Appearance);
 
 public sealed record StorySceneChatState(
     Guid ThreadId,
@@ -532,7 +532,7 @@ public sealed record StorySceneChatState(
     Guid? SelectedLeafMessageId,
     StorySceneSpeakerView SelectedSpeaker,
     IReadOnlyList<StorySceneSpeakerView> AvailableSpeakers,
-    StorySceneBranchPointView? RootBranchPoint,
+    StorySceneBranchNavigatorView? RootBranchNavigator,
     IReadOnlyList<StorySceneTranscriptNodeView> Transcript,
     string? SelectedAgentName,
     bool IsAiAvailable);
