@@ -12,6 +12,7 @@
                     <button type="button"
                             class="btn-close"
                             aria-label="Close"
+                            disabled="@CloseDisabled"
                             @onclick="CloseAsync"></button>
                 </div>
 
@@ -51,7 +52,10 @@
     [Parameter]
     public EventCallback OnClose { get; set; }
 
+    [Parameter]
+    public bool CloseDisabled { get; set; }
+
     private string TitleId { get; } = $"app-modal-title-{Guid.NewGuid():N}";
 
-    private Task CloseAsync() => OnClose.InvokeAsync();
+    private Task CloseAsync() => CloseDisabled ? Task.CompletedTask : OnClose.InvokeAsync();
 }

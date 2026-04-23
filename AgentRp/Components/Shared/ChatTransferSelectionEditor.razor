@@ -1,0 +1,159 @@
+@inject IChatTransferService ChatTransferService
+
+@if (EffectiveSelection.Messages)
+{
+    <div class="alert alert-info py-2 mb-3">
+        Including the chat log also includes snapshots, current appearance blocks, and all story data.
+    </div>
+}
+
+<div class="d-flex flex-column gap-3">
+    <div>
+        <div class="form-check">
+            <input id="@MessagesId"
+                   class="form-check-input"
+                   type="checkbox"
+                   checked="@EffectiveSelection.Messages"
+                   disabled="@IsDisabled(AvailableSections.Messages, false)"
+                   @onchange="args => UpdateSelection(EffectiveSelection with { Messages = GetCheckedValue(args) })" />
+            <label class="form-check-label fw-semibold" for="@MessagesId">Messages</label>
+        </div>
+        <div class="small text-body-secondary ms-4">
+            Includes the full branch graph and makes this a full-copy transfer.
+        </div>
+    </div>
+
+    <div>
+        <div class="form-check">
+            <input id="@SnapshotsId"
+                   class="form-check-input"
+                   type="checkbox"
+                   checked="@EffectiveSelection.Snapshots"
+                   disabled="@IsDisabled(AvailableSections.Snapshots, LockedSections.Snapshots)"
+                   @onchange="args => UpdateSelection(EffectiveSelection with { Snapshots = GetCheckedValue(args) })" />
+            <label class="form-check-label fw-semibold" for="@SnapshotsId">Snapshots</label>
+        </div>
+        <div class="small text-body-secondary ms-4">
+            Included automatically when the chat log is selected.
+        </div>
+    </div>
+
+    <div>
+        <div class="form-check">
+            <input id="@CurrentAppearanceBlocksId"
+                   class="form-check-input"
+                   type="checkbox"
+                   checked="@EffectiveSelection.CurrentAppearanceBlocks"
+                   disabled="@IsDisabled(AvailableSections.CurrentAppearanceBlocks, LockedSections.CurrentAppearanceBlocks)"
+                   @onchange="args => UpdateSelection(EffectiveSelection with { CurrentAppearanceBlocks = GetCheckedValue(args) })" />
+            <label class="form-check-label fw-semibold" for="@CurrentAppearanceBlocksId">Current appearance blocks</label>
+        </div>
+        <div class="small text-body-secondary ms-4">
+            Included automatically when the chat log is selected.
+        </div>
+    </div>
+
+    <div>
+        <div class="form-check">
+            <input id="@CharactersId"
+                   class="form-check-input"
+                   type="checkbox"
+                   checked="@EffectiveSelection.Characters"
+                   disabled="@IsDisabled(AvailableSections.Characters, LockedSections.Characters)"
+                   @onchange="args => UpdateSelection(EffectiveSelection with { Characters = GetCheckedValue(args) })" />
+            <label class="form-check-label fw-semibold" for="@CharactersId">Characters</label>
+        </div>
+    </div>
+
+    <div>
+        <div class="form-check">
+            <input id="@LocationsId"
+                   class="form-check-input"
+                   type="checkbox"
+                   checked="@EffectiveSelection.Locations"
+                   disabled="@IsDisabled(AvailableSections.Locations, LockedSections.Locations)"
+                   @onchange="args => UpdateSelection(EffectiveSelection with { Locations = GetCheckedValue(args) })" />
+            <label class="form-check-label fw-semibold" for="@LocationsId">Locations</label>
+        </div>
+    </div>
+
+    <div>
+        <div class="form-check">
+            <input id="@ItemsId"
+                   class="form-check-input"
+                   type="checkbox"
+                   checked="@EffectiveSelection.Items"
+                   disabled="@IsDisabled(AvailableSections.Items, LockedSections.Items)"
+                   @onchange="args => UpdateSelection(EffectiveSelection with { Items = GetCheckedValue(args) })" />
+            <label class="form-check-label fw-semibold" for="@ItemsId">Items</label>
+        </div>
+    </div>
+
+    <div>
+        <div class="form-check">
+            <input id="@HistoryId"
+                   class="form-check-input"
+                   type="checkbox"
+                   checked="@EffectiveSelection.History"
+                   disabled="@IsDisabled(AvailableSections.History, LockedSections.History)"
+                   @onchange="args => UpdateSelection(EffectiveSelection with { History = GetCheckedValue(args) })" />
+            <label class="form-check-label fw-semibold" for="@HistoryId">History</label>
+        </div>
+    </div>
+
+    <div>
+        <div class="form-check">
+            <input id="@SceneStateId"
+                   class="form-check-input"
+                   type="checkbox"
+                   checked="@EffectiveSelection.SceneState"
+                   disabled="@IsDisabled(AvailableSections.SceneState, LockedSections.SceneState)"
+                   @onchange="args => UpdateSelection(EffectiveSelection with { SceneState = GetCheckedValue(args) })" />
+            <label class="form-check-label fw-semibold" for="@SceneStateId">Scene state</label>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public ChatTransferSelection AvailableSections { get; set; } = ChatTransferSelection.All;
+
+    [Parameter]
+    public ChatTransferSelection Value { get; set; } = ChatTransferSelection.All;
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    [Parameter]
+    public EventCallback<ChatTransferSelection> ValueChanged { get; set; }
+
+    private ChatTransferSelection EffectiveSelection => ChatTransferService.NormalizeSelection(Value, AvailableSections);
+
+    private ChatTransferSelection LockedSections => ChatTransferService.GetLockedSections(EffectiveSelection, AvailableSections);
+
+    private string MessagesId { get; } = $"chat-transfer-messages-{Guid.NewGuid():N}";
+
+    private string SnapshotsId { get; } = $"chat-transfer-snapshots-{Guid.NewGuid():N}";
+
+    private string CurrentAppearanceBlocksId { get; } = $"chat-transfer-current-appearance-{Guid.NewGuid():N}";
+
+    private string CharactersId { get; } = $"chat-transfer-characters-{Guid.NewGuid():N}";
+
+    private string LocationsId { get; } = $"chat-transfer-locations-{Guid.NewGuid():N}";
+
+    private string ItemsId { get; } = $"chat-transfer-items-{Guid.NewGuid():N}";
+
+    private string HistoryId { get; } = $"chat-transfer-history-{Guid.NewGuid():N}";
+
+    private string SceneStateId { get; } = $"chat-transfer-scene-state-{Guid.NewGuid():N}";
+
+    private async Task UpdateSelection(ChatTransferSelection selection)
+    {
+        var normalizedSelection = ChatTransferService.NormalizeSelection(selection, AvailableSections);
+        await ValueChanged.InvokeAsync(normalizedSelection);
+    }
+
+    private static bool GetCheckedValue(ChangeEventArgs args) => args.Value is bool isChecked && isChecked;
+
+    private bool IsDisabled(bool isAvailable, bool isLocked) => Disabled || !isAvailable || isLocked;
+}

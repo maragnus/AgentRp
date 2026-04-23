@@ -16,9 +16,12 @@ public sealed class StorySceneChatService(
     IStoryChatAppearanceService storyChatAppearanceService,
     IStoryGenerationSettingsService storyGenerationSettingsService,
     IAgentCatalog agentCatalog,
+    IModelOperationRegistry modelOperationRegistry,
     ILogger<StorySceneChatService> logger) : IStorySceneChatService
 {
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web);
+    private const string StoppedPlaceholderMessage = "Generation stopped before any scene text was written.";
+    private const string StoppedBranchPreview = "Stopped before writing";
 
     public async Task<StorySceneChatState?> GetChatStateAsync(Guid threadId, CancellationToken cancellationToken)
     {
@@ -57,23 +60,25 @@ public sealed class StorySceneChatService(
         var selectedSpeakerId = ResolveSelectedSpeakerId(thread.SelectedSpeakerCharacterId, characters);
         var speakers = BuildSpeakers(story, characters, selectedSpeakerId);
         var selectedSpeaker = speakers.First(x => x.IsSelected);
+        var processMap = runs
+            .Where(x => x.TargetMessageId.HasValue)
+            .ToDictionary(x => x.TargetMessageId!.Value, MapProcess);
         var selectedLeafMessageId = ResolveSelectedLeafMessageId(messages, thread.ActiveLeafMessageId);
         var path = selectedLeafMessageId.HasValue
             ? BuildSelectedPath(messages, selectedLeafMessageId.Value)
             : [];
-        var latestSnapshot = selectedLeafMessageId.HasValue
-            ? await storyChatSnapshotService.GetLatestSnapshotAsync(threadId, selectedLeafMessageId.Value, cancellationToken)
+        var effectivePath = ExcludeStoppedPlaceholderMessages(path, processMap);
+        var effectiveLeafMessageId = effectivePath.LastOrDefault()?.Id;
+        var latestSnapshot = effectiveLeafMessageId.HasValue
+            ? await storyChatSnapshotService.GetLatestSnapshotAsync(threadId, effectiveLeafMessageId.Value, cancellationToken)
             : null;
-        var snapshots = selectedLeafMessageId.HasValue
-            ? await storyChatSnapshotService.GetSnapshotsForPathAsync(threadId, selectedLeafMessageId.Value, cancellationToken)
+        var snapshots = effectiveLeafMessageId.HasValue
+            ? await storyChatSnapshotService.GetSnapshotsForPathAsync(threadId, effectiveLeafMessageId.Value, cancellationToken)
             : [];
-        var appearanceEntries = path.Count == 0
+        var appearanceEntries = effectivePath.Count == 0
             ? []
-            : await storyChatAppearanceService.GetEntriesForPathAsync(threadId, path, story, cancellationToken);
-        var snapshotCandidateMessageIds = StoryChatSnapshotService.GetSnapshotCandidateMessageIds(path, latestSnapshot).ToHashSet();
-        var processMap = runs
-            .Where(x => x.TargetMessageId.HasValue)
-            .ToDictionary(x => x.TargetMessageId!.Value, MapProcess);
+            : await storyChatAppearanceService.GetEntriesForPathAsync(threadId, effectivePath, story, cancellationToken);
+        var snapshotCandidateMessageIds = StoryChatSnapshotService.GetSnapshotCandidateMessageIds(effectivePath, latestSnapshot).ToHashSet();
         var childrenLookup = messages
             .OrderBy(x => x.CreatedUtc)
             .ToLookup(x => x.ParentMessageId);
@@ -309,7 +314,7 @@ public sealed class StorySceneChatService(
                         Id = Guid.NewGuid(),
                         SortOrder = 1,
                         Title = "Planning",
-                        Summary = $"Reused saved plan: {proseRequest.Planner.PlanningSummary}",
+                        Summary = $"Reused saved plan: {BuildPlannerSummary(proseRequest.Planner)}",
                         Detail = TruncateProcessDetail(BuildPlannerDetail(proseRequest.Planner)),
                         IconCssClass = "fa-regular fa-map",
                         Status = ProcessStepStatus.Completed,
@@ -346,9 +351,11 @@ public sealed class StorySceneChatService(
 
         PublishWorkspaceRefresh(request.ThreadId);
 
+        using var operation = StartRunOperation(runId, cancellationToken);
+
         try
         {
-            var generationSettings = await storyGenerationSettingsService.GetSettingsAsync(cancellationToken);
+            var generationSettings = await storyGenerationSettingsService.GetSettingsAsync(operation.CancellationToken);
             var proseText = await StreamProseStageAsync(
                 agent,
                 request.ThreadId,
@@ -357,12 +364,25 @@ public sealed class StorySceneChatService(
                 generationSettings,
                 streamHandler,
                 partialProseText => failedPartialProseText = partialProseText,
-                cancellationToken);
+                operation.CancellationToken);
             await CompleteRunAsync(request.ThreadId, runId, messageId, proseRequest, appearance, proseText, cancellationToken);
             if (streamHandler is not null)
                 await streamHandler(new StorySceneMessageStreamUpdate(request.ThreadId, messageId, proseText, true), cancellationToken);
 
             PublishWorkspaceRefresh(request.ThreadId);
+        }
+        catch (OperationCanceledException exception)
+        {
+            logger.LogInformation(exception, "Regenerating story scene prose was stopped for thread {ThreadId}, source message {SourceMessageId}, and speaker {SpeakerName}.", request.ThreadId, request.SourceMessageId, sourceSpeakerName);
+            await CancelRunAsync(
+                request.ThreadId,
+                runId,
+                proseRequest,
+                appearance,
+                failedPartialProseText,
+                CancellationToken.None);
+            PublishWorkspaceRefresh(request.ThreadId);
+            throw;
         }
         catch (Exception exception)
         {
@@ -604,7 +624,7 @@ public sealed class StorySceneChatService(
                         Id = Guid.NewGuid(),
                         SortOrder = 1,
                         Title = "Planning",
-                        Summary = "Determining the intent and goals of the next message.",
+                        Summary = "Determining the beat, intent, change, and guardrails for the next message.",
                         Detail = "The planner will run after the latest current appearance is resolved.",
                         IconCssClass = "fa-regular fa-map",
                         Status = ProcessStepStatus.Pending
@@ -642,16 +662,18 @@ public sealed class StorySceneChatService(
 
         PublishWorkspaceRefresh(request.ThreadId);
 
+        using var operation = StartRunOperation(runId, cancellationToken);
+
         try
         {
-            var generationBuild = await BuildGenerationContextAsync(request.ThreadId, request.SpeakerCharacterId, contextLeafMessageId, cancellationToken);
+            var generationBuild = await BuildGenerationContextAsync(request.ThreadId, request.SpeakerCharacterId, contextLeafMessageId, operation.CancellationToken);
             generationContext = generationBuild.Context;
             appearanceResolution = generationBuild.Appearance;
             await UpdateAppearanceCompletionAsync(request.ThreadId, runId, request.Mode, trimmedGuidancePrompt, generationContext, appearanceResolution, cancellationToken);
             PublishWorkspaceRefresh(request.ThreadId);
 
-            var generationSettings = await storyGenerationSettingsService.GetSettingsAsync(cancellationToken);
-            var planner = await RunPlannerStageAsync(agent, request, generationContext, generationSettings, cancellationToken);
+            var generationSettings = await storyGenerationSettingsService.GetSettingsAsync(operation.CancellationToken);
+            var planner = await RunPlannerStageAsync(agent, request, generationContext, generationSettings, operation.CancellationToken);
             await UpdatePlannerCompletionAsync(request.ThreadId, runId, planner, generationContext, appearanceResolution, trimmedGuidancePrompt, request.Mode, cancellationToken);
             PublishWorkspaceRefresh(request.ThreadId);
 
@@ -665,12 +687,25 @@ public sealed class StorySceneChatService(
                 generationSettings,
                 streamHandler,
                 partialProseText => failedPartialProseText = partialProseText,
-                cancellationToken);
+                operation.CancellationToken);
             await CompleteRunAsync(request.ThreadId, runId, messageId, proseRequest, appearanceResolution, proseText, cancellationToken);
             if (streamHandler is not null)
                 await streamHandler(new StorySceneMessageStreamUpdate(request.ThreadId, messageId, proseText, true), cancellationToken);
 
             PublishWorkspaceRefresh(request.ThreadId);
+        }
+        catch (OperationCanceledException exception)
+        {
+            logger.LogInformation(exception, "Generating the story scene message was stopped for thread {ThreadId} and speaker {SpeakerCharacterId}.", request.ThreadId, request.SpeakerCharacterId);
+            await CancelRunAsync(
+                request.ThreadId,
+                runId,
+                proseRequest,
+                failedAppearanceResolution,
+                failedPartialProseText,
+                CancellationToken.None);
+            PublishWorkspaceRefresh(request.ThreadId);
+            throw;
         }
         catch (Exception exception)
         {
@@ -738,13 +773,13 @@ public sealed class StorySceneChatService(
         var planner = response.Result;
 
         return new StoryMessagePlannerResult(
+            NormalizeTurnShape(planner.TurnShape),
+            RequireValue(planner.Beat, "planner beat"),
             RequireValue(planner.Intent, "planner intent"),
             RequireValue(planner.ImmediateGoal, "planner immediate goal"),
-            RequireItems(planner.EmotionalStance, "planner emotional stance"),
-            NormalizeItems(planner.TargetAddressees),
-            NormalizeItems(planner.RequiredFactualBeats),
-            NormalizeItems(planner.Guardrails),
-            RequireValue(planner.PlanningSummary, "planner summary"));
+            RequireValue(planner.WhyNow, "planner why now"),
+            RequireValue(planner.ChangeIntroduced, "planner change introduced"),
+            RequireItems(planner.Guardrails, "planner guardrails"));
     }
 
     private async Task<string> StreamProseStageAsync(
@@ -759,7 +794,7 @@ public sealed class StorySceneChatService(
     {
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
         [
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildProseSystemPrompt(request.Context.Actor)),
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildProseSystemPrompt(request)),
             new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildProseUserPrompt(request))
         ];
 
@@ -855,7 +890,7 @@ public sealed class StorySceneChatService(
         var now = DateTime.UtcNow;
 
         run.Stage = "Writing";
-        run.Summary = planner.PlanningSummary;
+        run.Summary = BuildPlannerSummary(planner);
         run.PlanningCompletedUtc = now;
         run.ProseStartedUtc = now;
         run.ContextJson = SerializeContext(new StoryMessageProcessContext(
@@ -877,7 +912,7 @@ public sealed class StorySceneChatService(
             }
             else if (step.SortOrder == 1)
             {
-                CompleteProcessStep(step, now, planner.PlanningSummary, BuildPlannerDetail(planner));
+                CompleteProcessStep(step, now, BuildPlannerSummary(planner), BuildPlannerDetail(planner));
             }
             else if (step.SortOrder == 2)
             {
@@ -931,6 +966,88 @@ public sealed class StorySceneChatService(
         {
             if (step.SortOrder == 2)
                 CompleteProcessStep(step, now, "The final message was written and saved to the transcript.", BuildProseDetail(proseRequest, finalMessage));
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task CancelRunAsync(
+        Guid threadId,
+        Guid runId,
+        StoryMessageProseRequest? proseRequest,
+        StorySceneAppearanceResolution? appearance,
+        string partialMessage,
+        CancellationToken cancellationToken)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var run = await dbContext.ProcessRuns
+            .Include(x => x.Steps)
+            .FirstOrDefaultAsync(x => x.Id == runId && x.ThreadId == threadId, cancellationToken);
+        if (run is null)
+            return;
+
+        var now = DateTime.UtcNow;
+        var stage = run.Stage;
+        run.Stage = null;
+        run.Status = ProcessRunStatus.Canceled;
+        run.CompletedUtc = now;
+        run.Summary = $"The {stage?.ToLowerInvariant() ?? "message generation"} stage was stopped.";
+
+        if (string.Equals(stage, "Writing", StringComparison.OrdinalIgnoreCase))
+            run.ProseCompletedUtc = now;
+
+        if (run.TargetMessageId.HasValue)
+        {
+            var message = await dbContext.ChatMessages
+                .FirstOrDefaultAsync(x => x.Id == run.TargetMessageId.Value && x.ThreadId == threadId, cancellationToken);
+            var thread = await dbContext.ChatThreads
+                .FirstAsync(x => x.Id == threadId, cancellationToken);
+
+            if (message is not null)
+                message.Content = partialMessage;
+
+            thread.UpdatedUtc = now;
+        }
+
+        if (proseRequest is not null && appearance is not null)
+        {
+            run.ContextJson = SerializeContext(new StoryMessageProcessContext(
+                proseRequest.Mode,
+                proseRequest.GuidancePrompt,
+                proseRequest.Context,
+                appearance,
+                proseRequest.Planner,
+                proseRequest,
+                string.IsNullOrWhiteSpace(partialMessage) ? null : partialMessage,
+                BuildCompletedStepArtifacts(
+                    proseRequest,
+                    appearance,
+                    partialMessage,
+                    string.IsNullOrWhiteSpace(partialMessage) ? "Stopped Before Writing" : "Partial Message")));
+        }
+
+        foreach (var step in run.Steps.OrderBy(x => x.SortOrder))
+        {
+            if (step.Status == ProcessStepStatus.Completed)
+                continue;
+
+            if (step.Status == ProcessStepStatus.Running)
+            {
+                CancelProcessStep(
+                    step,
+                    now,
+                    $"{step.Title} was stopped.",
+                    step.SortOrder == 2 && string.IsNullOrWhiteSpace(partialMessage)
+                        ? StoppedPlaceholderMessage
+                        : $"{step.Title} was stopped before completion.");
+                continue;
+            }
+
+            CancelProcessStep(
+                step,
+                now,
+                $"{step.Title} did not run.",
+                $"{step.Title} was stopped before it started.");
         }
 
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -994,6 +1111,9 @@ public sealed class StorySceneChatService(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    private RunOperationScope StartRunOperation(Guid runId, CancellationToken cancellationToken) =>
+        new(modelOperationRegistry.Start(runId), cancellationToken);
+
     private async Task<GenerationBuildResult> BuildGenerationContextAsync(
         Guid threadId,
         Guid? speakerCharacterId,
@@ -1011,14 +1131,20 @@ public sealed class StorySceneChatService(
             .Where(x => x.ThreadId == thread.Id)
             .OrderBy(x => x.CreatedUtc)
             .ToListAsync(cancellationToken);
+        var processMap = await dbContext.ProcessRuns
+            .AsNoTracking()
+            .Where(x => x.ThreadId == thread.Id && x.TargetMessageId.HasValue)
+            .ToDictionaryAsync(x => x.TargetMessageId!.Value, x => x.Status, cancellationToken);
         var selectedLeafMessageId = contextLeafMessageId.HasValue && allMessages.Any(x => x.Id == contextLeafMessageId.Value)
             ? contextLeafMessageId
             : null;
         var selectedPath = selectedLeafMessageId.HasValue
             ? BuildSelectedPath(allMessages, selectedLeafMessageId.Value)
             : [];
-        var latestSnapshot = selectedLeafMessageId.HasValue
-            ? await storyChatSnapshotService.GetLatestSnapshotAsync(thread.Id, selectedLeafMessageId.Value, cancellationToken)
+        var effectivePath = ExcludeStoppedPlaceholderMessages(selectedPath, processMap);
+        var effectiveLeafMessageId = effectivePath.LastOrDefault()?.Id;
+        var latestSnapshot = effectiveLeafMessageId.HasValue
+            ? await storyChatSnapshotService.GetLatestSnapshotAsync(thread.Id, effectiveLeafMessageId.Value, cancellationToken)
             : null;
         var characters = story.Characters.Entries
             .Where(x => !x.IsArchived)
@@ -1038,11 +1164,11 @@ public sealed class StorySceneChatService(
             ? locations.FirstOrDefault(x => x.Id == story.Scene.CurrentLocationId.Value)
             : null;
         var transcriptSinceSnapshot = latestSnapshot is null
-            ? selectedPath
-            : selectedPath.Where(x => x.CreatedUtc > latestSnapshot.CoveredThroughUtc).ToList();
+            ? effectivePath
+            : effectivePath.Where(x => x.CreatedUtc > latestSnapshot.CoveredThroughUtc).ToList();
         var appearance = await storyChatAppearanceService.ResolveLatestAppearanceAsync(
             threadId,
-            selectedPath,
+            effectivePath,
             story,
             writeChanges: true,
             cancellationToken);
@@ -1222,7 +1348,8 @@ public sealed class StorySceneChatService(
                 message.Id,
                 branchMessages,
                 allMessages,
-                characters);
+                characters,
+                processMap);
             var messageAppearance = appearanceByMessageId.TryGetValue(message.Id, out var appearancesForMessage)
                 ? appearancesForMessage.LastOrDefault()
                 : null;
@@ -1263,7 +1390,8 @@ public sealed class StorySceneChatService(
         Guid? selectedBranchMessageId,
         IReadOnlyList<DbChatMessage> branchMessages,
         IReadOnlyList<DbChatMessage> allMessages,
-        IReadOnlyList<StoryCharacterDocument> characters)
+        IReadOnlyList<StoryCharacterDocument> characters,
+        IReadOnlyDictionary<Guid, StorySceneMessageProcessView> processMap)
     {
         if (branchMessages.Count <= 1)
             return null;
@@ -1272,7 +1400,9 @@ public sealed class StorySceneChatService(
             .Select(branchMessage => new StorySceneBranchOptionView(
                 branchMessage.Id,
                 FindLatestLeafInSubtree(allMessages, branchMessage.Id),
-                BuildBranchPreview(branchMessage.Content),
+                BuildBranchPreview(
+                    branchMessage.Content,
+                    branchMessage.SourceProcessRunId.HasValue && processMap.TryGetValue(branchMessage.Id, out var process) ? process : null),
                 ResolveSpeakerName(branchMessage, characters),
                 branchMessage.CreatedUtc,
                 selectedBranchMessageId == branchMessage.Id))
@@ -1309,6 +1439,7 @@ public sealed class StorySceneChatService(
             source.Status,
             source.Status switch
             {
+                ProcessRunStatus.Canceled => "Stopped",
                 ProcessRunStatus.Completed => "Completed",
                 ProcessRunStatus.Failed => "Failed",
                 _ => "Running"
@@ -1337,6 +1468,15 @@ public sealed class StorySceneChatService(
         step.Detail = TruncateProcessDetail(detail);
     }
 
+    private static void CancelProcessStep(ProcessStep step, DateTime completedUtc, string summary, string detail)
+    {
+        step.Status = ProcessStepStatus.Canceled;
+        step.StartedUtc ??= completedUtc;
+        step.CompletedUtc = completedUtc;
+        step.Summary = summary;
+        step.Detail = TruncateProcessDetail(detail);
+    }
+
     private static void FailProcessStep(ProcessStep step, DateTime completedUtc, string detail)
     {
         step.Status = ProcessStepStatus.Failed;
@@ -1345,21 +1485,52 @@ public sealed class StorySceneChatService(
         step.Detail = detail;
     }
 
-    private static string BuildPlannerSystemPrompt()
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine("You are the planning stage for a story scene message generator.");
-        builder.AppendLine("Decide the intent and goals of the next message before any prose is written.");
-        builder.AppendLine("Return a concise structured plan only.");
-        builder.AppendLine("Keep the plan grounded in the provided story context, snapshot summary, and transcript.");
-        builder.AppendLine("Plan one turn only.");
-        builder.AppendLine("Choose one immediate beat, not a sequence.");
-        builder.AppendLine("A direct reaction from another character is allowed only if it happens immediately.");
-        builder.AppendLine("Do not plan follow-up beats.");
-        builder.AppendLine("Stop where the next person would naturally answer or act.");
-        builder.AppendLine("Do not compose the final message text.");
-        return builder.ToString().TrimEnd();
-    }
+    private static string BuildPlannerSystemPrompt() =>
+    """
+    You are the planning stage for a story scene message generator.
+    Decide the next turn before any prose is written.
+    Return only a concise structured plan.
+
+    Stay grounded in the provided story context, scene state, character facts, and transcript.
+    Plan one turn only.
+    Choose one immediate beat, not a sequence.
+
+    Build the plan using these fields:
+    - Turn shape: choose exactly one of compact, brief, monologue, or silent.
+    - Beat: the kind of move being made in this turn.
+    - Intent: the actor's immediate intention.
+    - Immediate goal: what this turn tries to achieve right now.
+    - Why now: why this beat fits this exact moment in the transcript.
+    - Change introduced: what becomes different after this turn.
+    - Guardrails: what the prose should avoid.
+
+    Turn shape definitions:
+    - compact = one action beat, one line, optional short tag
+    - brief = one to two short lines
+    - monologue = short monologue allowed
+    - silent = action/subtext only, no spoken line unless necessary
+
+    Prioritize compact and silent almost always.
+    Use brief or monologue only when the turn naturally needs recounting or explanation for an open-ended prompt such as "how was your day".
+
+    Pick the most valuable next beat, not the safest or most literal reply.
+    If a direct reaction is needed, react.
+    If no direct reaction is needed, introduce a small new beat that moves the scene.
+
+    A strong beat changes something.
+    It may shift pressure, test a boundary, redirect attention, create a question, add discomfort, add intimacy, or force a reply.
+
+    Avoid empty beats.
+    Do not only restate rules, confirm the current situation, paraphrase the last line, or preserve the same tension without adding value.
+
+    Keep the beat playable and local.
+    Do not fast-forward.
+    Do not resolve the whole exchange.
+    Do not plan follow-up beats.
+    Stop where the next person would naturally answer or act.
+
+    Do not write the final message text.
+    """;
 
     private static string BuildPlannerUserPrompt(PostStorySceneMessage request, StorySceneGenerationContext context)
     {
@@ -1375,54 +1546,108 @@ public sealed class StorySceneChatService(
         return builder.ToString().TrimEnd();
     }
 
-    private static string BuildProseSystemPrompt(StorySceneActorContext actor)
+    private static string BuildProseSystemPrompt(StoryMessageProseRequest request)
     {
+        var context = request.Context;
+        var speaker = context.Actor.IsNarrator ? "the narrator" : $"{context.Actor.Name}";
+        var inScene = context.Characters
+            .Where(x => x.IsPresentInScene)
+            .Where(x => x.CharacterId != context.Actor.CharacterId)
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         var builder = new StringBuilder();
         builder.AppendLine(
             $"""
-            You are the prose stage for a story scene chat.
-            Write only the next compact **Transcript** message for {actor.Name} speaking and/or acting in-scene. Do not write from any other character's perspective.
+            You are {speaker} in a fictional chat between {string.Join(", ", inScene.Select(x => x.Name))} and yourself.
             
-            Your job is to realize the planner's beat in the fewest vivid words that still feel natural.
-            Stay faithful to the character, planner output, current scene facts, snapshot summary, and recent transcript.
+            Write {speaker}'s next message only.
 
-            Write one turn only to advance the scene one beat.
-            Keep turns short and focused on the main action.
-            Do not fast-forward.
-            Do not resolve the whole exchange.
-            Do not make other characters take major new actions unless it is an immediate reaction.
-            Stop at the first natural pause.
+            Follow the planner's beat. 
+            Make one playable move, then stop.
+
+            Priority order:
+            1. Fulfill the beat
+            2. Stay true to Jake, the current scene, and recent transcript
+            3. Use as few words as possible
+            4. Stop at the first natural pause
+
             """);
 
-        if (actor.IsNarrator)
+        if (context.Actor.IsNarrator)
         {
             builder.AppendLine("You are speaking as the story narrator guiding the narrative, write a descriptive narration instead of dialogue.");
+            return builder.ToString().TrimEnd();
         }
-        else 
+
+        switch (request.Planner.TurnShape)
         {
-            builder.AppendLine(
-                $"""
-                Treat every line as expensive.
-                Include only the single best action or reaction that sharpens the beat.
-                Do not stack multiple similar signals of emotion, attraction, hesitation, or tension.
-                Do not express the same beat more than once through dialogue, action, and subtext.
-                Once the turn's main move is clear, stop.
-
-                Convey emotion through subtext, word choice, or one revealing action.
-                Do not add explicit internal commentary unless required by the planner.
-
-                Default to a compact turn:
-                - one brief reaction
-                - one main line of dialogue
-                - optionally one short trailing jab or tag
-                Then stop.
-
-                Wrap physical actions and non-spoken beats in asterisks: *opens the door slowly*
-                Wrap all spoken dialogue in double quotes: "I was waiting for you."
-                Never output unwrapped narration.
-                You may combine both in one line: *speaks politely* "Good to see you." *smiles*
-                """);
+            case StoryTurnShape.Compact:
+                builder.AppendLine(
+                    """
+                    This turn has a compact shape, fulfill the beat with one sharp move.
+                    - Keep this very short.
+                    - Use one brief visible action or reaction.
+                    - Use one short spoken line.
+                    - You may add one very short trailing tag if needed.
+                    - Stop as soon as the beat lands.
+                    - Do not add a second move.
+                    """);
+                break;                
+            case StoryTurnShape.Brief:
+                builder.AppendLine(
+                    """
+                    This turn has a brief shape, fulfill the beat with a quick move that may need a little setup or follow-through.
+                    - Keep this short.
+                    - Use one brief action or reaction.
+                    - Use one or two short spoken lines.
+                    - Let the beat breathe slightly, but stop once the main move is clear.
+                    - Do not add a new topic or second emotional turn.
+                    """);
+                break;
+            case StoryTurnShape.Monologue:
+                builder.AppendLine(
+                    """
+                    This turn has a monologue shape, fulfill the beat with a longer move.
+                    - A longer reply is allowed here.
+                    - Jake may speak for several lines if the moment naturally calls for it.
+                    - Still focus on one beat only.
+                    - Build to one clear landing point, then stop.
+                    - Do not ramble, recap, or drift into a second move.
+                    """);
+                break;
+            case StoryTurnShape.Silent:
+                builder.AppendLine(
+                    """
+                    This turn has a silent shape, fulfill the beat with a nonverbal move or subtext and no verbal component.
+                    - Prefer action, expression, posture, or a small physical response.
+                    - Do not use dialogue unless a few words are necessary to land the beat.
+                    - Keep it restrained and readable.
+                    - Stop as soon as Jake's reaction is clear.
+                    """);
+                break;
         }
+
+        builder.AppendLine(
+            $"""
+            Rules:
+            - Write only as {speaker}
+            - Stay inside the current moment
+            - Do not fast-forward
+            - Do not resolve the whole exchange
+            - Do not add a second move after the beat lands
+            - Do not restate the same beat in another form
+            - Prefer implication over explanation
+            - Prefer one strong signal over several similar ones
+            - Do not add meta text, labels, or turn markers
+            - Do not write unwrapped narration
+
+            Format:
+            - Actions and non-spoken beats in *asterisks*
+            - Spoken dialogue in "double quotes"
+            - You may combine action and dialogue in the same line
+            """);
+
         return builder.ToString().TrimEnd();
     }
 
@@ -1440,37 +1665,53 @@ public sealed class StorySceneChatService(
 
         builder.AppendLine("**Planner result:**");
         builder.AppendLine(BuildPlannerDetail(request.Planner));
+        builder.AppendLine();
+        builder.AppendLine("**Turn shape template:**");
+        builder.AppendLine(BuildTurnShapeTemplate(request.Planner.TurnShape, request.Context.Actor.IsNarrator));
         builder.AppendLine().AppendLine(
             """
             Write the turn by fulfilling only:
-            1. the intent
-            2. the immediate goal
-            3. the required factual beats
+            1. the beat
+            2. the intent
+            3. the immediate goal
+            4. the change introduced
+            Honor why now and the guardrails.
             Do not expand beyond them unless necessary for coherence.
+            Do not upscale the selected turn shape.
             """).AppendLine();
         AppendTurnScopeRules(builder, request.Context.Actor, true);
         return builder.ToString().TrimEnd();
     }
 
-    private static void AppendTurnScopeRules(StringBuilder builder, StorySceneActorContext actor, bool includeOutputFormatRules)
+    private static void AppendTurnScopeRules(StringBuilder builder, StorySceneActorContext actor, bool proseMode)
     {
-        builder.AppendLine(
-        $"""
-        Turn scope rules:
-        - Reply only as the {actor.Name}. Do not write from any other character's perspective.
-        - One turn only.
-        - Advance the scene one beat.
-        - Direct reaction is okay if it happens immediately.
-        - Do not fast-forward into follow-up beats.
-        - Stop at the first natural pause when another character may want to act.
-        """);
-        if (includeOutputFormatRules)
+        builder
+            .AppendLine("Turn scope rules:")
+            .AppendLine($"- {actor.Name} only");
+
+        if (proseMode)
+        {
+            builder.AppendLine(
+            $"""
+            - one playable move
+            - stop eagerly
+            - keep speech natural and brief
+            - no repeated beat
+            - no meta text
+
+            Format reminder: Always wrap actions in *asterisks* and speech in "quotes". Never output unwrapped output.
+            """);
+        }
+        else
         {
             builder.AppendLine(
             """
-            - Keep spoken words concise like natural speech. Focus more on subtext to convey meaning instead of explicit statements.
-            - Avoid duplicate sentiments; do not repeat the same emotion, hesitation, refusal, or desire in different words.
-            Format reminder: actions use *asterisks*, speech uses "quotes". Never output unwrapped text.
+            - Choose one immediate beat, not a sequence.
+            - React to the last turn only if it truly requires a response.
+            - Otherwise introduce a small new beat that adds value.
+            - The beat should change something: pressure, focus, distance, tone, or uncertainty.
+            - Avoid empty turns that only restate rules or repeat the current tension.
+            - Keep it grounded and playable.
             """);
         }
     }
@@ -1570,13 +1811,13 @@ public sealed class StorySceneChatService(
     private static string BuildPlannerDetail(StoryMessagePlannerResult planner)
     {
         var builder = new StringBuilder();
+        builder.AppendLine($"**Turn shape:** {FormatTurnShape(planner.TurnShape)}");
+        builder.AppendLine($"**Beat:** {planner.Beat}");
         builder.AppendLine($"**Intent:** {planner.Intent}");
         builder.AppendLine($"**Immediate goal:** {planner.ImmediateGoal}");
-        builder.AppendLine($"**Emotional stance:** {planner.EmotionalStance}");
-        builder.AppendLine($"**Target addressees:** {FormatList(planner.TargetAddressees)}");
-        builder.AppendLine($"**Required factual beats:** {FormatList(planner.RequiredFactualBeats)}");
+        builder.AppendLine($"**Why now:** {planner.WhyNow}");
+        builder.AppendLine($"**Change introduced:** {planner.ChangeIntroduced}");
         builder.AppendLine($"**Guardrails:** {FormatList(planner.Guardrails)}");
-        builder.AppendLine($"**Planning summary:** {planner.PlanningSummary}");
         return builder.ToString().TrimEnd();
     }
 
@@ -1587,7 +1828,7 @@ public sealed class StorySceneChatService(
             builder.AppendLine($"**Guidance prompt:** {request.GuidancePrompt}");
 
         builder.AppendLine($"**Actor:** {request.Context.Actor.Name}");
-        builder.AppendLine($"**Planner summary:** {request.Planner.PlanningSummary}");
+        builder.AppendLine($"**Plan:** {BuildPlannerSummary(request.Planner)}");
         builder.AppendLine("**Final message:**");
         builder.AppendLine(finalMessage);
         return builder.ToString().TrimEnd();
@@ -1671,6 +1912,9 @@ public sealed class StorySceneChatService(
     private static string BuildInitialRunSummary(StorySceneActorContext actor, StoryScenePostMode mode) =>
         $"Preparing a {DescribeMode(mode).ToLowerInvariant()} message as {actor.Name}.";
 
+    private static string BuildPlannerSummary(StoryMessagePlannerResult planner) =>
+        $"{FormatTurnShape(planner.TurnShape)} turn, {planner.Beat}: {planner.ImmediateGoal}";
+
     private static string BuildThreadSeedText(string? guidancePrompt, StorySceneActorContext actor) =>
         !string.IsNullOrWhiteSpace(guidancePrompt) ? guidancePrompt : $"Scene message as {actor.Name}";
 
@@ -1739,6 +1983,32 @@ public sealed class StorySceneChatService(
         path.Reverse();
         return path;
     }
+
+    private static IReadOnlyList<DbChatMessage> ExcludeStoppedPlaceholderMessages(
+        IReadOnlyList<DbChatMessage> path,
+        IReadOnlyDictionary<Guid, StorySceneMessageProcessView> processMap) =>
+        path.Where(message => !IsStoppedPlaceholderMessage(message, processMap)).ToList();
+
+    private static IReadOnlyList<DbChatMessage> ExcludeStoppedPlaceholderMessages(
+        IReadOnlyList<DbChatMessage> path,
+        IReadOnlyDictionary<Guid, ProcessRunStatus> processMap) =>
+        path.Where(message => !IsStoppedPlaceholderMessage(message, processMap)).ToList();
+
+    private static bool IsStoppedPlaceholderMessage(
+        DbChatMessage message,
+        IReadOnlyDictionary<Guid, StorySceneMessageProcessView> processMap) =>
+        string.IsNullOrWhiteSpace(message.Content)
+        && message.SourceProcessRunId.HasValue
+        && processMap.TryGetValue(message.Id, out var process)
+        && process.Status == ProcessRunStatus.Canceled;
+
+    private static bool IsStoppedPlaceholderMessage(
+        DbChatMessage message,
+        IReadOnlyDictionary<Guid, ProcessRunStatus> processMap) =>
+        string.IsNullOrWhiteSpace(message.Content)
+        && message.SourceProcessRunId.HasValue
+        && processMap.TryGetValue(message.Id, out var status)
+        && status == ProcessRunStatus.Canceled;
 
     private static List<Guid> CollectDescendantIds(Guid rootMessageId, ILookup<Guid?, DbChatMessage> childrenLookup)
     {
@@ -1885,11 +2155,21 @@ public sealed class StorySceneChatService(
         return latestLeafId;
     }
 
-    private static string BuildBranchPreview(string content)
+    private static string BuildBranchPreview(string content, StorySceneMessageProcessView? process)
     {
         var condensed = string.Join(
             " ",
             content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+        if (string.IsNullOrWhiteSpace(condensed))
+        {
+            return process?.Status switch
+            {
+                ProcessRunStatus.Canceled => StoppedBranchPreview,
+                ProcessRunStatus.Running => "Generating...",
+                _ => "Empty message"
+            };
+        }
 
         if (condensed.Length <= 42)
             return condensed;
@@ -2012,9 +2292,9 @@ public sealed class StorySceneChatService(
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildWritingInputBlocks(StoryMessageProseRequest proseRequest) =>
     [
-        new StoryMessageProcessTextBlock("Planning Summary", proseRequest.Planner.PlanningSummary),
+        new StoryMessageProcessTextBlock("Planning Summary", BuildPlannerSummary(proseRequest.Planner)),
         new StoryMessageProcessTextBlock("Planning Full Details", BuildPlannerDetail(proseRequest.Planner)),
-        ..BuildPromptBlocks(BuildProseSystemPrompt(proseRequest.Context.Actor), BuildProseUserPrompt(proseRequest))
+        ..BuildPromptBlocks(BuildProseSystemPrompt(proseRequest), BuildProseUserPrompt(proseRequest))
     ];
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildPromptBlocks(string systemPrompt, string userPrompt) =>
@@ -2089,6 +2369,15 @@ public sealed class StorySceneChatService(
     private static string TruncateProcessDetail(string detail) =>
         detail.Length <= 4000 ? detail : $"{detail[..3997].TrimEnd()}...";
 
+    private static IReadOnlyList<string> RequireItems(IReadOnlyList<string>? values, string fieldName)
+    {
+        var items = NormalizeItems(values);
+        if (items.Count > 0)
+            return items;
+
+        throw new InvalidOperationException($"Planning the scene message failed because the model returned empty {fieldName}.");
+    }
+
     private static IReadOnlyList<string> NormalizeItems(IReadOnlyList<string>? values) =>
         values?
             .Select(x => x.Trim())
@@ -2105,9 +2394,6 @@ public sealed class StorySceneChatService(
 
         throw new InvalidOperationException($"Planning the scene message failed because the model returned an empty {fieldName}.");
     }
-
-    private static string RequireItems(string? value, string fieldName) => RequireValue(value, fieldName);
-
     private static void ValidateSpeaker(ChatStory story, Guid? speakerCharacterId)
     {
         if (!speakerCharacterId.HasValue)
@@ -2148,6 +2434,21 @@ public sealed class StorySceneChatService(
         return story;
     }
 
+    private sealed class RunOperationScope(IModelOperationHandle operationHandle, CancellationToken cancellationToken) : IDisposable
+    {
+        private readonly CancellationTokenSource _linkedCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(
+            operationHandle.CancellationToken,
+            cancellationToken);
+
+        public CancellationToken CancellationToken => _linkedCancellationTokenSource.Token;
+
+        public void Dispose()
+        {
+            _linkedCancellationTokenSource.Dispose();
+            operationHandle.Dispose();
+        }
+    }
+
     private void PublishWorkspaceRefresh(Guid threadId)
     {
         var occurredUtc = DateTime.UtcNow;
@@ -2172,18 +2473,58 @@ public sealed class StorySceneChatService(
 
     private sealed class PlannerStageResponse
     {
+        public string TurnShape { get; set; } = string.Empty;
+
+        public string Beat { get; set; } = string.Empty;
+
         public string Intent { get; set; } = string.Empty;
 
         public string ImmediateGoal { get; set; } = string.Empty;
 
-        public string EmotionalStance { get; set; } = string.Empty;
+        public string WhyNow { get; set; } = string.Empty;
 
-        public IReadOnlyList<string>? TargetAddressees { get; set; }
-
-        public IReadOnlyList<string>? RequiredFactualBeats { get; set; }
+        public string ChangeIntroduced { get; set; } = string.Empty;
 
         public IReadOnlyList<string>? Guardrails { get; set; }
-
-        public string PlanningSummary { get; set; } = string.Empty;
     }
+
+    private static StoryTurnShape NormalizeTurnShape(string? value)
+    {
+        var normalized = value?.Trim().Replace("-", string.Empty, StringComparison.Ordinal).Replace("_", string.Empty, StringComparison.Ordinal).Replace(" ", string.Empty, StringComparison.Ordinal);
+
+        return normalized?.ToLowerInvariant() switch
+        {
+            "compact" => StoryTurnShape.Compact,
+            "brief" => StoryTurnShape.Brief,
+            "monologue" => StoryTurnShape.Monologue,
+            "silent" => StoryTurnShape.Silent,
+            _ => throw new InvalidOperationException("Planning the scene message failed because the planner returned an invalid turn shape.")
+        };
+    }
+
+    private static string FormatTurnShape(StoryTurnShape turnShape) => turnShape switch
+    {
+        StoryTurnShape.Compact => "compact",
+        StoryTurnShape.Brief => "brief",
+        StoryTurnShape.Monologue => "monologue",
+        StoryTurnShape.Silent => "silent",
+        _ => turnShape.ToString().ToLowerInvariant()
+    };
+
+    private static string BuildTurnShapeTemplate(StoryTurnShape turnShape, bool isNarrator) => turnShape switch
+    {
+        StoryTurnShape.Compact => isNarrator
+            ? "- Use one action beat and one short narration line.\n- An optional short tag is allowed if it sharpens the beat.\n- Stop as soon as the move lands."
+            : "- Use one action beat and at most one spoken line.\n- An optional short trailing tag is allowed.\n- Stop as soon as the move lands.",
+        StoryTurnShape.Brief => isNarrator
+            ? "- Use one to two short narration lines.\n- Keep the turn focused on a single beat.\n- Do not drift into explanation."
+            : "- Use one to two short lines total.\n- Keep any action beat brief and supportive.\n- Do not drift into explanation.",
+        StoryTurnShape.Monologue => isNarrator
+            ? "- A short monologue is allowed.\n- Use it only to recount or explain something open-ended.\n- Keep it contained to one concise turn."
+            : "- A short monologue is allowed.\n- Use it only to recount or explain something open-ended.\n- Keep it contained to one concise turn.",
+        StoryTurnShape.Silent => isNarrator
+            ? "- Use action, gesture, atmosphere, or subtext only.\n- Do not add spoken dialogue.\n- Add words only if silence would make the beat unclear."
+            : "- Use action, gesture, or subtext only.\n- Do not add a spoken line unless silence would make the beat unclear.\n- Let the silence itself carry pressure.",
+        _ => throw new InvalidOperationException("Building the prose prompt failed because the turn shape was invalid.")
+    };
 }

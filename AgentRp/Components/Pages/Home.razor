@@ -5,6 +5,7 @@
 @inject IStorySceneChatService StorySceneChatService
 @inject IStoryChatSnapshotService StoryChatSnapshotService
 @inject IActivityNotifier ActivityNotifier
+@inject IModelOperationRegistry ModelOperationRegistry
 @inject IUserFeedbackService UserFeedbackService
 @inject NavigationManager NavigationManager
 @inject ILogger<Home> Logger
@@ -85,11 +86,11 @@ else
                             {
                                 <div class="card border-0 bg-body-tertiary shadow-sm">
                                     <div class="card-body p-0">
-                                        <button type="button"
-                                                class="btn btn-link w-100 p-3 text-start text-decoration-none text-reset"
-                                                aria-expanded="@isExpanded"
-                                                @onclick="() => ToggleProcessRun(process.RunId)">
-                                            <div class="d-flex align-items-start justify-content-between gap-3">
+                                        <div class="d-flex align-items-start justify-content-between gap-3 p-3">
+                                            <button type="button"
+                                                    class="btn btn-link flex-grow-1 p-0 text-start text-decoration-none text-reset"
+                                                    aria-expanded="@isExpanded"
+                                                    @onclick="() => ToggleProcessRun(process.RunId)">
                                                 <div class="d-flex align-items-start gap-3">
                                                     <div class="pt-1">
                                                         <i class="fa-regular fa-gears text-body-secondary" aria-hidden="true"></i>
@@ -103,14 +104,27 @@ else
                                                         }
                                                     </div>
                                                 </div>
+                                            </button>
 
-                                                <div class="d-flex align-items-center gap-2">
+                                            <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                                                @if (process.Status == ProcessRunStatus.Running)
+                                                {
+                                                    <StopOperationButton Class="btn btn-outline-danger btn-sm"
+                                                                         IsStopping="@IsStoppingRun(process.RunId)"
+                                                                         Disabled="@IsStoppingRun(process.RunId)"
+                                                                         Title="Stop this scene generation"
+                                                                         OnClick="() => StopSceneRunAsync(process.RunId)" />
+                                                }
+                                                <button type="button"
+                                                        class="btn btn-link d-flex align-items-center gap-2 p-0 text-decoration-none text-reset"
+                                                        aria-expanded="@isExpanded"
+                                                        @onclick="() => ToggleProcessRun(process.RunId)">
                                                     <span class="badge text-bg-light border text-body-secondary">@process.DisplayStatusText</span>
                                                     <span class="badge text-bg-light border text-body-secondary">@processDurationText</span>
                                                     <i class="fa-regular @(isExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
-                                                </div>
+                                                </button>
                                             </div>
-                                        </button>
+                                        </div>
 
                                         @if (isExpanded)
                                         {
@@ -332,6 +346,12 @@ else
                                                     <span>@(process.ActiveStage ?? "Generating")...</span>
                                                 </div>
                                             }
+                                            else if (IsStoppedPlaceholder(message))
+                                            {
+                                                <div class="small text-body-secondary">
+                                                    Generation stopped before any scene text was written.
+                                                </div>
+                                            }
                                             else if (message.IsNarrator)
                                             {
                                                 <div class="fst-italic">
@@ -351,7 +371,7 @@ else
                                                     {
                                                         <StoryBranchNavigator Navigator="@message.BranchNavigator"
                                                                               SwitchingBranchLeafId="@_switchingBranchLeafId"
-                                                                              Disabled="@_isSubmitting"
+                                                                              Disabled="@IsSceneInteractionLocked"
                                                                               OnSelectBranch="SelectBranchAsync" />
                                                     }
                                                 </div>
@@ -399,7 +419,7 @@ else
                                                                         IsBusy="@(_startingRetryMessageId == message.MessageId)"
                                                                         BusyText=""
                                                                         ShowBusyText="false"
-                                                                        Disabled="@(_isSubmitting || _startingRetryMessageId.HasValue)"
+                                                                        Disabled="@(IsSceneInteractionLocked || _startingRetryMessageId.HasValue)"
                                                                         title="Retry latest message as a new branch"
                                                                         aria-label="Retry latest message as a new branch">
                                                                 <i class="fa-regular fa-rotate-left" aria-hidden="true"></i>
@@ -413,7 +433,7 @@ else
                                                                         IsBusy="@(_regeneratingProseMessageId == message.MessageId)"
                                                                         BusyText=""
                                                                         ShowBusyText="false"
-                                                                        Disabled="@(_isSubmitting || _regeneratingProseMessageId.HasValue)"
+                                                                        Disabled="@(IsSceneInteractionLocked || _regeneratingProseMessageId.HasValue)"
                                                                         title="Regenerate prose from saved plan"
                                                                         aria-label="Regenerate prose from saved plan">
                                                                 <i class="fa-regular fa-repeat" aria-hidden="true"></i>
@@ -426,7 +446,7 @@ else
                                                                     class="btn btn-outline-primary btn-sm"
                                                                     title="Create snapshot through this message"
                                                                     aria-label="Create snapshot through this message"
-                                                                    disabled="@(_isSubmitting || _isSnapshotDraftLoading || _isCommittingSnapshot)"
+                                                                    disabled="@(IsSceneInteractionLocked || _isSnapshotDraftLoading || _isCommittingSnapshot)"
                                                                     @onclick="() => OpenSnapshotDraftAsync(message)">
                                                                 <i class="fa-regular fa-compress" aria-hidden="true"></i>
                                                             </button>
@@ -436,7 +456,7 @@ else
                                                                 class="btn btn-outline-secondary btn-sm"
                                                                 title="Edit message"
                                                                 aria-label="Edit message"
-                                                                disabled="@_isSubmitting"
+                                                                disabled="@IsSceneInteractionLocked"
                                                                 @onclick="() => BeginInlineEdit(message)">
                                                             <i class="fa-regular fa-pen" aria-hidden="true"></i>
                                                         </button>
@@ -453,7 +473,7 @@ else
                                                                 class="btn btn-outline-danger btn-sm"
                                                                 title="Delete message"
                                                                 aria-label="Delete message"
-                                                                disabled="@_isSubmitting"
+                                                                disabled="@IsSceneInteractionLocked"
                                                                 @onclick="() => OpenDeleteModal(message)">
                                                             <i class="fa-regular fa-trash" aria-hidden="true"></i>
                                                         </button>
@@ -625,7 +645,7 @@ else
                                 placeholder="Write a direct message or describe guidance for the next beat..."
                                 @bind="_draftText"
                                 @bind:event="oninput"
-                                disabled="@_isSubmitting"></textarea>
+                                disabled="@IsSceneInteractionLocked"></textarea>
                 </div>
 
                 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
@@ -638,7 +658,7 @@ else
                                     OnClick="() => PostAsync(AiPostMode)"
                                     IsBusy="@(_submittingMode == AiPostMode)"
                                     BusyText="Generating..."
-                                    Disabled="@(!_chat.IsAiAvailable || (_isSubmitting && _submittingMode != AiPostMode))"
+                                    Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && _submittingMode != AiPostMode))"
                                     ShowBusyText="false"
                                     title="@AiPostTitle"
                                     aria-label="@AiPostTitle">
@@ -650,12 +670,22 @@ else
                                     OnClick="() => PostAsync(StoryScenePostMode.Manual)"
                                     IsBusy="@(_submittingMode == StoryScenePostMode.Manual)"
                                     BusyText="Posting..."
-                                    Disabled="@(!HasDraftText || (_isSubmitting && _submittingMode != StoryScenePostMode.Manual))"
+                                    Disabled="@(!HasDraftText || (IsSceneInteractionLocked && _submittingMode != StoryScenePostMode.Manual))"
                                     ShowBusyText="false"
                                     title="Direct posts your exact text"
                                     aria-label="Direct posts your exact text">
                             <i class="fa-regular fa-paper-plane" aria-hidden="true"></i>
                         </BusyButton>
+
+                        @if (ActiveRunningProcess is not null)
+                        {
+                            <StopOperationButton Class="btn btn-outline-danger"
+                                                 ShowText="true"
+                                                 IsStopping="@IsStoppingRun(ActiveRunningProcess!.RunId)"
+                                                 Disabled="@IsStoppingRun(ActiveRunningProcess!.RunId)"
+                                                 Title="Stop the active scene generation"
+                                                 OnClick="() => StopSceneRunAsync(ActiveRunningProcess!.RunId)" />
+                        }
                     </div>
                 </div>
             }
@@ -666,6 +696,11 @@ else
                             IsLoading="@_isSnapshotDraftLoading"
                             IsCommitting="@_isCommittingSnapshot"
                             Draft="@_snapshotDraft"
+                            EmptyStateMessage="@_snapshotDraftStatusMessage"
+                            CloseDisabled="@(_isSnapshotDraftLoading || _isCommittingSnapshot)"
+                            CanStop="@(_isSnapshotDraftLoading && _snapshotDraftOperation is not null)"
+                            IsStopping="@_isStoppingSnapshotDraft"
+                            OnStop="StopSnapshotDraftAsync"
                             OnClose="CloseSnapshotDraftAsync"
                             OnCommit="CommitSnapshotDraftAsync" />
 
@@ -780,13 +815,23 @@ else
     private readonly Dictionary<Guid, bool> _expandedAppearanceContextStates = [];
     private readonly Dictionary<Guid, bool> _expandedSnapshotStates = [];
     private readonly Dictionary<Guid, string> _streamedMessageContent = [];
+    private readonly HashSet<Guid> _stoppingRunIds = [];
     private System.Threading.Timer? _processDurationRefreshTimer;
+    private IModelOperationHandle? _snapshotDraftOperation;
+    private bool _isStoppingSnapshotDraft;
+    private string? _snapshotDraftStatusMessage;
     private bool HasDraftText => !string.IsNullOrWhiteSpace(_draftText);
     private StoryScenePostMode AiPostMode => HasDraftText ? StoryScenePostMode.GuidedAi : StoryScenePostMode.AutomaticAi;
     private string AiPostLabel => HasDraftText ? "Guided" : "Automatic";
     private string AiPostTitle => HasDraftText
         ? "Guided uses your text as planning guidance"
         : "Automatic writes the next message without using the textbox";
+    private StorySceneMessageProcessView? ActiveRunningProcess =>
+        _chat?.Transcript
+            .Select(x => x.Message?.Process)
+            .FirstOrDefault(x => x?.Status == ProcessRunStatus.Running);
+    private bool HasRunningSceneProcess => ActiveRunningProcess is not null;
+    private bool IsSceneInteractionLocked => _isSubmitting || HasRunningSceneProcess;
 
     protected override async Task OnInitializedAsync()
     {
@@ -852,6 +897,7 @@ else
             ShellState?.SetMobileContentHeader(_chat.Title, MessageCountText);
         }
 
+        SyncStoppingRuns();
         SyncProcessDurationRefreshTimer();
         StateHasChanged();
     }
@@ -933,6 +979,12 @@ else
             return;
         }
 
+        if (HasRunningSceneProcess)
+        {
+            _errorMessage = "Stop the active scene generation before starting another one.";
+            return;
+        }
+
         _submittingMode = mode;
         _isSubmitting = true;
         var retrySourceMessageId = _retrySourceMessageId;
@@ -956,6 +1008,16 @@ else
             ClearStreamedMessageContent();
             if (mode != StoryScenePostMode.Manual)
                 UserFeedbackService.ShowBackgroundSuccess(BuildPostSuccessMessage(mode), "Scene Updated");
+        }
+        catch (OperationCanceledException)
+        {
+            if (mode != StoryScenePostMode.Manual)
+            {
+                await LoadChatAsync(_chat.ThreadId);
+                ClearStreamedMessageContent();
+            }
+
+            _errorMessage = null;
         }
         catch (Exception exception)
         {
@@ -981,7 +1043,7 @@ else
 
     private async Task BeginRetryAsync(StorySceneMessageView message)
     {
-        if (_chat is null || _isSubmitting || !CanRetryMessage(message))
+        if (_chat is null || IsSceneInteractionLocked || !CanRetryMessage(message))
             return;
 
         _isSubmitting = true;
@@ -1049,7 +1111,7 @@ else
 
     private async Task RegenerateProseAsync(StorySceneMessageView message)
     {
-        if (_chat is null || _isSubmitting || !CanRegenerateProse(message))
+        if (_chat is null || IsSceneInteractionLocked || !CanRegenerateProse(message))
             return;
 
         _isSubmitting = true;
@@ -1070,6 +1132,12 @@ else
             ClearStreamedMessageContent();
             UserFeedbackService.ShowBackgroundSuccess($"The prose was regenerated for {message.CanonicalSpeakerName}.", "Scene Updated");
         }
+        catch (OperationCanceledException)
+        {
+            await LoadChatAsync(_chat.ThreadId);
+            ClearStreamedMessageContent();
+            _errorMessage = null;
+        }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Regenerating prose from story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
@@ -1087,10 +1155,13 @@ else
 
     private static string BuildRetryDraftText(StorySceneMessageView message)
     {
-        var guidancePrompt = message.Process?.Context?.GuidancePrompt;
-        return !string.IsNullOrWhiteSpace(guidancePrompt)
-            ? guidancePrompt
-            : message.Content;
+        return message.GenerationMode switch
+        {
+            StoryScenePostMode.Manual => message.Content,
+            StoryScenePostMode.GuidedAi => message.Process?.Context?.GuidancePrompt?.Trim() ?? string.Empty,
+            StoryScenePostMode.AutomaticAi => string.Empty,
+            _ => string.Empty
+        };
     }
 
     private void BeginInlineEdit(StorySceneMessageView message)
@@ -1230,9 +1301,13 @@ else
         if (_chat is null || !message.IsSnapshotCandidate)
             return;
 
+        _snapshotDraftOperation?.Dispose();
+        _snapshotDraftOperation = ModelOperationRegistry.Start();
         _isSnapshotModalOpen = true;
         _isSnapshotDraftLoading = true;
+        _isStoppingSnapshotDraft = false;
         _snapshotDraft = null;
+        _snapshotDraftStatusMessage = null;
         _errorMessage = null;
 
         try
@@ -1241,28 +1316,37 @@ else
                 new CreateStoryChatSnapshotDraft(
                     _chat.ThreadId,
                     message.MessageId),
-                CancellationToken.None);
+                _snapshotDraftOperation.CancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            _snapshotDraftStatusMessage = "Snapshot draft generation was stopped.";
+            _errorMessage = null;
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Creating the snapshot draft failed for chat {ThreadId}.", _chat.ThreadId);
-            _isSnapshotModalOpen = false;
+            _snapshotDraftStatusMessage = "Creating the snapshot draft failed.";
             _errorMessage = "Creating the snapshot draft failed.";
         }
         finally
         {
             _isSnapshotDraftLoading = false;
+            _isStoppingSnapshotDraft = false;
+            _snapshotDraftOperation?.Dispose();
+            _snapshotDraftOperation = null;
         }
     }
 
     private Task CloseSnapshotDraftAsync()
     {
-        if (_isCommittingSnapshot)
+        if (_isSnapshotDraftLoading || _isCommittingSnapshot)
             return Task.CompletedTask;
 
         _isSnapshotModalOpen = false;
         _isSnapshotDraftLoading = false;
         _snapshotDraft = null;
+        _snapshotDraftStatusMessage = null;
         return Task.CompletedTask;
     }
 
@@ -1279,6 +1363,7 @@ else
             await StoryChatSnapshotService.CommitDraftAsync(request, CancellationToken.None);
             _isSnapshotModalOpen = false;
             _snapshotDraft = null;
+            _snapshotDraftStatusMessage = null;
             await LoadChatAsync(_chat.ThreadId);
         }
         catch (Exception exception)
@@ -1291,6 +1376,21 @@ else
         {
             _isCommittingSnapshot = false;
         }
+    }
+
+    private Task StopSnapshotDraftAsync()
+    {
+        if (_snapshotDraftOperation is null || _isStoppingSnapshotDraft)
+            return Task.CompletedTask;
+
+        _isStoppingSnapshotDraft = true;
+        if (ModelOperationRegistry.TryCancel(_snapshotDraftOperation.OperationId))
+            UserFeedbackService.ShowBackgroundInfo("Stopping the snapshot draft generation.", "Stopping");
+        else
+            _isStoppingSnapshotDraft = false;
+
+        StateHasChanged();
+        return Task.CompletedTask;
     }
 
     private async Task ConfirmDeleteAsync(StorySceneDeleteMode mode)
@@ -1395,8 +1495,8 @@ else
             return process.Context.Appearance.LatestEntry.Summary;
 
         if (string.Equals(step.Title, "Writing", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(process.Context?.Planner?.PlanningSummary))
-            return process.Context.Planner.PlanningSummary;
+            && process.Context?.Planner is not null)
+            return $"{process.Context.Planner.Beat}: {process.Context.Planner.ImmediateGoal}";
 
         return step.Summary;
     }
@@ -1483,6 +1583,39 @@ else
 
     private static string DescribeDeleteItem(StorySceneMessageView message) =>
         message.IsNarrator ? "narration message" : "message";
+
+    private bool IsStoppingRun(Guid runId) => _stoppingRunIds.Contains(runId);
+
+    private Task StopSceneRunAsync(Guid runId)
+    {
+        if (!_stoppingRunIds.Add(runId))
+            return Task.CompletedTask;
+
+        if (ModelOperationRegistry.TryCancel(runId))
+        {
+            UserFeedbackService.ShowBackgroundInfo("Stopping the active scene generation.", "Stopping");
+            StateHasChanged();
+            return Task.CompletedTask;
+        }
+
+        _stoppingRunIds.Remove(runId);
+        return Task.CompletedTask;
+    }
+
+    private void SyncStoppingRuns()
+    {
+        var runningRunIds = _chat?.Transcript
+            .Select(x => x.Message?.Process)
+            .Where(x => x?.Status == ProcessRunStatus.Running)
+            .Select(x => x!.RunId)
+            .ToHashSet()
+            ?? [];
+        _stoppingRunIds.RemoveWhere(runId => !runningRunIds.Contains(runId));
+    }
+
+    private static bool IsStoppedPlaceholder(StorySceneMessageView message) =>
+        string.IsNullOrWhiteSpace(message.Content)
+        && message.Process?.Status == ProcessRunStatus.Canceled;
 
     private string MessageCountText => _chat is null
         ? "0 messages"

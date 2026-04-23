@@ -332,6 +332,7 @@ public enum StoryScenePostMode
 public enum ProcessRunStatus
 {
     Running,
+    Canceled,
     Completed,
     Failed
 }
@@ -340,6 +341,7 @@ public enum ProcessStepStatus
 {
     Pending,
     Running,
+    Canceled,
     Completed,
     Failed
 }

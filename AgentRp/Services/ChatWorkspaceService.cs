@@ -158,6 +158,7 @@ public sealed class ChatWorkspaceService(
                 run.Status,
                 run.Status switch
                 {
+                    ProcessRunStatus.Canceled => "Stopped",
                     ProcessRunStatus.Completed => "Completed",
                     ProcessRunStatus.Failed => "Failed",
                     _ => "Running"

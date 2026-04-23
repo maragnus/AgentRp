@@ -80,6 +80,91 @@ public sealed record ChatMessageUpdate(
     Guid MessageId,
     string Content);
 
+public sealed record ChatTransferSelection(
+    bool Messages,
+    bool Snapshots,
+    bool CurrentAppearanceBlocks,
+    bool Characters,
+    bool Locations,
+    bool Items,
+    bool History,
+    bool SceneState)
+{
+    public static ChatTransferSelection None { get; } = new(false, false, false, false, false, false, false, false);
+
+    public static ChatTransferSelection All { get; } = new(true, true, true, true, true, true, true, true);
+}
+
+public sealed record ChatTransferSourceView(
+    string Title,
+    ChatTransferSelection AvailableSections);
+
+public sealed record ChatTransferPackage(
+    int SchemaVersion,
+    DateTime ExportedUtc,
+    ChatTransferSourceInfo Source,
+    ChatTransferPayload Payload);
+
+public sealed record ChatTransferSourceInfo(
+    string Title);
+
+public sealed record ChatTransferPayload(
+    Guid? ActiveLeafMessageId,
+    Guid? SelectedSpeakerCharacterId,
+    ChatStorySceneDocument? SceneState,
+    ChatStoryCharactersDocument? Characters,
+    ChatStoryLocationsDocument? Locations,
+    ChatStoryItemsDocument? Items,
+    ChatStoryHistoryDocument? History,
+    IReadOnlyList<ChatTransferMessageRecord>? Messages,
+    IReadOnlyList<ChatTransferSnapshotRecord>? Snapshots,
+    IReadOnlyList<ChatTransferAppearanceRecord>? CurrentAppearanceBlocks);
+
+public sealed record ChatTransferMessageRecord(
+    Guid Id,
+    ChatRole Role,
+    ChatMessageKind MessageKind,
+    string Content,
+    DateTime CreatedUtc,
+    Guid? SpeakerCharacterId,
+    StoryScenePostMode GenerationMode,
+    Guid? ParentMessageId,
+    Guid? EditedFromMessageId);
+
+public sealed record ChatTransferSnapshotRecord(
+    Guid Id,
+    Guid SelectedLeafMessageId,
+    Guid CoveredThroughMessageId,
+    DateTime CoveredThroughUtc,
+    string Summary,
+    StoryChatSnapshotDocument Snapshot,
+    IReadOnlyList<Guid> IncludedMessageIds,
+    DateTime CreatedUtc);
+
+public sealed record ChatTransferAppearanceRecord(
+    Guid Id,
+    Guid SelectedLeafMessageId,
+    Guid CoveredThroughMessageId,
+    DateTime CoveredThroughUtc,
+    string Summary,
+    StoryChatAppearanceDocument Appearance,
+    DateTime CreatedUtc,
+    DateTime UpdatedUtc);
+
+public sealed record ChatTransferInspectionView(
+    ChatTransferPackage Package,
+    ChatTransferSourceView Source);
+
+public sealed record ChatTransferApplyResult(
+    Guid ThreadId,
+    string Title);
+
+public enum ChatTransferApplyMode
+{
+    Duplicate,
+    Import
+}
+
 public sealed record ChatStorySidebarView(
     Guid ThreadId,
     string? CurrentLocationName,
@@ -308,6 +393,30 @@ public interface IUserFeedbackService
     void Dismiss(Guid id);
 }
 
+public sealed record ModelOperationView(
+    Guid OperationId,
+    bool IsCancellationRequested);
+
+public interface IModelOperationHandle : IDisposable
+{
+    Guid OperationId { get; }
+
+    CancellationToken CancellationToken { get; }
+
+    bool IsCancellationRequested { get; }
+}
+
+public interface IModelOperationRegistry
+{
+    IModelOperationHandle Start(Guid? operationId = null);
+
+    ModelOperationView? GetOperation(Guid operationId);
+
+    bool IsActive(Guid operationId);
+
+    bool TryCancel(Guid operationId);
+}
+
 public interface IMarkdownRenderer
 {
     string Render(string markdown);
@@ -349,6 +458,29 @@ public interface IChatWorkspaceService
     Task UpdateMessageAsync(ChatMessageUpdate update, CancellationToken cancellationToken);
 
     Task SetActiveLeafAsync(Guid threadId, Guid userMessageId, CancellationToken cancellationToken);
+}
+
+public interface IChatTransferService
+{
+    ChatTransferSourceView GetSourceView(string title);
+
+    ChatTransferSelection NormalizeSelection(ChatTransferSelection selection, ChatTransferSelection availableSections);
+
+    ChatTransferSelection GetLockedSections(ChatTransferSelection selection, ChatTransferSelection availableSections);
+
+    Task<ChatTransferPackage> BuildPackageAsync(Guid threadId, ChatTransferSelection selection, CancellationToken cancellationToken);
+
+    string SerializePackage(ChatTransferPackage package);
+
+    string BuildExportFileName(ChatTransferPackage package);
+
+    ChatTransferInspectionView InspectPackage(string json);
+
+    Task<ChatTransferApplyResult> ApplyPackageAsync(
+        ChatTransferPackage package,
+        ChatTransferSelection selection,
+        ChatTransferApplyMode mode,
+        CancellationToken cancellationToken);
 }
 
 public sealed record StorySceneSpeakerView(
@@ -610,14 +742,22 @@ public sealed record StorySceneGenerationContext(
     StoryChatSnapshotSummaryView? LatestSnapshot,
     IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceSnapshot);
 
+public enum StoryTurnShape
+{
+    Compact,
+    Brief,
+    Monologue,
+    Silent
+}
+
 public sealed record StoryMessagePlannerResult(
+    StoryTurnShape TurnShape,
+    string Beat,
     string Intent,
     string ImmediateGoal,
-    string EmotionalStance,
-    IReadOnlyList<string> TargetAddressees,
-    IReadOnlyList<string> RequiredFactualBeats,
-    IReadOnlyList<string> Guardrails,
-    string PlanningSummary);
+    string WhyNow,
+    string ChangeIntroduced,
+    IReadOnlyList<string> Guardrails);
 
 public sealed record StoryMessageProseRequest(
     StoryScenePostMode Mode,

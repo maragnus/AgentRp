@@ -1,8 +1,10 @@
 @inject IStoryEntityAiAssistService StoryEntityAiAssistService
 @inject IThreadAgentService ThreadAgentService
+@inject IModelOperationRegistry ModelOperationRegistry
+@inject IUserFeedbackService UserFeedbackService
 @inject ILogger<StoryEntityAiAssistModal> Logger
 
-<AppModal IsOpen="IsOpen" Title="@BuildTitle()" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down" OnClose="CloseAsync">
+<AppModal IsOpen="IsOpen" Title="@BuildTitle()" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down" CloseDisabled="@IsAiOperationActive" OnClose="CloseAsync">
     <ChildContent>
         <div class="d-flex flex-column gap-3">
             <InlineAlert Message="@_errorMessage" />
@@ -74,7 +76,7 @@
             <div class="d-flex gap-2">
                 @if (_session is not null)
                 {
-                    <button type="button" class="btn btn-outline-danger" @onclick="RejectAsync">
+                    <button type="button" class="btn btn-outline-danger" disabled="@IsAiOperationActive" @onclick="RejectAsync">
                         <i class="fa-regular fa-xmark me-2" aria-hidden="true"></i>
                         Reject
                     </button>
@@ -86,7 +88,17 @@
             </div>
 
             <div class="d-flex gap-2">
-                <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+                <button type="button" class="btn btn-outline-secondary" disabled="@IsAiOperationActive" @onclick="CloseAsync">Close</button>
+
+                @if (IsAiOperationActive)
+                {
+                    <StopOperationButton Class="btn btn-outline-danger"
+                                         ShowText="true"
+                                         IsStopping="@_isStoppingOperation"
+                                         Disabled="@_isStoppingOperation"
+                                         Title="Stop the active AI draft operation"
+                                         OnClick="StopOperationAsync" />
+                }
 
                 @if (_session is null)
                 {
@@ -159,6 +171,9 @@
     private string? _selectedAgentName;
     private StoryEntityAiDraftSessionView? _session;
     private string? _errorMessage;
+    private IModelOperationHandle? _operation;
+    private bool _isStoppingOperation;
+    private bool IsAiOperationActive => _operation is not null;
 
     protected override void OnParametersSet()
     {
@@ -219,13 +234,19 @@
         _isWorking = true;
         _workingTitle = "Generating draft";
         _workingMessage = $"Building a proposed {BuildEntityLabel()} from the story context.";
+        _operation = ModelOperationRegistry.Start();
+        _isStoppingOperation = false;
 
         try
         {
             _session = await StoryEntityAiAssistService.GenerateDraftAsync(
                 new StartStoryEntityAiDraft(ThreadId, EntityKind, EntityId, prompt),
-                CancellationToken.None);
+                _operation.CancellationToken);
             _refinePrompt = string.Empty;
+        }
+        catch (OperationCanceledException)
+        {
+            _errorMessage = null;
         }
         catch (Exception exception)
         {
@@ -234,6 +255,9 @@
         }
         finally
         {
+            _operation?.Dispose();
+            _operation = null;
+            _isStoppingOperation = false;
             _isWorking = false;
         }
     }
@@ -260,13 +284,19 @@
         _isWorking = true;
         _workingTitle = "Refining draft";
         _workingMessage = $"Applying the new prompt to the current {BuildEntityLabel()} draft.";
+        _operation = ModelOperationRegistry.Start();
+        _isStoppingOperation = false;
 
         try
         {
             _session = await StoryEntityAiAssistService.RefineDraftAsync(
                 new RefineStoryEntityAiDraft(ThreadId, _session, prompt),
-                CancellationToken.None);
+                _operation.CancellationToken);
             _refinePrompt = string.Empty;
+        }
+        catch (OperationCanceledException)
+        {
+            _errorMessage = null;
         }
         catch (Exception exception)
         {
@@ -275,6 +305,9 @@
         }
         finally
         {
+            _operation?.Dispose();
+            _operation = null;
+            _isStoppingOperation = false;
             _isWorking = false;
         }
     }
@@ -316,6 +349,9 @@
 
     private Task CloseAsync()
     {
+        if (IsAiOperationActive)
+            return Task.CompletedTask;
+
         _errorMessage = null;
         return OnClose.InvokeAsync();
     }
@@ -330,6 +366,23 @@
         _workingTitle = "Generating draft";
         _workingMessage = "The AI is reviewing the story context.";
         _errorMessage = null;
+        _operation?.Dispose();
+        _operation = null;
+        _isStoppingOperation = false;
+    }
+
+    private Task StopOperationAsync()
+    {
+        if (_operation is null || _isStoppingOperation)
+            return Task.CompletedTask;
+
+        _isStoppingOperation = true;
+        if (ModelOperationRegistry.TryCancel(_operation.OperationId))
+            UserFeedbackService.ShowBackgroundInfo($"Stopping the {BuildEntityLabel()} draft operation.", "Stopping");
+        else
+            _isStoppingOperation = false;
+
+        return Task.CompletedTask;
     }
 
     private string BuildTitle() => _session is null

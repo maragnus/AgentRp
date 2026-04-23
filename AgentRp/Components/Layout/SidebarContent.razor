@@ -1,6 +1,9 @@
 @implements IDisposable
 @inject IChatWorkspaceService ChatWorkspaceService
+@inject IChatTransferService ChatTransferService
+@inject IUserFeedbackService UserFeedbackService
 @inject NavigationManager NavigationManager
+@inject ILogger<SidebarContent> Logger
 
 <div class="d-flex w-100 h-100 flex-column overflow-hidden">
     <div class="flex-shrink-0 border-bottom px-3 py-3">
@@ -20,10 +23,23 @@
             }
         </div>
 
-        <BusyButton Class="btn btn-primary mt-3 w-100" OnClick="CreateChatAsync" BusyText="Creating chat...">
-            <i class="fa-regular fa-plus me-2" aria-hidden="true"></i>
-            New Chat
-        </BusyButton>
+        <div class="d-flex align-items-stretch gap-2 mt-3">
+            <BusyButton Class="btn btn-primary flex-grow-1"
+                        OnClick="CreateChatAsync"
+                        BusyText="Creating chat...">
+                <i class="fa-regular fa-plus me-2" aria-hidden="true"></i>
+                New Chat
+            </BusyButton>
+
+            <button type="button"
+                    class="btn btn-outline-secondary flex-shrink-0"
+                    title="Import Chat"
+                    aria-label="Import Chat"
+                    disabled="@(_isImportBusy || _isImportLoading)"
+                    @onclick="OpenImportModal">
+                <i class="fa-regular fa-arrow-down-to-bracket" aria-hidden="true"></i>
+            </button>
+        </div>
 
         <InlineAlert Message="@ErrorMessage" CssClass="alert alert-danger mt-3 mb-0" />
     </div>
@@ -45,6 +61,71 @@
     </div>
 </div>
 
+<AppModal IsOpen="@_isImportModalOpen"
+          Title="Import Chat"
+          DialogClass="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down"
+          OnClose="CloseImportModalAsync">
+    <ChildContent>
+        <div class="d-flex flex-column gap-3">
+            <div>
+                <label class="form-label fw-semibold" for="@ImportFileInputId">Export File</label>
+                <InputFile id="@ImportFileInputId"
+                           class="form-control"
+                           accept=".json,.agentrp-chat.json"
+                           disabled="@(_isImportBusy || _isImportLoading)"
+                           OnChange="HandleImportFileSelectedAsync" />
+                <div class="small text-body-secondary mt-2">
+                    Choose an AgentRp chat export JSON file.
+                </div>
+            </div>
+
+            @if (_isImportLoading)
+            {
+                <div class="d-flex align-items-center gap-2 text-body-secondary">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <span>Reading export file...</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(_importErrorMessage))
+            {
+                <div class="alert alert-danger mb-0">@_importErrorMessage</div>
+            }
+
+            @if (_importInspection is not null)
+            {
+                <div>
+                    <div class="fw-semibold">@_importInspection.Source.Title</div>
+                    <div class="small text-body-secondary">
+                        File: @(_importFileName ?? "Selected export")
+                    </div>
+                </div>
+
+                <ChatTransferSelectionEditor AvailableSections="@_importInspection.Source.AvailableSections"
+                                             Value="@_importSelection"
+                                             ValueChanged="HandleImportSelectionChanged"
+                                             Disabled="@(_isImportBusy || _isImportLoading)" />
+            }
+        </div>
+    </ChildContent>
+    <FooterContent>
+        <button type="button"
+                class="btn btn-outline-secondary"
+                disabled="@(_isImportBusy || _isImportLoading)"
+                @onclick="CloseImportModalAsync">
+            Cancel
+        </button>
+
+        <BusyButton Class="btn btn-primary"
+                    OnClick="ConfirmImportAsync"
+                    IsBusy="@_isImportBusy"
+                    BusyText="Importing..."
+                    Disabled="@(_importInspection is null || _isImportLoading)">
+            Import
+        </BusyButton>
+    </FooterContent>
+</AppModal>
+
 @code {
     [Parameter]
     public EventCallback OnNavigate { get; set; }
@@ -53,6 +134,14 @@
     public bool ShowCloseButton { get; set; }
 
     private string? ErrorMessage { get; set; }
+    private bool _isImportModalOpen;
+    private bool _isImportLoading;
+    private bool _isImportBusy;
+    private string? _importErrorMessage;
+    private string? _importFileName;
+    private ChatTransferInspectionView? _importInspection;
+    private ChatTransferSelection _importSelection = ChatTransferSelection.All;
+    private string ImportFileInputId { get; } = $"chat-import-file-{Guid.NewGuid():N}";
 
     public void Dispose()
     {
@@ -74,6 +163,95 @@
         }
     }
 
+    private void OpenImportModal()
+    {
+        ResetImportState();
+        _isImportModalOpen = true;
+    }
+
+    private Task HandleImportSelectionChanged(ChatTransferSelection selection)
+    {
+        _importSelection = selection;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleImportFileSelectedAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+            return;
+
+        _isImportLoading = true;
+        _importErrorMessage = null;
+        _importInspection = null;
+        _importFileName = file.Name;
+
+        try
+        {
+            using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var packageJson = await reader.ReadToEndAsync();
+            _importInspection = ChatTransferService.InspectPackage(packageJson);
+            _importSelection = ChatTransferService.NormalizeSelection(
+                _importInspection.Source.AvailableSections,
+                _importInspection.Source.AvailableSections);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Reading chat import file {FileName} failed.", file.Name);
+            _importErrorMessage = $"Reading chat export file \"{file.Name}\" failed.";
+            UserFeedbackService.ShowBackgroundError(_importErrorMessage, "Import Failed");
+        }
+        finally
+        {
+            _isImportLoading = false;
+        }
+    }
+
+    private Task CloseImportModalAsync()
+    {
+        if (_isImportBusy || _isImportLoading)
+            return Task.CompletedTask;
+
+        ResetImportState();
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmImportAsync()
+    {
+        if (_importInspection is null)
+            return;
+
+        _isImportBusy = true;
+        _importErrorMessage = null;
+
+        try
+        {
+            var result = await ChatTransferService.ApplyPackageAsync(
+                _importInspection.Package,
+                _importSelection,
+                ChatTransferApplyMode.Import,
+                CancellationToken.None);
+            var importedTitle = result.Title;
+            ResetImportState();
+            NavigationManager.NavigateTo($"/chat/{result.ThreadId}");
+            UserFeedbackService.ShowBackgroundSuccess(
+                $"Imported \"{importedTitle}\".",
+                "Chat Imported");
+            await CloseAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Importing chat from {FileName} failed.", _importFileName);
+            _importErrorMessage = $"Importing chat from \"{_importFileName ?? "the selected file"}\" failed.";
+            UserFeedbackService.ShowBackgroundError(_importErrorMessage, "Import Failed");
+        }
+        finally
+        {
+            _isImportBusy = false;
+        }
+    }
+
     private async Task HandleNavigateAsync()
     {
         await CloseAsync();
@@ -83,5 +261,16 @@
     {
         if (OnNavigate.HasDelegate)
             await OnNavigate.InvokeAsync();
+    }
+
+    private void ResetImportState()
+    {
+        _isImportModalOpen = false;
+        _isImportLoading = false;
+        _isImportBusy = false;
+        _importErrorMessage = null;
+        _importFileName = null;
+        _importInspection = null;
+        _importSelection = ChatTransferSelection.All;
     }
 }

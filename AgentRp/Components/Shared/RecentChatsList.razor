@@ -1,9 +1,11 @@
 @implements IDisposable
 @inject IChatWorkspaceService ChatWorkspaceService
+@inject IChatTransferService ChatTransferService
 @inject IActivityNotifier ActivityNotifier
 @inject IUserFeedbackService UserFeedbackService
 @inject NavigationManager NavigationManager
 @inject ILogger<RecentChatsList> Logger
+@inject IJSRuntime JSRuntime
 
 @if (_recentThreads.Count == 0)
 {
@@ -53,7 +55,7 @@ else
                                     IsBusy="@isStarring"
                                     BusyText=""
                                     ShowBusyText="false"
-                                    Disabled="@isRenaming"
+                                    Disabled="@(isRenaming || _isTransferBusy)"
                                     title="@BuildStarButtonTitle(thread)"
                                     aria-label="@BuildStarButtonTitle(thread)">
                             <i class="@BuildStarIconClass(thread)" aria-hidden="true"></i>
@@ -61,9 +63,27 @@ else
 
                         <button type="button"
                                 class="@BuildActionButtonClass(isActive)"
+                                title="@($"Duplicate {thread.Title}")"
+                                aria-label="@($"Duplicate {thread.Title}")"
+                                disabled="@(isRenaming || _isTransferBusy)"
+                                @onclick="() => OpenTransferModal(thread, ChatTransferDialogMode.Duplicate)">
+                            <i class="fa-regular fa-clone" aria-hidden="true"></i>
+                        </button>
+
+                        <button type="button"
+                                class="@BuildActionButtonClass(isActive)"
+                                title="@($"Export {thread.Title}")"
+                                aria-label="@($"Export {thread.Title}")"
+                                disabled="@(isRenaming || _isTransferBusy)"
+                                @onclick="() => OpenTransferModal(thread, ChatTransferDialogMode.Export)">
+                            <i class="fa-regular fa-arrow-up-from-bracket" aria-hidden="true"></i>
+                        </button>
+
+                        <button type="button"
+                                class="@BuildActionButtonClass(isActive)"
                                 title="@(isEditing ? "Cancel rename" : $"Rename {thread.Title}")"
                                 aria-label="@(isEditing ? "Cancel rename" : $"Rename {thread.Title}")"
-                                disabled="@isRenaming"
+                                disabled="@(isRenaming || _isTransferBusy)"
                                 @onclick="() => ToggleRename(thread)">
                             <i class="fa-regular @(isEditing ? "fa-xmark" : "fa-pen-to-square")" aria-hidden="true"></i>
                         </button>
@@ -99,6 +119,49 @@ else
     </div>
 }
 
+<AppModal IsOpen="@_isTransferModalOpen"
+          Title="@TransferModalTitle"
+          DialogClass="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down"
+          OnClose="CloseTransferModalAsync">
+    <ChildContent>
+        @if (_transferThread is not null)
+        {
+            <div class="d-flex flex-column gap-3">
+                <div>
+                    <div class="fw-semibold">@_transferThread.Title</div>
+                    <div class="small text-body-secondary">@TransferModalSummary</div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_transferErrorMessage))
+                {
+                    <div class="alert alert-danger mb-0">@_transferErrorMessage</div>
+                }
+
+                <ChatTransferSelectionEditor AvailableSections="@ChatTransferSelection.All"
+                                             Value="@_transferSelection"
+                                             ValueChanged="HandleTransferSelectionChanged"
+                                             Disabled="@_isTransferBusy" />
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <button type="button"
+                class="btn btn-outline-secondary"
+                disabled="@_isTransferBusy"
+                @onclick="CloseTransferModalAsync">
+            Cancel
+        </button>
+
+        <BusyButton Class="btn btn-primary"
+                    OnClick="ConfirmTransferAsync"
+                    IsBusy="@_isTransferBusy"
+                    BusyText="@TransferBusyText"
+                    Disabled="@(_transferThread is null)">
+            @TransferPrimaryActionText
+        </BusyButton>
+    </FooterContent>
+</AppModal>
+
 @code {
     [Parameter]
     public EventCallback OnNavigate { get; set; }
@@ -109,6 +172,12 @@ else
     private Guid? _editingThreadId;
     private Guid? _renamingThreadId;
     private string _editedTitle = string.Empty;
+    private bool _isTransferModalOpen;
+    private bool _isTransferBusy;
+    private ChatThreadSummary? _transferThread;
+    private ChatTransferDialogMode? _transferMode;
+    private ChatTransferSelection _transferSelection = ChatTransferSelection.All;
+    private string? _transferErrorMessage;
 
     protected override async Task OnInitializedAsync()
     {
@@ -225,6 +294,104 @@ else
             || string.Equals(normalizedTitle, thread.Title, StringComparison.Ordinal);
     }
 
+    private void OpenTransferModal(ChatThreadSummary thread, ChatTransferDialogMode mode)
+    {
+        _transferThread = thread;
+        _transferMode = mode;
+        _transferSelection = ChatTransferSelection.All;
+        _transferErrorMessage = null;
+        _isTransferModalOpen = true;
+    }
+
+    private Task HandleTransferSelectionChanged(ChatTransferSelection selection)
+    {
+        _transferSelection = selection;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseTransferModalAsync()
+    {
+        if (_isTransferBusy)
+            return Task.CompletedTask;
+
+        ResetTransferModal();
+        return Task.CompletedTask;
+    }
+
+    private async Task ConfirmTransferAsync()
+    {
+        if (_transferThread is null || !_transferMode.HasValue)
+            return;
+
+        _isTransferBusy = true;
+        _transferErrorMessage = null;
+
+        try
+        {
+            var package = await ChatTransferService.BuildPackageAsync(_transferThread.Id, _transferSelection, CancellationToken.None);
+            var sourceTitle = _transferThread.Title;
+
+            if (_transferMode == ChatTransferDialogMode.Duplicate)
+            {
+                var result = await ChatTransferService.ApplyPackageAsync(
+                    package,
+                    _transferSelection,
+                    ChatTransferApplyMode.Duplicate,
+                    CancellationToken.None);
+                ResetTransferModal();
+                NavigationManager.NavigateTo($"/chat/{result.ThreadId}");
+                UserFeedbackService.ShowBackgroundSuccess(
+                    $"Duplicated \"{sourceTitle}\" into \"{result.Title}\".",
+                    "Chat Duplicated");
+
+                if (OnNavigate.HasDelegate)
+                    await OnNavigate.InvokeAsync();
+
+                return;
+            }
+
+            var packageJson = ChatTransferService.SerializePackage(package);
+            await JSRuntime.InvokeVoidAsync("chatTransfer.downloadJson", ChatTransferService.BuildExportFileName(package), packageJson);
+            ResetTransferModal();
+            UserFeedbackService.ShowBackgroundSuccess(
+                $"Exported \"{sourceTitle}\".",
+                "Chat Exported");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "{TransferMode} failed for chat {ChatId}.", _transferMode, _transferThread.Id);
+            _transferErrorMessage = _transferMode == ChatTransferDialogMode.Duplicate
+                ? $"Duplicating \"{_transferThread.Title}\" failed."
+                : $"Exporting \"{_transferThread.Title}\" failed.";
+            UserFeedbackService.ShowBackgroundError(
+                _transferErrorMessage,
+                _transferMode == ChatTransferDialogMode.Duplicate ? "Duplicate Failed" : "Export Failed");
+        }
+        finally
+        {
+            _isTransferBusy = false;
+        }
+    }
+
+    private string TransferModalTitle => _transferMode == ChatTransferDialogMode.Duplicate ? "Duplicate Chat" : "Export Chat";
+
+    private string TransferModalSummary => _transferMode == ChatTransferDialogMode.Duplicate
+        ? "Choose what the new chat should keep."
+        : "Choose what the export file should include.";
+
+    private string TransferPrimaryActionText => _transferMode == ChatTransferDialogMode.Duplicate ? "Duplicate" : "Export";
+
+    private string TransferBusyText => _transferMode == ChatTransferDialogMode.Duplicate ? "Duplicating..." : "Exporting...";
+
+    private void ResetTransferModal()
+    {
+        _isTransferModalOpen = false;
+        _transferThread = null;
+        _transferMode = null;
+        _transferSelection = ChatTransferSelection.All;
+        _transferErrorMessage = null;
+    }
+
     private static string BuildThreadItemClass(bool isActive) =>
         $"list-group-item rounded-3 border-0 px-3 py-3 d-flex flex-column gap-3 {(isActive ? "active" : "bg-body-tertiary")}";
 
@@ -247,4 +414,10 @@ else
 
     private static string BuildStarButtonTitle(ChatThreadSummary thread) =>
         thread.IsStarred ? $"Unstar {thread.Title}" : $"Star {thread.Title}";
+
+    private enum ChatTransferDialogMode
+    {
+        Duplicate,
+        Export
+    }
 }

@@ -1,9 +1,10 @@
 @inject IStoryCharacterPrivateMotivationsService StoryCharacterPrivateMotivationsService
 @inject IThreadAgentService ThreadAgentService
+@inject IModelOperationRegistry ModelOperationRegistry
 @inject IUserFeedbackService UserFeedbackService
 @inject ILogger<StoryCharacterPrivateMotivationsModal> Logger
 
-<AppModal IsOpen="IsOpen" Title="@BuildTitle()" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down" OnClose="CloseAsync">
+<AppModal IsOpen="IsOpen" Title="@BuildTitle()" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down" CloseDisabled="@IsAiOperationActive" OnClose="CloseAsync">
     <ChildContent>
         <div class="d-flex flex-column gap-3">
             <InlineAlert Message="@_errorMessage" />
@@ -102,7 +103,16 @@
             </div>
 
             <div class="d-flex flex-wrap gap-2">
-                <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+                <button type="button" class="btn btn-outline-secondary" disabled="@IsAiOperationActive" @onclick="CloseAsync">Close</button>
+                @if (IsAiOperationActive)
+                {
+                    <StopOperationButton Class="btn btn-outline-danger"
+                                         ShowText="true"
+                                         IsStopping="@_isStoppingOperation"
+                                         Disabled="@_isStoppingOperation"
+                                         Title="Stop the active private motivations operation"
+                                         OnClick="StopOperationAsync" />
+                }
                 <BusyButton Class="btn btn-outline-primary"
                             IsBusy="_isGenerating"
                             BusyText="@BuildGenerateBusyText()"
@@ -169,6 +179,9 @@
     private string _previewNarrative = string.Empty;
     private string? _errorMessage;
     private List<OptionSelectionView> _options = [];
+    private IModelOperationHandle? _operation;
+    private bool _isStoppingOperation;
+    private bool IsAiOperationActive => _operation is not null;
 
     protected override void OnParametersSet()
     {
@@ -214,6 +227,8 @@
 
         _errorMessage = null;
         _isGenerating = true;
+        _operation = ModelOperationRegistry.Start();
+        _isStoppingOperation = false;
         try
         {
             var result = await StoryCharacterPrivateMotivationsService.GenerateOptionsAsync(
@@ -221,7 +236,7 @@
                     ThreadId,
                     Character,
                     _options.Select(x => x.Option).ToList()),
-                CancellationToken.None);
+                _operation.CancellationToken);
 
             _optionsReviewSummary = result.ReviewSummary;
             AppendOptions(result.Options);
@@ -240,6 +255,10 @@
                     "Ideas Ready");
             }
         }
+        catch (OperationCanceledException)
+        {
+            _errorMessage = null;
+        }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Generating private motivations failed for character {CharacterName} in chat {ThreadId}.", Character.Name, ThreadId);
@@ -248,6 +267,9 @@
         }
         finally
         {
+            _operation?.Dispose();
+            _operation = null;
+            _isStoppingOperation = false;
             _isGenerating = false;
         }
     }
@@ -269,17 +291,23 @@
 
         _errorMessage = null;
         _isPreviewing = true;
+        _operation = ModelOperationRegistry.Start();
+        _isStoppingOperation = false;
         try
         {
             var preview = await StoryCharacterPrivateMotivationsService.ComposeNarrativeAsync(
                 new ComposeStoryCharacterPrivateMotivations(ThreadId, Character, selectedOptions),
-                CancellationToken.None);
+                _operation.CancellationToken);
 
             _previewReviewSummary = preview.ReviewSummary;
             _previewNarrative = preview.Narrative;
             UserFeedbackService.ShowBackgroundSuccess(
                 $"Generated a private motivations preview for '{BuildDisplayName()}'.",
                 "Preview Ready");
+        }
+        catch (OperationCanceledException)
+        {
+            _errorMessage = null;
         }
         catch (Exception exception)
         {
@@ -289,6 +317,9 @@
         }
         finally
         {
+            _operation?.Dispose();
+            _operation = null;
+            _isStoppingOperation = false;
             _isPreviewing = false;
         }
     }
@@ -350,9 +381,26 @@
         _previewReviewSummary = null;
         _previewNarrative = string.Empty;
         _options = [];
+        _operation?.Dispose();
+        _operation = null;
+        _isStoppingOperation = false;
     }
 
-    private Task CloseAsync() => OnClose.InvokeAsync();
+    private Task CloseAsync() => IsAiOperationActive ? Task.CompletedTask : OnClose.InvokeAsync();
+
+    private Task StopOperationAsync()
+    {
+        if (_operation is null || _isStoppingOperation)
+            return Task.CompletedTask;
+
+        _isStoppingOperation = true;
+        if (ModelOperationRegistry.TryCancel(_operation.OperationId))
+            UserFeedbackService.ShowBackgroundInfo("Stopping the private motivations operation.", "Stopping");
+        else
+            _isStoppingOperation = false;
+
+        return Task.CompletedTask;
+    }
 
     private string BuildTitle() => $"Private Motivations: {BuildDisplayName()}";
 

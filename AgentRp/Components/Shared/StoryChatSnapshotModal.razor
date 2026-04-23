@@ -1,6 +1,7 @@
 <AppModal IsOpen="IsOpen"
           Title="Snapshot Draft"
           DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down"
+          CloseDisabled="@CloseDisabled"
           OnClose="HandleCloseAsync">
     <ChildContent>
         @if (IsLoading)
@@ -12,7 +13,7 @@
         }
         else if (Draft is null)
         {
-            <div class="alert alert-danger mb-0">The snapshot draft could not be loaded.</div>
+            <div class="alert alert-light border mb-0">@(string.IsNullOrWhiteSpace(EmptyStateMessage) ? "The snapshot draft could not be loaded." : EmptyStateMessage)</div>
         }
         else
         {
@@ -203,10 +204,20 @@
     <FooterContent>
         <button type="button"
                 class="btn btn-outline-secondary"
-                disabled="@IsCommitting"
+                disabled="@(IsCommitting || CloseDisabled)"
                 @onclick="HandleCloseAsync">
             Cancel
         </button>
+
+        @if (CanStop)
+        {
+            <StopOperationButton Class="btn btn-outline-danger"
+                                 ShowText="true"
+                                 IsStopping="@IsStopping"
+                                 Disabled="@IsStopping"
+                                 Title="Stop the snapshot draft generation"
+                                 OnClick="@OnStop" />
+        }
 
         <BusyButton Class="btn btn-primary"
                     OnClick="CommitAsync"
@@ -232,7 +243,22 @@
     public StoryChatSnapshotDraftView? Draft { get; set; }
 
     [Parameter]
+    public string? EmptyStateMessage { get; set; }
+
+    [Parameter]
+    public bool CloseDisabled { get; set; }
+
+    [Parameter]
+    public bool CanStop { get; set; }
+
+    [Parameter]
+    public bool IsStopping { get; set; }
+
+    [Parameter]
     public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public EventCallback OnStop { get; set; }
 
     [Parameter]
     public EventCallback<CommitStoryChatSnapshotDraft> OnCommit { get; set; }
@@ -272,7 +298,7 @@
 
     private Task HandleCloseAsync()
     {
-        if (IsCommitting)
+        if (IsCommitting || CloseDisabled)
             return Task.CompletedTask;
 
         return OnClose.InvokeAsync();
