@@ -433,8 +433,8 @@ else
                                                                         BusyText=""
                                                                         ShowBusyText="false"
                                                                         Disabled="@(IsSceneInteractionLocked || _startingRetryMessageId.HasValue)"
-                                                                        title="Retry latest message as a new branch"
-                                                                        aria-label="Retry latest message as a new branch">
+                                                                        title="Retry message as a new branch"
+                                                                        aria-label="Retry message as a new branch">
                                                                 <i class="fa-regular fa-rotate-left" aria-hidden="true"></i>
                                                             </BusyButton>
                                                         }
@@ -638,7 +638,7 @@ else
                 {
                     <div class="alert alert-primary d-flex align-items-start justify-content-between gap-3 py-2 mb-3" role="status">
                         <div>
-                            <div class="fw-semibold">Retrying latest message as @_retrySpeakerName</div>
+                            <div class="fw-semibold">Retrying message as @_retrySpeakerName</div>
                             <div class="small">The next submit creates a new branch from before that message.</div>
                         </div>
                         <button type="button"
@@ -898,7 +898,7 @@ else
                 _expandedProcessRunStates.TryAdd(process.RunId, false);
                 _expandedProcessAppearanceStates.TryAdd(process.RunId, false);
                 _expandedProcessTraceStates.TryAdd(process.RunId, false);
-                _expandedProcessStepIds.TryAdd(process.RunId, process.Steps.FirstOrDefault(x => x.IsActive)?.StepId ?? process.Steps.FirstOrDefault()?.StepId);
+                _expandedProcessStepIds.TryAdd(process.RunId, null);
             }
 
             foreach (var snapshot in _chat.Transcript.Select(x => x.Snapshot).Where(x => x is not null).Select(x => x!))
@@ -1106,21 +1106,18 @@ else
         if (!_retrySourceMessageId.HasValue)
             return;
 
-        var retryMessageIsSelectedLeaf = _chat?.SelectedLeafMessageId == _retrySourceMessageId.Value
-            && _chat.Transcript.Any(x => x.Message?.MessageId == _retrySourceMessageId.Value);
-        if (retryMessageIsSelectedLeaf)
+        var retryMessageIsInTranscript = _chat?.Transcript.Any(x => x.Message?.MessageId == _retrySourceMessageId.Value) == true;
+        if (retryMessageIsInTranscript)
             return;
 
         ClearRetryState(clearDraft: false);
     }
 
     private bool CanRetryMessage(StorySceneMessageView message) =>
-        _chat?.SelectedLeafMessageId == message.MessageId
-        && message.Process?.Status != ProcessRunStatus.Running;
+        message.Process?.Status != ProcessRunStatus.Running;
 
     private bool CanRegenerateProse(StorySceneMessageView message) =>
-        _chat?.SelectedLeafMessageId == message.MessageId
-        && message.GenerationMode != StoryScenePostMode.Manual
+        message.GenerationMode != StoryScenePostMode.Manual
         && message.Process?.Status != ProcessRunStatus.Running
         && message.Process?.Context is { GenerationContext: not null, Appearance: not null, Planner: not null };
 

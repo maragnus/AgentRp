@@ -21,6 +21,8 @@ public sealed class ChatStory
 
     public string HistoryJson { get; set; } = ChatStoryJson.Serialize(ChatStoryHistoryDocument.Empty);
 
+    public string StoryContextJson { get; set; } = ChatStoryJson.Serialize(ChatStoryContextDocument.Empty);
+
     public ChatThread Thread { get; set; } = null!;
 
     [NotMapped]
@@ -57,6 +59,20 @@ public sealed class ChatStory
         get => StoryDocumentNormalizer.Normalize(ChatStoryJson.Deserialize(HistoryJson, ChatStoryHistoryDocument.Empty));
         set => HistoryJson = ChatStoryJson.Serialize(StoryDocumentNormalizer.Normalize(value));
     }
+
+    [NotMapped]
+    public ChatStoryContextDocument StoryContext
+    {
+        get => StoryDocumentNormalizer.Normalize(ChatStoryJson.Deserialize(StoryContextJson, ChatStoryContextDocument.Empty));
+        set => StoryContextJson = ChatStoryJson.Serialize(StoryDocumentNormalizer.Normalize(value));
+    }
+}
+
+public enum StoryContentIntensity
+{
+    Forbidden,
+    Allowed,
+    Encouraged
 }
 
 public sealed record ChatStorySceneDocument(
@@ -94,6 +110,23 @@ public sealed record ChatStoryHistoryDocument(
     IReadOnlyList<StoryTimelineEntryDocument> TimelineEntries)
 {
     public static ChatStoryHistoryDocument Empty { get; } = new([], []);
+}
+
+public sealed record ChatStoryContextDocument(
+    string Genre,
+    string Setting,
+    string Tone,
+    string StoryDirection,
+    StoryContentIntensity ExplicitContent,
+    StoryContentIntensity ViolentContent)
+{
+    public static ChatStoryContextDocument Empty { get; } = new(
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        StoryContentIntensity.Allowed,
+        StoryContentIntensity.Allowed);
 }
 
 public sealed record StoryCharacterDocument(
@@ -191,6 +224,14 @@ public static class StoryDocumentNormalizer
         NormalizeFacts(document?.Facts),
         NormalizeTimelineEntries(document?.TimelineEntries));
 
+    public static ChatStoryContextDocument Normalize(ChatStoryContextDocument? document) => new(
+        NormalizeTrimmedText(document?.Genre),
+        NormalizeTrimmedText(document?.Setting),
+        NormalizeTrimmedText(document?.Tone),
+        NormalizeTrimmedText(document?.StoryDirection),
+        NormalizeContentIntensity(document?.ExplicitContent),
+        NormalizeContentIntensity(document?.ViolentContent));
+
     private static IReadOnlyList<Guid> NormalizeIds(IReadOnlyList<Guid>? ids) =>
         ids?
             .Distinct()
@@ -280,7 +321,14 @@ public static class StoryDocumentNormalizer
         NormalizeIds(document?.LocationIds),
         NormalizeIds(document?.ItemIds));
 
+    private static StoryContentIntensity NormalizeContentIntensity(StoryContentIntensity? intensity) =>
+        intensity is StoryContentIntensity.Forbidden or StoryContentIntensity.Encouraged
+            ? intensity.Value
+            : StoryContentIntensity.Allowed;
+
     private static string NormalizeText(string? value) => value ?? string.Empty;
+
+    private static string NormalizeTrimmedText(string? value) => value?.Trim() ?? string.Empty;
 
     private static string? NormalizeOptionalText(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;

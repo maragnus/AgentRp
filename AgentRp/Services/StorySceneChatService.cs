@@ -229,8 +229,8 @@ public sealed class StorySceneChatService(
                 ?? throw new InvalidOperationException("Regenerating the scene prose failed because the source message could not be found.");
             var selectedLeafMessageId = ResolveSelectedLeafMessageId(thread.Messages, thread.ActiveLeafMessageId);
 
-            if (selectedLeafMessageId != sourceMessage.Id)
-                throw new InvalidOperationException("Regenerating the scene prose failed because only the latest selected message can be regenerated.");
+            if (!IsMessageOnSelectedPath(thread.Messages, selectedLeafMessageId, sourceMessage.Id))
+                throw new InvalidOperationException("Regenerating the scene prose failed because only messages in the current chat log can be regenerated.");
 
             if (sourceMessage.GenerationMode == StoryScenePostMode.Manual)
                 throw new InvalidOperationException("Regenerating the scene prose failed because direct messages do not have reusable AI planning.");
@@ -746,8 +746,8 @@ public sealed class StorySceneChatService(
             ?? throw new InvalidOperationException($"{operation} failed because the source message could not be found.");
         var selectedLeafMessageId = ResolveSelectedLeafMessageId(messages, thread.ActiveLeafMessageId);
 
-        if (selectedLeafMessageId != sourceMessage.Id)
-            throw new InvalidOperationException($"{operation} failed because only the latest selected message can be retried.");
+        if (!IsMessageOnSelectedPath(messages, selectedLeafMessageId, sourceMessage.Id))
+            throw new InvalidOperationException($"{operation} failed because only messages in the current chat log can be retried.");
 
         return new StoryScenePostTarget(sourceMessage.ParentMessageId, sourceMessage.Id, sourceMessage);
     }
@@ -1198,6 +1198,7 @@ public sealed class StorySceneChatService(
             items.Where(item => story.Scene.PresentItemIds.Contains(item.Id))
                 .Select(item => new StorySceneObjectContext(item.Id, item.Name, item.Summary, item.Details))
                 .ToList(),
+            MapNarrativeSettings(story.StoryContext),
             BuildHistorySummary(story.History),
             latestSnapshot,
             transcriptSinceSnapshot.Select(message => new StorySceneTranscriptMessage(
@@ -1587,10 +1588,10 @@ public sealed class StorySceneChatService(
     - Guardrails: what the prose should avoid.
 
     Turn shape definitions:
-    - compact = one action beat, one line, optional short tag
-    - brief = one to two short lines
-    - monologue = short monologue allowed
-    - silent = action/subtext only, no spoken line unless necessary
+    - compact = one action beat, one or two phrases, optional short tag (always preferred)
+    - silent = action/subtext only, no spoken lines (common)
+    - brief = one action beat, one to two short lines with a tag in between (rare)
+    - monologue = short monologue allowed (only when asked)
 
     Prioritize compact and silent almost always.
     Use brief or monologue only when the turn naturally needs recounting or explanation for an open-ended prompt such as "how was your day".
@@ -1610,6 +1611,10 @@ public sealed class StorySceneChatService(
     Do not resolve the whole exchange.
     Do not plan follow-up beats.
     Stop where the next person would naturally answer or act.
+
+    Respect the supplied story context and content guidance.
+    If content is forbidden, do not plan beats that introduce it.
+    If content is encouraged, you may lean into it when the current scene supports it.
 
     Do not write the final message text.
     """;
@@ -1650,9 +1655,11 @@ public sealed class StorySceneChatService(
 
             Priority order:
             1. Fulfill the beat
-            2. Stay true to Jake, the current scene, and recent transcript
+            2. Stay true to {speaker}, the current scene, and recent transcript
             3. Use as few words as possible
             4. Stop at the first natural pause
+
+            Respect the supplied story context and content guidance.
 
             """);
 
@@ -1670,7 +1677,7 @@ public sealed class StorySceneChatService(
                     This turn has a compact shape, fulfill the beat with one sharp move.
                     - Keep this very short.
                     - Use one brief visible action or reaction.
-                    - Use one short spoken line.
+                    - Use one or two short spoken phrases.
                     - You may add one very short trailing tag if needed.
                     - Stop as soon as the beat lands.
                     - Do not add a second move.
@@ -1682,7 +1689,7 @@ public sealed class StorySceneChatService(
                     This turn has a brief shape, fulfill the beat with a quick move that may need a little setup or follow-through.
                     - Keep this short.
                     - Use one brief action or reaction.
-                    - Use one or two short spoken lines.
+                    - Use one or two short spoken lines separated by simple action.
                     - Let the beat breathe slightly, but stop once the main move is clear.
                     - Do not add a new topic or second emotional turn.
                     """);
@@ -1692,9 +1699,9 @@ public sealed class StorySceneChatService(
                     """
                     This turn has a monologue shape, fulfill the beat with a longer move.
                     - A longer reply is allowed here.
-                    - Jake may speak for several lines if the moment naturally calls for it.
+                    - Up to three sentenses maximum of spoken words with simple actions in between.
                     - Still focus on one beat only.
-                    - Build to one clear landing point, then stop.
+                    - Stop at the first clear landing point.
                     - Do not ramble, recap, or drift into a second move.
                     """);
                 break;
@@ -1703,9 +1710,9 @@ public sealed class StorySceneChatService(
                     """
                     This turn has a silent shape, fulfill the beat with a nonverbal move or subtext and no verbal component.
                     - Prefer action, expression, posture, or a small physical response.
-                    - Do not use dialogue unless a few words are necessary to land the beat.
+                    - Do not use dialogue unless a word or two is necessary to land the beat.
                     - Keep it restrained and readable.
-                    - Stop as soon as Jake's reaction is clear.
+                    - Stop early once action is clear.
                     """);
                 break;
         }
@@ -1750,6 +1757,8 @@ public sealed class StorySceneChatService(
         builder.AppendLine();
         builder.AppendLine("**Turn shape template:**");
         builder.AppendLine(BuildTurnShapeTemplate(request.Planner.TurnShape, request.Context.Actor.IsNarrator));
+
+        // Turn scope reminder
         builder.AppendLine().AppendLine(
             """
             Write the turn by fulfilling only:
@@ -1759,9 +1768,51 @@ public sealed class StorySceneChatService(
             4. the change introduced
             Honor why now and the guardrails.
             Do not expand beyond them unless necessary for coherence.
-            Do not upscale the selected turn shape.
+            Stop early to prevent ramble, recap, or repeating yourself.
             """).AppendLine();
         AppendTurnScopeRules(builder, request.Context.Actor, true);
+
+        switch (request.Planner.TurnShape)
+        {
+            case StoryTurnShape.Compact:
+                builder.AppendLine(
+                    """
+                    Write only a very short compact turn with:
+                    - One brief visible action or reaction.
+                    - One or two short spoken phrases.
+                    - One very short trailing tag if needed.
+                    """);
+                break;                
+            case StoryTurnShape.Brief:
+                builder.AppendLine(
+                    """
+                    Write only a very brief turn with:
+                    - One brief action or reaction.
+                    - One or two short spoken lines separated by simple action.
+                    """);
+                break;
+            case StoryTurnShape.Monologue:
+                builder.AppendLine(
+                    """
+                    Write only a very short monologue turn with:
+                    - Up to three sentences maximum of spoken words with simple actions in between.
+                    - Strict focus on compactness.
+                    - Stop at the first clear landing point.
+                    - Do not ramble, recap, or repeat.
+                    """);
+                break;
+            case StoryTurnShape.Silent:
+                builder.AppendLine(
+                    """
+                    Write only a quick silent turn with:
+                    - Nonverbal move or subtext and no verbal component.
+                    - Prefer action, expression, posture, or a small physical response.
+                    - Do not use dialogue unless a word or two is necessary to land the beat.
+                    - Keep it restrained and readable.
+                    """);
+                break;
+        }
+
         return builder.ToString().TrimEnd();
     }
 
@@ -1858,6 +1909,9 @@ public sealed class StorySceneChatService(
                 builder.AppendLine($"- {item.Name} | {PromptInlineText(item.Summary)} | Details: {PromptInlineText(item.Details, "None")}");
             builder.AppendLine();
         }
+
+        AppendStoryContext(builder, context.StoryContext);
+        AppendContentGuidance(builder, context.StoryContext);
 
         if (!string.IsNullOrEmpty(context.HistorySummary))
             builder.AppendLine($"**History summary:** {PromptInlineText(context.HistorySummary)}");
@@ -2064,6 +2118,17 @@ public sealed class StorySceneChatService(
 
         path.Reverse();
         return path;
+    }
+
+    private static bool IsMessageOnSelectedPath(
+        IReadOnlyList<DbChatMessage> messages,
+        Guid? selectedLeafMessageId,
+        Guid messageId)
+    {
+        if (!selectedLeafMessageId.HasValue)
+            return false;
+
+        return BuildSelectedPath(messages, selectedLeafMessageId.Value).Any(x => x.Id == messageId);
     }
 
     private static IReadOnlyList<DbChatMessage> ExcludeStoppedPlaceholderMessages(
@@ -2376,6 +2441,7 @@ public sealed class StorySceneChatService(
         StorySceneGenerationContext context,
         StorySceneAppearanceResolution appearance)
     {
+        var storyContext = context.StoryContext ?? CreateDefaultStoryContext();
         var promptCharacters = context.Characters
             .Where(x => x.IsPresentInScene)
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
@@ -2386,7 +2452,11 @@ public sealed class StorySceneChatService(
         [
             ..BuildPromptBlocks(
                 StoryChatAppearancePromptBuilder.BuildSystemPrompt(),
-                StoryChatAppearancePromptBuilder.BuildUserPrompt(promptCharacters, appearance.TranscriptSinceLatestEntry)),
+                StoryChatAppearancePromptBuilder.BuildUserPrompt(
+                    promptCharacters,
+                    appearance.TranscriptSinceLatestEntry,
+                    storyContext.ExplicitContent,
+                    storyContext.ViolentContent)),
             new StoryMessageProcessTextBlock("Appearance Context", BuildAppearanceContextSummary(context, appearance))
         ];
     }
@@ -2447,6 +2517,7 @@ public sealed class StorySceneChatService(
     private static string BuildAppearanceContextSummary(StorySceneGenerationContext context, StorySceneAppearanceResolution appearance)
     {
         var builder = new StringBuilder();
+        AppendContentGuidance(builder, context.StoryContext);
         builder.AppendLine("Characters currently in the scene:");
         foreach (var character in context.Characters.Where(x => x.IsPresentInScene))
             builder.AppendLine($"- {character.Name} | General appearance: {PromptInlineText(character.GeneralAppearance, "None")} | Prior current appearance: {PromptInlineText(character.CurrentAppearance, "None")}");
@@ -2464,6 +2535,61 @@ public sealed class StorySceneChatService(
 
         return builder.ToString().TrimEnd();
     }
+
+    private static StoryNarrativeSettingsView MapNarrativeSettings(ChatStoryContextDocument document) => new(
+        document.Genre,
+        document.Setting,
+        document.Tone,
+        document.StoryDirection,
+        document.ExplicitContent,
+        document.ViolentContent);
+
+    private static void AppendStoryContext(StringBuilder builder, StoryNarrativeSettingsView? storyContext)
+    {
+        var context = storyContext ?? CreateDefaultStoryContext();
+        var hasGenre = !string.IsNullOrWhiteSpace(context.Genre);
+        var hasSetting = !string.IsNullOrWhiteSpace(context.Setting);
+        var hasTone = !string.IsNullOrWhiteSpace(context.Tone);
+        var hasDirection = !string.IsNullOrWhiteSpace(context.StoryDirection);
+
+        if (!hasGenre && !hasSetting && !hasTone && !hasDirection)
+            return;
+
+        builder.AppendLine("**Story context:**");
+        if (hasGenre)
+            builder.AppendLine($"- Genre: {PromptInlineText(context.Genre)}");
+        if (hasSetting)
+            builder.AppendLine($"- Setting: {PromptInlineText(context.Setting)}");
+        if (hasTone)
+            builder.AppendLine($"- Tone: {PromptInlineText(context.Tone)}");
+        if (hasDirection)
+            builder.AppendLine($"- Story premise / direction: {PromptInlineText(context.StoryDirection)}");
+        builder.AppendLine();
+    }
+
+    private static void AppendContentGuidance(StringBuilder builder, StoryNarrativeSettingsView? storyContext)
+    {
+        var context = storyContext ?? CreateDefaultStoryContext();
+        builder.AppendLine("**Content guidance:**");
+        builder.AppendLine($"- Explicit content: {FormatContentIntensity(context.ExplicitContent)}");
+        builder.AppendLine($"- Violent content: {FormatContentIntensity(context.ViolentContent)}");
+        builder.AppendLine();
+    }
+
+    private static string FormatContentIntensity(StoryContentIntensity intensity) => intensity switch
+    {
+        StoryContentIntensity.Forbidden => "Forbidden. Do not introduce or describe this content.",
+        StoryContentIntensity.Encouraged => "Encouraged when supported and scene-relevant. Lean into it without inventing it.",
+        _ => "Allowed when naturally supported by the scene."
+    };
+
+    private static StoryNarrativeSettingsView CreateDefaultStoryContext() => new(
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        StoryContentIntensity.Allowed,
+        StoryContentIntensity.Allowed);
 
     private static string TruncateProcessDetail(string detail) =>
         detail.Length <= 4000 ? detail : $"{detail[..3997].TrimEnd()}...";

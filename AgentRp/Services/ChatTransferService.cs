@@ -10,7 +10,7 @@ public sealed class ChatTransferService(
     IActivityNotifier activityNotifier,
     IAgentCatalog agentCatalog) : IChatTransferService
 {
-    private const int CurrentSchemaVersion = 1;
+    private const int CurrentSchemaVersion = 2;
 
     private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
     {
@@ -48,7 +48,7 @@ public sealed class ChatTransferService(
             availableSections.Characters,
             availableSections.Locations,
             availableSections.Items,
-            availableSections.History,
+            availableSections.StoryContext,
             availableSections.SceneState);
     }
 
@@ -77,7 +77,7 @@ public sealed class ChatTransferService(
                 availableSections.Characters,
                 availableSections.Locations,
                 availableSections.Items,
-                availableSections.History,
+                availableSections.StoryContext,
                 availableSections.SceneState)
             : new ChatTransferSelection(
                 false,
@@ -145,7 +145,8 @@ public sealed class ChatTransferService(
                 normalizedSelection.Characters ? story.Characters : null,
                 normalizedSelection.Locations ? story.Locations : null,
                 normalizedSelection.Items ? story.Items : null,
-                normalizedSelection.History ? story.History : null,
+                normalizedSelection.StoryContext ? story.StoryContext : null,
+                normalizedSelection.StoryContext ? story.History : null,
                 normalizedSelection.Messages
                     ? messages?.Select(message => new ChatTransferMessageRecord(
                             message.Id,
@@ -275,7 +276,10 @@ public sealed class ChatTransferService(
             itemMap = [];
         }
 
-        var history = normalizedSelection.History && package.Payload.History is not null
+        var storyContext = normalizedSelection.StoryContext && package.Payload.StoryContext is not null
+            ? CloneStoryContext(package.Payload.StoryContext)
+            : ChatStoryContextDocument.Empty;
+        var history = normalizedSelection.StoryContext && package.Payload.History is not null
             ? CloneHistory(package.Payload.History, characterMap, locationMap, itemMap)
             : ChatStoryHistoryDocument.Empty;
         var scene = normalizedSelection.SceneState && package.Payload.SceneState is not null
@@ -330,12 +334,14 @@ public sealed class ChatTransferService(
             Characters = characterDocuments,
             Locations = locationDocuments,
             Items = itemDocuments,
+            StoryContext = storyContext,
             History = history,
             Scene = SanitizeScene(new ChatStory
             {
                 Characters = characterDocuments,
                 Locations = locationDocuments,
                 Items = itemDocuments,
+                StoryContext = storyContext,
                 History = history,
                 Scene = scene
             })
@@ -390,7 +396,7 @@ public sealed class ChatTransferService(
         availableSections.Characters && selection.Characters,
         availableSections.Locations && selection.Locations,
         availableSections.Items && selection.Items,
-        availableSections.History && selection.History,
+        availableSections.StoryContext && selection.StoryContext,
         availableSections.SceneState && selection.SceneState);
 
     private static ChatTransferSelection GetAvailableSections(ChatTransferPayload payload) => new(
@@ -400,7 +406,7 @@ public sealed class ChatTransferService(
         payload.Characters is not null,
         payload.Locations is not null,
         payload.Items is not null,
-        payload.History is not null,
+        payload.StoryContext is not null && payload.History is not null,
         payload.SceneState is not null);
 
     private static bool CanIncludeChatLog(ChatTransferSelection availableSections) =>
@@ -410,7 +416,7 @@ public sealed class ChatTransferService(
         && availableSections.Characters
         && availableSections.Locations
         && availableSections.Items
-        && availableSections.History
+        && availableSections.StoryContext
         && availableSections.SceneState;
 
     private static (ChatStoryCharactersDocument Document, Dictionary<Guid, Guid> Map) CloneCharacters(ChatStoryCharactersDocument document)
@@ -478,6 +484,14 @@ public sealed class ChatTransferService(
                 ItemIds = RemapIds(entry.ItemIds, itemMap)
             })
             .ToList());
+
+    private static ChatStoryContextDocument CloneStoryContext(ChatStoryContextDocument document) => new(
+        document.Genre,
+        document.Setting,
+        document.Tone,
+        document.StoryDirection,
+        document.ExplicitContent,
+        document.ViolentContent);
 
     private static ChatStorySceneDocument CloneScene(
         ChatStorySceneDocument document,

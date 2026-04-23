@@ -80,14 +80,14 @@ public sealed class ChatStoryService(
         return MapItems(story);
     }
 
-    public async Task<StoryHistoryView?> GetHistoryAsync(Guid threadId, CancellationToken cancellationToken)
+    public async Task<StoryContextView?> GetStoryContextAsync(Guid threadId, CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         var story = await GetOrCreateStoryAsync(dbContext, threadId, cancellationToken);
         if (story is null)
             return null;
 
-        return MapHistory(story);
+        return MapStoryContext(story);
     }
 
     public async Task<StoryCharacterEditorView> UpsertCharacterAsync(UpsertCharacter command, CancellationToken cancellationToken)
@@ -381,6 +381,24 @@ public sealed class ChatStoryService(
         await SaveStoryAsync(dbContext, story, cancellationToken);
     }
 
+    public async Task<StoryNarrativeSettingsView> UpdateStoryNarrativeSettingsAsync(UpdateStoryNarrativeSettings command, CancellationToken cancellationToken)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var story = await GetOrCreateStoryAsync(dbContext, command.ThreadId, cancellationToken)
+            ?? throw new InvalidOperationException("The selected chat story could not be found.");
+
+        story.StoryContext = new ChatStoryContextDocument(
+            NormalizeOptionalValue(command.Genre),
+            NormalizeOptionalValue(command.Setting),
+            NormalizeOptionalValue(command.Tone),
+            NormalizeOptionalValue(command.StoryDirection),
+            command.ExplicitContent,
+            command.ViolentContent);
+
+        await SaveStoryAsync(dbContext, story, cancellationToken);
+        return MapNarrativeSettings(story.StoryContext);
+    }
+
     public async Task UpdateScenePresenceAsync(UpdateScenePresence command, CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -425,6 +443,7 @@ public sealed class ChatStoryService(
         story.Locations = story.Locations;
         story.Items = story.Items;
         story.History = story.History;
+        story.StoryContext = story.StoryContext;
         story.Scene = SanitizeScene(story);
         story.UpdatedUtc = DateTime.UtcNow;
 
@@ -582,7 +601,8 @@ public sealed class ChatStoryService(
         document.LocationId,
         story.Scene.PresentItemIds.Contains(document.Id));
 
-    private static StoryHistoryView MapHistory(ChatStory story) => new(
+    private static StoryContextView MapStoryContext(ChatStory story) => new(
+        MapNarrativeSettings(story.StoryContext),
         story.History.Facts
             .OrderBy(x => x.SortOrder)
             .Select(MapFact)
@@ -591,6 +611,14 @@ public sealed class ChatStoryService(
             .OrderBy(x => x.SortOrder)
             .Select(MapTimelineEntry)
             .ToList());
+
+    private static StoryNarrativeSettingsView MapNarrativeSettings(ChatStoryContextDocument document) => new(
+        document.Genre,
+        document.Setting,
+        document.Tone,
+        document.StoryDirection,
+        document.ExplicitContent,
+        document.ViolentContent);
 
     private static StoryHistoryFactView MapFact(StoryHistoryFactDocument document) => new(
         document.Id,

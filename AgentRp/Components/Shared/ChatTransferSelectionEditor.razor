@@ -19,7 +19,7 @@
             <label class="form-check-label fw-semibold" for="@MessagesId">Messages</label>
         </div>
         <div class="small text-body-secondary ms-4">
-            Includes the full branch graph and makes this a full-copy transfer.
+            Includes the full branch graph and automatically includes all story data, including story context.
         </div>
     </div>
 
@@ -91,13 +91,16 @@
 
     <div>
         <div class="form-check">
-            <input id="@HistoryId"
+            <input id="@StoryContextId"
                    class="form-check-input"
                    type="checkbox"
-                   checked="@EffectiveSelection.History"
-                   disabled="@IsDisabled(AvailableSections.History, LockedSections.History)"
-                   @onchange="args => UpdateSelection(EffectiveSelection with { History = GetCheckedValue(args) })" />
-            <label class="form-check-label fw-semibold" for="@HistoryId">History</label>
+                   checked="@EffectiveSelection.StoryContext"
+                   disabled="@IsDisabled(AvailableSections.StoryContext, LockedSections.StoryContext)"
+                   @onchange="args => UpdateSelection(EffectiveSelection with { StoryContext = GetCheckedValue(args) })" />
+            <label class="form-check-label fw-semibold" for="@StoryContextId">Story Context</label>
+        </div>
+        <div class="small text-body-secondary ms-4">
+            Includes narrative settings, facts, and timeline entries together.
         </div>
     </div>
 
@@ -143,7 +146,7 @@
 
     private string ItemsId { get; } = $"chat-transfer-items-{Guid.NewGuid():N}";
 
-    private string HistoryId { get; } = $"chat-transfer-history-{Guid.NewGuid():N}";
+    private string StoryContextId { get; } = $"chat-transfer-story-context-{Guid.NewGuid():N}";
 
     private string SceneStateId { get; } = $"chat-transfer-scene-state-{Guid.NewGuid():N}";
 

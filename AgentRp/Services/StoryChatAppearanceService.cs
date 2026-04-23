@@ -43,7 +43,9 @@ public sealed class StoryChatAppearanceService(
                     Microsoft.Extensions.AI.ChatRole.User,
                     StoryChatAppearancePromptBuilder.BuildUserPrompt(
                         BuildPromptCharacters(story, latestEffectiveCharacters),
-                        transcriptSinceLatestEntry))
+                        transcriptSinceLatestEntry,
+                        story.StoryContext.ExplicitContent,
+                        story.StoryContext.ViolentContent))
             ],
             options: new ChatOptions { Temperature = 0.2f },
             useJsonSchemaResponseFormat: agent.UseJsonSchemaResponseFormat,
@@ -505,13 +507,20 @@ internal static class StoryChatAppearancePromptBuilder
 
         The summary must mention only characters with hasCurrentSceneState true.
         The summary must describe each character as they appear now.
+        Respect the supplied explicit-content and violent-content guidance.
         """;
 
     internal static string BuildUserPrompt(
         IReadOnlyList<StoryChatAppearancePromptCharacter> characters,
-        IReadOnlyList<StorySceneTranscriptMessage> transcriptSinceLatestEntry)
+        IReadOnlyList<StorySceneTranscriptMessage> transcriptSinceLatestEntry,
+        StoryContentIntensity explicitContent,
+        StoryContentIntensity violentContent)
     {
         var builder = new StringBuilder();
+        builder.AppendLine("Content guidance:");
+        builder.AppendLine($"- Explicit content: {FormatContentIntensity(explicitContent)}");
+        builder.AppendLine($"- Violent content: {FormatContentIntensity(violentContent)}");
+        builder.AppendLine();
         builder.AppendLine("Characters in the scene with initial appearance:");
 
         foreach (var character in characters)
@@ -546,9 +555,19 @@ internal static class StoryChatAppearancePromptBuilder
             - Include where the character is relative to other characters, furniture, and objects when supported
             - Include current interaction with sheets, bed, doorway, wall, chair, or other visible scene elements when supported
             - If a prior detail is not reaffirmed and may no longer be true, leave it out
+            - Forbidden means do not include that kind of detail
+            - Allowed means include it only when naturally supported
+            - Encouraged means prefer supported detail over softening it, but never invent it
             """);
         return builder.ToString().TrimEnd();
     }
+
+    private static string FormatContentIntensity(StoryContentIntensity intensity) => intensity switch
+    {
+        StoryContentIntensity.Forbidden => "Forbidden",
+        StoryContentIntensity.Encouraged => "Encouraged",
+        _ => "Allowed"
+    };
 
     private static string PromptInlineText(string? value, string fallback) =>
         string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();

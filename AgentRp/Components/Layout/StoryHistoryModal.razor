@@ -1,18 +1,26 @@
 @inject IChatStoryService ChatStoryService
 @inject IStoryFieldGuidanceService StoryFieldGuidanceService
+@inject IUserFeedbackService UserFeedbackService
 @inject ILogger<StoryHistoryModal> Logger
 
-<AppModal IsOpen="IsOpen" Title="History" OnClose="CloseAsync" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down">
+<AppModal IsOpen="IsOpen" Title="Story Context" OnClose="CloseAsync" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down">
     @if (_isLoading)
     {
         <div class="d-flex align-items-center gap-3 py-3">
             <div class="spinner-border spinner-border-sm" role="status"></div>
-            <span>Loading history...</span>
+            <span>Loading story context...</span>
         </div>
     }
     else
     {
         <ul class="nav nav-tabs mb-3">
+            <li class="nav-item">
+                <button type="button"
+                        class="nav-link @(_activeTab == StoryHistoryTab.Narrative ? "active" : string.Empty)"
+                        @onclick="() => SetActiveTab(StoryHistoryTab.Narrative)">
+                    Narrative
+                </button>
+            </li>
             <li class="nav-item">
                 <button type="button"
                         class="nav-link @(_activeTab == StoryHistoryTab.Facts ? "active" : string.Empty)"
@@ -31,7 +39,91 @@
 
         <InlineAlert Message="@_errorMessage" CssClass="alert alert-danger mb-3" />
 
-        @if (_activeTab == StoryHistoryTab.Facts)
+        @if (_activeTab == StoryHistoryTab.Narrative)
+        {
+            <div class="d-flex flex-column gap-4">
+                <div class="small text-body-secondary">
+                    These story-wide settings guide planning and prose, while the content sliders also guide appearance resolution.
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-12 col-md-6">
+                        <label class="form-label" for="story-context-genre">Genre</label>
+                        <input id="story-context-genre" class="form-control" @bind="_storyGenre" />
+                    </div>
+
+                    <div class="col-12 col-md-6">
+                        <label class="form-label" for="story-context-tone">Tone</label>
+                        <input id="story-context-tone" class="form-control" @bind="_storyTone" />
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label" for="story-context-setting">Setting</label>
+                        <textarea id="story-context-setting" class="form-control" rows="4" @bind="_storySetting"></textarea>
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label" for="story-context-direction">Story Premise / Direction</label>
+                        <textarea id="story-context-direction" class="form-control" rows="4" @bind="_storyDirection"></textarea>
+                    </div>
+
+                    <div class="col-12 col-lg-6">
+                        <label class="form-label d-flex align-items-center justify-content-between gap-2" for="story-context-explicit">
+                            <span>Explicit Content</span>
+                            <span class="text-body-secondary">@FormatContentIntensity(_explicitContent)</span>
+                        </label>
+                        <input id="story-context-explicit"
+                               class="form-range"
+                               type="range"
+                               min="0"
+                               max="2"
+                               step="1"
+                               @bind:get="ExplicitContentValue"
+                               @bind:set="value => ExplicitContentValue = value"
+                               @bind:event="oninput" />
+                        <div class="d-flex justify-content-between small text-body-secondary">
+                            <span>Forbidden</span>
+                            <span>Allowed</span>
+                            <span>Encouraged</span>
+                        </div>
+                    </div>
+
+                    <div class="col-12 col-lg-6">
+                        <label class="form-label d-flex align-items-center justify-content-between gap-2" for="story-context-violent">
+                            <span>Violent Content</span>
+                            <span class="text-body-secondary">@FormatContentIntensity(_violentContent)</span>
+                        </label>
+                        <input id="story-context-violent"
+                               class="form-range"
+                               type="range"
+                               min="0"
+                               max="2"
+                               step="1"
+                               @bind:get="ViolentContentValue"
+                               @bind:set="value => ViolentContentValue = value"
+                               @bind:event="oninput" />
+                        <div class="d-flex justify-content-between small text-body-secondary">
+                            <span>Forbidden</span>
+                            <span>Allowed</span>
+                            <span>Encouraged</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+                    <BusyButton Class="btn btn-primary"
+                                IsBusy="_isSaving"
+                                Disabled="@_isSaving"
+                                BusyText="Saving..."
+                                OnClick="SaveNarrativeSettingsAsync">
+                        <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                        Save
+                    </BusyButton>
+                </div>
+            </div>
+        }
+        else if (_activeTab == StoryHistoryTab.Facts)
         {
             <div class="row g-3">
                 <div class="col-12 col-lg-4">
@@ -46,14 +138,14 @@
                         </button>
                     </div>
 
-                    @if (_history?.Facts.Count is not > 0)
+                    @if (_storyContext?.Facts.Count is not > 0)
                     {
                         <div class="alert alert-light border mb-0">No facts yet.</div>
                     }
                     else
                     {
                         <div class="list-group">
-                            @foreach (var fact in _history!.Facts)
+                            @foreach (var fact in _storyContext!.Facts)
                             {
                                 var isSelected = _selectedFactId == fact.FactId;
 
@@ -207,13 +299,16 @@
                             </div>
 
                             <div class="d-flex gap-2">
-                                <button type="button"
-                                        class="btn btn-outline-primary"
-                                        title="@BuildAiButtonTitle()"
-                                        aria-label="@BuildAiButtonTitle()"
-                                        @onclick="OpenAiAssist">
-                                    <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
-                                </button>
+                                @if (_activeTab != StoryHistoryTab.Narrative)
+                                {
+                                    <button type="button"
+                                            class="btn btn-outline-primary"
+                                            title="@BuildAiButtonTitle()"
+                                            aria-label="@BuildAiButtonTitle()"
+                                            @onclick="OpenAiAssist">
+                                        <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                                    </button>
+                                }
                                 <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
                                 <BusyButton Class="btn btn-primary"
                                             IsBusy="_isSaving"
@@ -244,14 +339,14 @@
                         </button>
                     </div>
 
-                    @if (_history?.TimelineEntries.Count is not > 0)
+                    @if (_storyContext?.TimelineEntries.Count is not > 0)
                     {
                         <div class="alert alert-light border mb-0">No timeline entries yet.</div>
                     }
                     else
                     {
                         <div class="list-group">
-                            @foreach (var entry in _history!.TimelineEntries)
+                            @foreach (var entry in _storyContext!.TimelineEntries)
                             {
                                 var isSelected = _selectedTimelineEntryId == entry.TimelineEntryId;
 
@@ -431,13 +526,16 @@
                             </div>
 
                             <div class="d-flex gap-2">
-                                <button type="button"
-                                        class="btn btn-outline-primary"
-                                        title="@BuildAiButtonTitle()"
-                                        aria-label="@BuildAiButtonTitle()"
-                                        @onclick="OpenAiAssist">
-                                    <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
-                                </button>
+                                @if (_activeTab != StoryHistoryTab.Narrative)
+                                {
+                                    <button type="button"
+                                            class="btn btn-outline-primary"
+                                            title="@BuildAiButtonTitle()"
+                                            aria-label="@BuildAiButtonTitle()"
+                                            @onclick="OpenAiAssist">
+                                        <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                                    </button>
+                                }
                                 <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
                                 <BusyButton Class="btn btn-primary"
                                             IsBusy="_isSaving"
@@ -486,14 +584,20 @@
     private bool _isDeleting;
     private bool _wasOpen;
     private Guid? _loadedThreadId;
-    private StoryHistoryTab _activeTab = StoryHistoryTab.Facts;
-    private StoryHistoryView? _history;
+    private StoryHistoryTab _activeTab = StoryHistoryTab.Narrative;
+    private StoryContextView? _storyContext;
     private IReadOnlyList<StoryCharacterEditorView> _characters = [];
     private IReadOnlyList<StoryLocationEditorView> _locations = [];
     private IReadOnlyList<StoryItemEditorView> _items = [];
     private IReadOnlyList<StoryEntityFieldGuidanceView> _factFieldGuidance = [];
     private IReadOnlyList<StoryEntityFieldGuidanceView> _timelineFieldGuidance = [];
     private string? _errorMessage;
+    private string _storyGenre = string.Empty;
+    private string _storySetting = string.Empty;
+    private string _storyTone = string.Empty;
+    private string _storyDirection = string.Empty;
+    private StoryContentIntensity _explicitContent = StoryContentIntensity.Allowed;
+    private StoryContentIntensity _violentContent = StoryContentIntensity.Allowed;
     private Guid? _selectedFactId;
     private string _factTitle = string.Empty;
     private string _factSummary = string.Empty;
@@ -536,26 +640,41 @@
         _isLoading = true;
         try
         {
-            var historyTask = ChatStoryService.GetHistoryAsync(ThreadId, CancellationToken.None);
+            var storyContextTask = ChatStoryService.GetStoryContextAsync(ThreadId, CancellationToken.None);
             var characterTask = ChatStoryService.GetCharactersAsync(ThreadId, CancellationToken.None);
             var locationTask = ChatStoryService.GetLocationEditorsAsync(ThreadId, CancellationToken.None);
             var itemTask = ChatStoryService.GetItemsAsync(ThreadId, CancellationToken.None);
             var factGuidanceTask = StoryFieldGuidanceService.GetGuidanceAsync(StoryEntityKind.HistoryFact, CancellationToken.None);
             var timelineGuidanceTask = StoryFieldGuidanceService.GetGuidanceAsync(StoryEntityKind.TimelineEntry, CancellationToken.None);
-            await Task.WhenAll(historyTask, characterTask, locationTask, itemTask, factGuidanceTask, timelineGuidanceTask);
+            await Task.WhenAll(storyContextTask, characterTask, locationTask, itemTask, factGuidanceTask, timelineGuidanceTask);
 
-            _history = historyTask.Result ?? new StoryHistoryView([], []);
+            _storyContext = storyContextTask.Result ?? new StoryContextView(
+                new StoryNarrativeSettingsView(
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    StoryContentIntensity.Allowed,
+                    StoryContentIntensity.Allowed),
+                [],
+                []);
             _characters = characterTask.Result;
             _locations = locationTask.Result;
             _items = itemTask.Result;
             _factFieldGuidance = factGuidanceTask.Result;
             _timelineFieldGuidance = timelineGuidanceTask.Result;
+            LoadNarrativeSettings();
+
+            if (_activeTab == StoryHistoryTab.Narrative)
+            {
+                return;
+            }
 
             if (_activeTab == StoryHistoryTab.Facts)
             {
                 var targetFactId = selectedFactId
                     ?? _selectedFactId
-                    ?? _history.Facts.FirstOrDefault()?.FactId;
+                    ?? _storyContext.Facts.FirstOrDefault()?.FactId;
                 if (targetFactId.HasValue)
                     SelectFact(targetFactId.Value);
                 else
@@ -565,7 +684,7 @@
             {
                 var targetTimelineEntryId = selectedTimelineEntryId
                     ?? _selectedTimelineEntryId
-                    ?? _history.TimelineEntries.FirstOrDefault()?.TimelineEntryId;
+                    ?? _storyContext.TimelineEntries.FirstOrDefault()?.TimelineEntryId;
                 if (targetTimelineEntryId.HasValue)
                     SelectTimelineEntry(targetTimelineEntryId.Value);
                 else
@@ -582,17 +701,23 @@
     {
         _errorMessage = null;
         _activeTab = tab;
+        if (tab == StoryHistoryTab.Narrative)
+        {
+            LoadNarrativeSettings();
+            return;
+        }
+
         if (tab == StoryHistoryTab.Facts)
         {
-            if (_history?.Facts.Count > 0)
-                SelectFact(_selectedFactId ?? _history.Facts[0].FactId);
+            if (_storyContext?.Facts.Count > 0)
+                SelectFact(_selectedFactId ?? _storyContext.Facts[0].FactId);
             else
                 BeginCreateFact();
         }
         else
         {
-            if (_history?.TimelineEntries.Count > 0)
-                SelectTimelineEntry(_selectedTimelineEntryId ?? _history.TimelineEntries[0].TimelineEntryId);
+            if (_storyContext?.TimelineEntries.Count > 0)
+                SelectTimelineEntry(_selectedTimelineEntryId ?? _storyContext.TimelineEntries[0].TimelineEntryId);
             else
                 BeginCreateTimelineEntry();
         }
@@ -612,7 +737,7 @@
 
     private void SelectFact(Guid factId)
     {
-        var fact = _history?.Facts.FirstOrDefault(x => x.FactId == factId);
+        var fact = _storyContext?.Facts.FirstOrDefault(x => x.FactId == factId);
         if (fact is null)
         {
             BeginCreateFact();
@@ -633,7 +758,7 @@
     {
         _errorMessage = null;
         _selectedTimelineEntryId = null;
-        _timelineSortOrder = (_history?.TimelineEntries.Count ?? 0) + 1;
+        _timelineSortOrder = (_storyContext?.TimelineEntries.Count ?? 0) + 1;
         _timelineWhenText = string.Empty;
         _timelineTitle = string.Empty;
         _timelineSummary = string.Empty;
@@ -645,7 +770,7 @@
 
     private void SelectTimelineEntry(Guid timelineEntryId)
     {
-        var entry = _history?.TimelineEntries.FirstOrDefault(x => x.TimelineEntryId == timelineEntryId);
+        var entry = _storyContext?.TimelineEntries.FirstOrDefault(x => x.TimelineEntryId == timelineEntryId);
         if (entry is null)
         {
             BeginCreateTimelineEntry();
@@ -662,6 +787,51 @@
         _timelineCharacterIds = [.. entry.CharacterIds];
         _timelineLocationIds = [.. entry.LocationIds];
         _timelineItemIds = [.. entry.ItemIds];
+    }
+
+    private void LoadNarrativeSettings()
+    {
+        var settings = _storyContext?.NarrativeSettings;
+        _storyGenre = settings?.Genre ?? string.Empty;
+        _storySetting = settings?.Setting ?? string.Empty;
+        _storyTone = settings?.Tone ?? string.Empty;
+        _storyDirection = settings?.StoryDirection ?? string.Empty;
+        _explicitContent = settings?.ExplicitContent ?? StoryContentIntensity.Allowed;
+        _violentContent = settings?.ViolentContent ?? StoryContentIntensity.Allowed;
+    }
+
+    private async Task SaveNarrativeSettingsAsync()
+    {
+        _errorMessage = null;
+        _isSaving = true;
+        try
+        {
+            var settings = await ChatStoryService.UpdateStoryNarrativeSettingsAsync(
+                new UpdateStoryNarrativeSettings(
+                    ThreadId,
+                    _storyGenre,
+                    _storySetting,
+                    _storyTone,
+                    _storyDirection,
+                    _explicitContent,
+                    _violentContent),
+                CancellationToken.None);
+
+            _storyContext = (_storyContext ?? new StoryContextView(settings, [], [])) with { NarrativeSettings = settings };
+            LoadNarrativeSettings();
+            UserFeedbackService.ShowBackgroundSuccess("Story context saved.", "Story Context");
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving story context failed for chat {ChatId}.", ThreadId);
+            _errorMessage = "Saving story context failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Story Context");
+        }
+        finally
+        {
+            _isSaving = false;
+        }
     }
 
     private async Task SaveFactAsync()
@@ -683,12 +853,14 @@
                 CancellationToken.None);
 
             await LoadAsync(savedFact.FactId, _selectedTimelineEntryId);
+            UserFeedbackService.ShowBackgroundSuccess($"Fact '{BuildFactDisplayName()}' saved.", "Story Context");
             await NotifyChangedAsync();
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving history fact {FactTitle} failed for chat {ChatId}.", _factTitle, ThreadId);
             _errorMessage = $"Saving history fact '{BuildFactDisplayName()}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Story Context");
         }
         finally
         {
@@ -708,12 +880,14 @@
         {
             await ChatStoryService.DeleteHistoryFactAsync(new DeleteHistoryFact(ThreadId, _selectedFactId.Value), CancellationToken.None);
             await LoadAsync(null, _selectedTimelineEntryId);
+            UserFeedbackService.ShowBackgroundSuccess($"Fact '{displayName}' deleted.", "Story Context");
             await NotifyChangedAsync();
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Deleting history fact {FactId} failed for chat {ChatId}.", _selectedFactId.Value, ThreadId);
             _errorMessage = $"Deleting history fact '{displayName}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Story Context");
         }
         finally
         {
@@ -742,12 +916,14 @@
                 CancellationToken.None);
 
             await LoadAsync(_selectedFactId, savedEntry.TimelineEntryId);
+            UserFeedbackService.ShowBackgroundSuccess($"Timeline entry '{BuildTimelineDisplayName()}' saved.", "Story Context");
             await NotifyChangedAsync();
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving timeline entry {TimelineTitle} failed for chat {ChatId}.", _timelineTitle, ThreadId);
             _errorMessage = $"Saving timeline entry '{BuildTimelineDisplayName()}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Story Context");
         }
         finally
         {
@@ -767,12 +943,14 @@
         {
             await ChatStoryService.DeleteTimelineEntryAsync(new DeleteTimelineEntry(ThreadId, _selectedTimelineEntryId.Value), CancellationToken.None);
             await LoadAsync(_selectedFactId, null);
+            UserFeedbackService.ShowBackgroundSuccess($"Timeline entry '{displayName}' deleted.", "Story Context");
             await NotifyChangedAsync();
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Deleting timeline entry {TimelineEntryId} failed for chat {ChatId}.", _selectedTimelineEntryId.Value, ThreadId);
             _errorMessage = $"Deleting timeline entry '{displayName}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Story Context");
         }
         finally
         {
@@ -848,6 +1026,18 @@
 
     private string BuildTimelineDisplayName() => string.IsNullOrWhiteSpace(_timelineTitle) ? "Untitled Timeline Entry" : _timelineTitle.Trim();
 
+    private int ExplicitContentValue
+    {
+        get => ConvertContentIntensityToValue(_explicitContent);
+        set => _explicitContent = ConvertValueToContentIntensity(value);
+    }
+
+    private int ViolentContentValue
+    {
+        get => ConvertContentIntensityToValue(_violentContent);
+        set => _violentContent = ConvertValueToContentIntensity(value);
+    }
+
     private string BuildAiButtonTitle() => _activeTab switch
     {
         StoryHistoryTab.Facts when _selectedFactId.HasValue => "Edit fact with prompt",
@@ -906,8 +1096,25 @@
         _ => guidanceFormat.ToString().ToLowerInvariant()
     };
 
+    private static int ConvertContentIntensityToValue(StoryContentIntensity intensity) => intensity switch
+    {
+        StoryContentIntensity.Forbidden => 0,
+        StoryContentIntensity.Encouraged => 2,
+        _ => 1
+    };
+
+    private static StoryContentIntensity ConvertValueToContentIntensity(int value) => value switch
+    {
+        <= 0 => StoryContentIntensity.Forbidden,
+        >= 2 => StoryContentIntensity.Encouraged,
+        _ => StoryContentIntensity.Allowed
+    };
+
+    private static string FormatContentIntensity(StoryContentIntensity intensity) => intensity.ToString();
+
     private enum StoryHistoryTab
     {
+        Narrative,
         Facts,
         Timeline
     }

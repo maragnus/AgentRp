@@ -64,6 +64,8 @@ public sealed class AppContext(DbContextOptions<AppContext> options) : DbContext
                 .HasColumnType("nvarchar(max)");
             builder.Property(x => x.HistoryJson)
                 .HasColumnType("nvarchar(max)");
+            builder.Property(x => x.StoryContextJson)
+                .HasColumnType("nvarchar(max)");
         });
 
         modelBuilder.Entity<ChatMessage>(builder =>

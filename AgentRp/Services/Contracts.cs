@@ -87,7 +87,7 @@ public sealed record ChatTransferSelection(
     bool Characters,
     bool Locations,
     bool Items,
-    bool History,
+    bool StoryContext,
     bool SceneState)
 {
     public static ChatTransferSelection None { get; } = new(false, false, false, false, false, false, false, false);
@@ -115,6 +115,7 @@ public sealed record ChatTransferPayload(
     ChatStoryCharactersDocument? Characters,
     ChatStoryLocationsDocument? Locations,
     ChatStoryItemsDocument? Items,
+    ChatStoryContextDocument? StoryContext,
     ChatStoryHistoryDocument? History,
     IReadOnlyList<ChatTransferMessageRecord>? Messages,
     IReadOnlyList<ChatTransferSnapshotRecord>? Snapshots,
@@ -282,7 +283,16 @@ public sealed record StoryTimelineEntryView(
     IReadOnlyList<Guid> LocationIds,
     IReadOnlyList<Guid> ItemIds);
 
-public sealed record StoryHistoryView(
+public sealed record StoryNarrativeSettingsView(
+    string Genre,
+    string Setting,
+    string Tone,
+    string StoryDirection,
+    StoryContentIntensity ExplicitContent,
+    StoryContentIntensity ViolentContent);
+
+public sealed record StoryContextView(
+    StoryNarrativeSettingsView NarrativeSettings,
     IReadOnlyList<StoryHistoryFactView> Facts,
     IReadOnlyList<StoryTimelineEntryView> TimelineEntries);
 
@@ -381,6 +391,15 @@ public sealed record UpsertTimelineEntry(
 public sealed record DeleteTimelineEntry(
     Guid ThreadId,
     Guid TimelineEntryId);
+
+public sealed record UpdateStoryNarrativeSettings(
+    Guid ThreadId,
+    string Genre,
+    string Setting,
+    string Tone,
+    string StoryDirection,
+    StoryContentIntensity ExplicitContent,
+    StoryContentIntensity ViolentContent);
 
 public sealed record UpdateScenePresence(
     Guid ThreadId,
@@ -775,6 +794,7 @@ public sealed record StorySceneGenerationContext(
     StorySceneLocationContext? CurrentLocation,
     IReadOnlyList<StorySceneCharacterContext> Characters,
     IReadOnlyList<StorySceneObjectContext> SceneObjects,
+    StoryNarrativeSettingsView StoryContext,
     string HistorySummary,
     StoryChatSnapshotSummaryView? LatestSnapshot,
     IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceSnapshot);
@@ -902,7 +922,7 @@ public interface IChatStoryService
 
     Task<IReadOnlyList<StoryItemEditorView>> GetItemsAsync(Guid threadId, CancellationToken cancellationToken);
 
-    Task<StoryHistoryView?> GetHistoryAsync(Guid threadId, CancellationToken cancellationToken);
+    Task<StoryContextView?> GetStoryContextAsync(Guid threadId, CancellationToken cancellationToken);
 
     Task<StoryCharacterEditorView> UpsertCharacterAsync(UpsertCharacter command, CancellationToken cancellationToken);
 
@@ -925,6 +945,8 @@ public interface IChatStoryService
     Task<StoryTimelineEntryView> UpsertTimelineEntryAsync(UpsertTimelineEntry command, CancellationToken cancellationToken);
 
     Task DeleteTimelineEntryAsync(DeleteTimelineEntry command, CancellationToken cancellationToken);
+
+    Task<StoryNarrativeSettingsView> UpdateStoryNarrativeSettingsAsync(UpdateStoryNarrativeSettings command, CancellationToken cancellationToken);
 
     Task UpdateScenePresenceAsync(UpdateScenePresence command, CancellationToken cancellationToken);
 }
