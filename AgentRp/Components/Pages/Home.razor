@@ -86,6 +86,7 @@ else
                         var isEditing = message is not null && _editingMessageId == message.MessageId;
                         var isSnapshotExpanded = snapshot is not null && IsSnapshotExpanded(snapshot.SnapshotId);
                         var canRetryMessage = message is not null && CanRetryMessage(message);
+                        var canChangeMessageSpeaker = message is not null && CanChangeMessageSpeakerToSelectedSpeaker(message);
                         var canRegenerateProse = message is not null && CanRegenerateProse(message);
                         var canEditSavedPlan = message is not null && CanEditSavedPlan(message);
                         var displayContent = message is null ? string.Empty : GetDisplayContent(message);
@@ -257,6 +258,7 @@ else
                                                             var step = process.Steps[stepIndex];
                                                             var isStepExpanded = expandedStepId == step.StepId;
                                                             var stepDurationText = DescribeStepDuration(step);
+                                                            var stepTokenUsage = GetProcessStepTokenUsage(step);
                                                             var stepSubtitle = GetProcessStepSubtitle(process, step);
                                                             var stepBlocks = GetProcessStepBlocks(step);
                                                             var stepDividerClass = stepIndex > 0 ? "border-top mt-2 pt-2" : string.Empty;
@@ -281,6 +283,20 @@ else
                                                                                     {
                                                                                         <div class="small text-body-secondary text-nowrap">
                                                                                             <i class="fa-regular fa-clock me-1" aria-hidden="true"></i>@stepDurationText
+                                                                                        </div>
+                                                                                    }
+                                                                                    @if (stepTokenUsage.Count > 0)
+                                                                                    {
+                                                                                        <div class="d-flex align-items-center gap-2 small text-body-secondary text-nowrap">
+                                                                                            @for (var usageIndex = 0; usageIndex < stepTokenUsage.Count; usageIndex++)
+                                                                                            {
+                                                                                                <span>@stepTokenUsage[usageIndex]</span>
+
+                                                                                                @if (usageIndex < stepTokenUsage.Count - 1)
+                                                                                                {
+                                                                                                    <span aria-hidden="true">•</span>
+                                                                                                }
+                                                                                            }
                                                                                         </div>
                                                                                     }
                                                                                     <i class="fa-regular @(isStepExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
@@ -441,6 +457,20 @@ else
                                                                         title="Retry message as a new branch"
                                                                         aria-label="Retry message as a new branch">
                                                                 <i class="fa-regular fa-rotate-left" aria-hidden="true"></i>
+                                                            </BusyButton>
+                                                        }
+
+                                                        @if (canChangeMessageSpeaker)
+                                                        {
+                                                            <BusyButton Class="btn btn-outline-primary btn-sm"
+                                                                        OnClick="() => ChangeMessageSpeakerToSelectedSpeakerAsync(message)"
+                                                                        IsBusy="@(_reassigningMessageId == message.MessageId)"
+                                                                        BusyText=""
+                                                                        ShowBusyText="false"
+                                                                        Disabled="@(IsSceneInteractionLocked || _reassigningMessageId.HasValue)"
+                                                                        title="Change sender to you"
+                                                                        aria-label="Change sender to you">
+                                                                <i class="fa-regular fa-user-pen" aria-hidden="true"></i>
                                                             </BusyButton>
                                                         }
 
@@ -943,6 +973,7 @@ else
     private Guid? _retrySourceMessageId;
     private string? _retrySpeakerName;
     private Guid? _startingRetryMessageId;
+    private Guid? _reassigningMessageId;
     private Guid? _regeneratingProseMessageId;
     private Guid? _editingMessageId;
     private string _editingDraft = string.Empty;
@@ -1266,6 +1297,11 @@ else
         ClearRetryState(clearDraft: false);
     }
 
+    private bool CanChangeMessageSpeakerToSelectedSpeaker(StorySceneMessageView message) =>
+        _chat?.SelectedSpeaker.CharacterId is Guid selectedSpeakerCharacterId
+        && message.SpeakerCharacterId.HasValue
+        && message.SpeakerCharacterId.Value != selectedSpeakerCharacterId;
+
     private bool CanRetryMessage(StorySceneMessageView message) =>
         message.Process?.Status != ProcessRunStatus.Running;
 
@@ -1321,6 +1357,45 @@ else
         {
             _isSubmitting = false;
             _regeneratingProseMessageId = null;
+        }
+    }
+
+    private async Task ChangeMessageSpeakerToSelectedSpeakerAsync(StorySceneMessageView message)
+    {
+        if (_chat?.SelectedSpeaker.CharacterId is not Guid selectedSpeakerCharacterId || IsSceneInteractionLocked || !CanChangeMessageSpeakerToSelectedSpeaker(message))
+            return;
+
+        _isSubmitting = true;
+        _reassigningMessageId = message.MessageId;
+        _errorMessage = null;
+
+        try
+        {
+            CancelInlineEdit();
+            ClearRetryState(clearDraft: false);
+
+            var result = await StorySceneChatService.ChangeMessageSpeakerAsync(
+                new ChangeStorySceneMessageSpeaker(_chat.ThreadId, message.MessageId, selectedSpeakerCharacterId),
+                CancellationToken.None);
+
+            var selectedSpeakerName = _chat.SelectedSpeaker.Name;
+            await LoadChatAsync(_chat.ThreadId);
+            UserFeedbackService.ShowBackgroundSuccess(
+                result.CreatedBranch
+                    ? $"The message now speaks as {selectedSpeakerName} in a new branch because the original is already covered by a snapshot."
+                    : $"The message now speaks as {selectedSpeakerName}.",
+                "Sender Updated");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Changing the speaker for story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
+            _errorMessage = "Changing the message speaker failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Sender Update Failed");
+        }
+        finally
+        {
+            _isSubmitting = false;
+            _reassigningMessageId = null;
         }
     }
 
@@ -1797,6 +1872,19 @@ else
     private string? DescribeStepDuration(StorySceneProcessStepView step) =>
         step.StartedUtc.HasValue ? step.StartedUtc.Value.ToDurationText(step.CompletedUtc, _processDurationNowUtc) : null;
 
+    private static IReadOnlyList<string> GetProcessStepTokenUsage(StorySceneProcessStepView step)
+    {
+        var usage = new List<string>();
+        if (step.InputTokenCount.HasValue)
+            usage.Add($"In {step.InputTokenCount.Value:N0}");
+        if (step.OutputTokenCount.HasValue)
+            usage.Add($"Out {step.OutputTokenCount.Value:N0}");
+        if (step.TotalTokenCount.HasValue)
+            usage.Add($"Total {step.TotalTokenCount.Value:N0}");
+
+        return usage;
+    }
+
     private static string GetProcessStepSubtitle(StorySceneMessageProcessView process, StorySceneProcessStepView step)
     {
         if (IsAppearanceProcessStep(step)
@@ -1857,7 +1945,7 @@ else
     private static string GetProcessAppearancePendingText(StorySceneMessageProcessView process) =>
         process.Context?.Appearance is null
             ? "The appearance stage is still resolving the current scene cast. Editing becomes available after the first appearance block is recorded."
-            : "No editable appearance block is available for this process.";
+            : "No saved appearance block is available for this process.";
 
     private static string GetProcessTraceSectionSubtitle(StorySceneMessageProcessView process)
     {
@@ -2044,12 +2132,14 @@ else
                 CancellationToken.None);
 
             CancelAppearanceEdit();
+            UserFeedbackService.ShowBackgroundSuccess("The selected appearance block was updated.", "Appearance Updated");
             await LoadChatAsync(_chat.ThreadId);
         }
         catch (Exception exception)
         {
-            Logger.LogError(exception, "Saving latest appearance entry {AppearanceEntryId} failed for chat {ThreadId}.", appearance.AppearanceEntryId, _chat.ThreadId);
-            _errorMessage = "Saving the latest character appearance block failed.";
+            Logger.LogError(exception, "Saving appearance entry {AppearanceEntryId} failed for chat {ThreadId}.", appearance.AppearanceEntryId, _chat.ThreadId);
+            _errorMessage = "Saving the selected character appearance block failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Appearance Update Failed");
         }
         finally
         {

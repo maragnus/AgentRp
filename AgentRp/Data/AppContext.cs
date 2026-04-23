@@ -253,6 +253,12 @@ public sealed class ProcessStep
 
     public DateTime? CompletedUtc { get; set; }
 
+    public long? InputTokenCount { get; set; }
+
+    public long? OutputTokenCount { get; set; }
+
+    public long? TotalTokenCount { get; set; }
+
     public ProcessRun Run { get; set; } = null!;
 }
 

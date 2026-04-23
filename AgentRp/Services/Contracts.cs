@@ -80,6 +80,15 @@ public sealed record ChatMessageUpdate(
     Guid MessageId,
     string Content);
 
+public sealed record ChangeStorySceneMessageSpeaker(
+    Guid ThreadId,
+    Guid MessageId,
+    Guid SpeakerCharacterId);
+
+public sealed record ChangeStorySceneMessageSpeakerResult(
+    Guid MessageId,
+    bool CreatedBranch);
+
 public sealed record ChatTransferSelection(
     bool Messages,
     bool Snapshots,
@@ -652,6 +661,9 @@ public sealed record StorySceneProcessStepView(
     bool IsActive,
     DateTime? StartedUtc,
     DateTime? CompletedUtc,
+    long? InputTokenCount,
+    long? OutputTokenCount,
+    long? TotalTokenCount,
     StoryMessageProcessStepArtifact? Artifact);
 
 public sealed record StorySceneMessageProcessView(
@@ -794,6 +806,15 @@ public sealed record StorySceneAppearanceResolution(
     IReadOnlyList<StorySceneCharacterAppearanceView> EffectiveCharacters,
     IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceLatestEntry);
 
+public sealed record StoryMessageTokenUsage(
+    long? InputTokenCount,
+    long? OutputTokenCount,
+    long? TotalTokenCount);
+
+public sealed record StorySceneAppearanceStageResult(
+    StorySceneAppearanceResolution Appearance,
+    StoryMessageTokenUsage? TokenUsage);
+
 public sealed record StorySceneResponderSelectionResult(
     Guid? ActiveSpeakerCharacterId,
     string ActiveSpeakerName,
@@ -879,6 +900,8 @@ public interface IStorySceneChatService
 
     Task UpdateMessageAsync(ChatMessageUpdate request, CancellationToken cancellationToken);
 
+    Task<ChangeStorySceneMessageSpeakerResult> ChangeMessageSpeakerAsync(ChangeStorySceneMessageSpeaker request, CancellationToken cancellationToken);
+
     Task CreateBranchAsync(BranchStorySceneMessage request, CancellationToken cancellationToken);
 
     Task RegenerateProseAsync(
@@ -908,7 +931,7 @@ public interface IStoryChatSnapshotService
 
 public interface IStoryChatAppearanceService
 {
-    Task<StorySceneAppearanceResolution> ResolveLatestAppearanceAsync(
+    Task<StorySceneAppearanceStageResult> ResolveLatestAppearanceAsync(
         Guid threadId,
         IReadOnlyList<AgentRp.Data.ChatMessage> selectedPath,
         ChatStory story,
@@ -921,7 +944,7 @@ public interface IStoryChatAppearanceService
         ChatStory story,
         CancellationToken cancellationToken);
 
-    Task<StorySceneAppearanceEntryView> UpdateLatestEntryAsync(
+    Task<StorySceneAppearanceEntryView> UpdateEntryAsync(
         UpdateStorySceneAppearanceEntry request,
         CancellationToken cancellationToken);
 }

@@ -11,7 +11,7 @@ public sealed class StoryChatAppearanceService(
     IThreadAgentService threadAgentService) : IStoryChatAppearanceService
 {
 
-    public async Task<StorySceneAppearanceResolution> ResolveLatestAppearanceAsync(
+    public async Task<StorySceneAppearanceStageResult> ResolveLatestAppearanceAsync(
         Guid threadId,
         IReadOnlyList<DbChatMessage> selectedPath,
         ChatStory story,
@@ -19,7 +19,11 @@ public sealed class StoryChatAppearanceService(
         CancellationToken cancellationToken)
     {
         if (selectedPath.Count == 0)
-            return new StorySceneAppearanceResolution(null, BuildEffectiveCharacters(story, null), []);
+        {
+            return new StorySceneAppearanceStageResult(
+                new StorySceneAppearanceResolution(null, BuildEffectiveCharacters(story, null), []),
+                null);
+        }
 
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         var latestEntry = await GetLatestMatchingEntryAsync(dbContext, threadId, selectedPath, cancellationToken);
@@ -27,10 +31,14 @@ public sealed class StoryChatAppearanceService(
         var transcriptSinceLatestEntry = BuildTranscriptSinceLatestEntry(selectedPath, latestEntry, story.Characters.Entries);
 
         if (!writeChanges || transcriptSinceLatestEntry.Count == 0 || story.Scene.PresentCharacterIds.Count == 0)
-            return new StorySceneAppearanceResolution(
-                MapEntry(latestEntry, story, latestEntry is not null, latestEffectiveCharacters),
-                latestEffectiveCharacters,
-                transcriptSinceLatestEntry);
+        {
+            return new StorySceneAppearanceStageResult(
+                new StorySceneAppearanceResolution(
+                    MapEntry(latestEntry, story, latestEntry is not null, latestEffectiveCharacters),
+                    latestEffectiveCharacters,
+                    transcriptSinceLatestEntry),
+                null);
+        }
 
         var agent = await threadAgentService.GetSelectedAgentAsync(threadId, cancellationToken)
             ?? throw new InvalidOperationException("Resolving current appearance failed because no AI provider is configured for this chat.");
@@ -49,6 +57,7 @@ public sealed class StoryChatAppearanceService(
             options: new ChatOptions { Temperature = 0.2f },
             useJsonSchemaResponseFormat: agent.UseJsonSchemaResponseFormat,
             cancellationToken: cancellationToken);
+        var tokenUsage = StoryMessageTokenUsageMapper.Map(response.Usage);
 
         var resolvedCharacters = ResolveCharactersFromResponse(story, latestEffectiveCharacters, response.Result.Characters);
         if (AreEquivalent(latestEffectiveCharacters, resolvedCharacters))
@@ -63,16 +72,20 @@ public sealed class StoryChatAppearanceService(
                     response.Result.Summary,
                     cancellationToken);
 
-                return new StorySceneAppearanceResolution(
-                    MapEntry(createdEntry, story, true, resolvedCharacters),
-                    resolvedCharacters,
-                    transcriptSinceLatestEntry);
+                return new StorySceneAppearanceStageResult(
+                    new StorySceneAppearanceResolution(
+                        MapEntry(createdEntry, story, true, resolvedCharacters),
+                        resolvedCharacters,
+                        transcriptSinceLatestEntry),
+                    tokenUsage);
             }
 
-            return new StorySceneAppearanceResolution(
-                MapEntry(latestEntry, story, latestEntry is not null, latestEffectiveCharacters),
-                latestEffectiveCharacters,
-                transcriptSinceLatestEntry);
+            return new StorySceneAppearanceStageResult(
+                new StorySceneAppearanceResolution(
+                    MapEntry(latestEntry, story, latestEntry is not null, latestEffectiveCharacters),
+                    latestEffectiveCharacters,
+                    transcriptSinceLatestEntry),
+                tokenUsage);
         }
 
         var entry = await CreateEntryAsync(
@@ -83,10 +96,12 @@ public sealed class StoryChatAppearanceService(
             response.Result.Summary,
             cancellationToken);
 
-        return new StorySceneAppearanceResolution(
-            MapEntry(entry, story, true, resolvedCharacters),
-            resolvedCharacters,
-            transcriptSinceLatestEntry);
+        return new StorySceneAppearanceStageResult(
+            new StorySceneAppearanceResolution(
+                MapEntry(entry, story, true, resolvedCharacters),
+                resolvedCharacters,
+                transcriptSinceLatestEntry),
+            tokenUsage);
     }
 
     public async Task<IReadOnlyList<StorySceneAppearanceEntryView>> GetEntriesForPathAsync(
@@ -109,31 +124,29 @@ public sealed class StoryChatAppearanceService(
         var matchingEntries = entries
             .Where(x => selectedPathIds.Contains(x.SelectedLeafMessageId) && selectedPathIds.Contains(x.CoveredThroughMessageId))
             .ToList();
-        var latestEntryId = matchingEntries.LastOrDefault()?.Id;
-
         var views = new List<StorySceneAppearanceEntryView>(matchingEntries.Count);
         foreach (var entry in matchingEntries)
             views.Add(MapEntry(
                 entry,
                 story,
-                latestEntryId == entry.Id,
-                latestEntryId == entry.Id ? BuildEffectiveCharacters(story, entry) : null)
+                true,
+                null)
                 ?? throw new InvalidOperationException("Building appearance history failed because a matching appearance entry could not be mapped."));
 
         return views;
     }
 
-    public async Task<StorySceneAppearanceEntryView> UpdateLatestEntryAsync(
+    public async Task<StorySceneAppearanceEntryView> UpdateEntryAsync(
         UpdateStorySceneAppearanceEntry request,
         CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         var thread = await dbContext.ChatThreads
             .FirstOrDefaultAsync(x => x.Id == request.ThreadId, cancellationToken)
-            ?? throw new InvalidOperationException("Saving the latest character appearance block failed because the selected chat could not be found.");
+            ?? throw new InvalidOperationException("Saving the selected character appearance block failed because the selected chat could not be found.");
         var story = await dbContext.ChatStories
             .FirstOrDefaultAsync(x => x.ChatThreadId == request.ThreadId, cancellationToken)
-            ?? throw new InvalidOperationException("Saving the latest character appearance block failed because the selected story could not be found.");
+            ?? throw new InvalidOperationException("Saving the selected character appearance block failed because the selected story could not be found.");
         var messages = await dbContext.ChatMessages
             .AsNoTracking()
             .Where(x => x.ThreadId == request.ThreadId)
@@ -141,26 +154,24 @@ public sealed class StoryChatAppearanceService(
             .ToListAsync(cancellationToken);
         var selectedLeafMessageId = ResolveSelectedLeafMessageId(messages, thread.ActiveLeafMessageId);
         if (!selectedLeafMessageId.HasValue)
-            throw new InvalidOperationException("Saving the latest character appearance block failed because the active branch could not be found.");
+            throw new InvalidOperationException("Saving the selected character appearance block failed because the active branch could not be found.");
 
         var selectedPath = BuildSelectedPath(messages, selectedLeafMessageId.Value);
-        var latestEntry = await GetLatestMatchingEntryAsync(dbContext, request.ThreadId, selectedPath, cancellationToken)
-            ?? throw new InvalidOperationException("Saving the latest character appearance block failed because no editable appearance block exists on the active branch.");
-        if (latestEntry.Id != request.AppearanceEntryId)
-            throw new InvalidOperationException("Saving the latest character appearance block failed because only the latest appearance block on the active branch can be edited.");
+        var entry = await GetMatchingEntryAsync(dbContext, request.ThreadId, selectedPath, request.AppearanceEntryId, cancellationToken)
+            ?? throw new InvalidOperationException("Saving the selected character appearance block failed because that appearance block is not available on the active branch.");
 
         var normalizedCharacters = BuildUpdatedCharacters(story, request.Characters);
-        latestEntry.AppearanceJson = ChatStoryJson.Serialize(StoryChatAppearanceDocumentNormalizer.Normalize(new StoryChatAppearanceDocument(
+        entry.AppearanceJson = ChatStoryJson.Serialize(StoryChatAppearanceDocumentNormalizer.Normalize(new StoryChatAppearanceDocument(
             normalizedCharacters
                 .Select(x => new StoryChatCharacterAppearanceDocument(x.CharacterId, x.CurrentAppearance))
                 .ToList())));
-        latestEntry.Summary = BuildEntrySummary(null, normalizedCharacters);
-        latestEntry.UpdatedUtc = DateTime.UtcNow;
-        thread.UpdatedUtc = latestEntry.UpdatedUtc;
+        entry.Summary = BuildEntrySummary(null, normalizedCharacters);
+        entry.UpdatedUtc = DateTime.UtcNow;
+        thread.UpdatedUtc = entry.UpdatedUtc;
 
         await dbContext.SaveChangesAsync(cancellationToken);
-        return MapEntry(latestEntry, story, true, normalizedCharacters)
-            ?? throw new InvalidOperationException("Saving the latest character appearance block failed because the updated appearance entry could not be mapped.");
+        return MapEntry(entry, story, true, normalizedCharacters)
+            ?? throw new InvalidOperationException("Saving the selected character appearance block failed because the updated appearance entry could not be mapped.");
     }
 
     private static IReadOnlyList<StorySceneCharacterAppearanceView> BuildEffectiveCharacters(
@@ -442,6 +453,24 @@ public sealed class StoryChatAppearanceService(
         return entries.FirstOrDefault(x =>
             selectedPathIds.Contains(x.SelectedLeafMessageId)
             && selectedPathIds.Contains(x.CoveredThroughMessageId));
+    }
+
+    private static async Task<StoryChatAppearanceEntry?> GetMatchingEntryAsync(
+        DbAppContext dbContext,
+        Guid threadId,
+        IReadOnlyList<DbChatMessage> selectedPath,
+        Guid appearanceEntryId,
+        CancellationToken cancellationToken)
+    {
+        var selectedPathIds = selectedPath.Select(x => x.Id).ToHashSet();
+
+        return await dbContext.StoryChatAppearanceEntries
+            .FirstOrDefaultAsync(
+                x => x.Id == appearanceEntryId
+                    && x.ThreadId == threadId
+                    && selectedPathIds.Contains(x.SelectedLeafMessageId)
+                    && selectedPathIds.Contains(x.CoveredThroughMessageId),
+                cancellationToken);
     }
 
     private sealed record AppearanceStageResponse(
