@@ -184,6 +184,27 @@ a, .btn-link {
     margin-bottom: 0;
 }
 
+.app-markdown-copyable {
+    min-height: 2.25rem;
+}
+
+.app-markdown-copyable .app-markdown {
+    padding-right: 2.75rem;
+}
+
+.app-markdown-copy-button {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 1;
+}
+
+.app-markdown-copyable:hover .app-markdown-copy-button,
+.app-markdown-copyable:focus-within .app-markdown-copy-button {
+    opacity: 1;
+    pointer-events: auto;
+}
+
 .app-markdown p,
 .app-markdown ul,
 .app-markdown ol {
@@ -213,6 +234,11 @@ a, .btn-link {
 }
 
 @media (hover: none) {
+    .app-markdown-copy-button {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
     .app-message-footer {
         opacity: 0;
         transform: translateY(0.25rem);

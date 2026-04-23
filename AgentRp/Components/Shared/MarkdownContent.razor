@@ -1,8 +1,92 @@
 @inject IMarkdownRenderer MarkdownRenderer
+@inject IJSRuntime JSRuntime
+@inject IUserFeedbackService UserFeedbackService
+@inject ILogger<MarkdownContent> Logger
+@implements IDisposable
 
-<div class="app-markdown">@((MarkupString)MarkdownRenderer.Render(Markdown))</div>
+<div class="@WrapperClass">
+    @if (CanCopy)
+    {
+        <BusyButton Class="btn btn-outline-secondary btn-sm app-markdown-copy-button position-absolute top-0 end-0 m-1"
+                    OnClick="CopyMarkdownAsync"
+                    IsBusy="@_isCopying"
+                    BusyText=""
+                    ShowBusyText="false"
+                    title="@CopyTitle"
+                    aria-label="@CopyTitle">
+            <i class="fa-regular @(_wasCopied ? "fa-check" : "fa-copy")" aria-hidden="true"></i>
+        </BusyButton>
+    }
+
+    <div class="app-markdown">@((MarkupString)MarkdownRenderer.Render(Markdown))</div>
+</div>
 
 @code {
+    private CancellationTokenSource? _copyFeedbackCancellation;
+    private bool _isCopying;
+    private bool _wasCopied;
+
     [Parameter]
     public string Markdown { get; set; } = string.Empty;
+
+    [Parameter]
+    public bool ShowCopyButton { get; set; } = true;
+
+    [Parameter]
+    public string CopyLabel { get; set; } = "markdown section";
+
+    private bool CanCopy => ShowCopyButton && !string.IsNullOrWhiteSpace(Markdown);
+
+    private string CopyTitle => $"Copy {CopyLabel} markdown source";
+
+    private string WrapperClass => CanCopy
+        ? "app-markdown-box app-markdown-copyable position-relative"
+        : "app-markdown-box";
+
+    public void Dispose()
+    {
+        _copyFeedbackCancellation?.Cancel();
+        _copyFeedbackCancellation?.Dispose();
+    }
+
+    private async Task CopyMarkdownAsync()
+    {
+        if (!CanCopy)
+            return;
+
+        _isCopying = true;
+        _wasCopied = false;
+        _copyFeedbackCancellation?.Cancel();
+        _copyFeedbackCancellation?.Dispose();
+        _copyFeedbackCancellation = new CancellationTokenSource();
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", Markdown);
+            _wasCopied = true;
+            _ = ClearCopyFeedbackAsync(_copyFeedbackCancellation.Token);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Copying {CopyLabel} markdown source failed.", CopyLabel);
+            UserFeedbackService.ShowBackgroundError($"Copying the {CopyLabel} markdown source failed.", "Copy Failed");
+        }
+        finally
+        {
+            _isCopying = false;
+        }
+    }
+
+    private async Task ClearCopyFeedbackAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1.5), cancellationToken);
+            _wasCopied = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
 }

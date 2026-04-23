@@ -77,6 +77,7 @@ else
                         var isEditing = message is not null && _editingMessageId == message.MessageId;
                         var isSnapshotExpanded = snapshot is not null && IsSnapshotExpanded(snapshot.SnapshotId);
                         var canRetryMessage = message is not null && CanRetryMessage(message);
+                        var canRegenerateProse = message is not null && CanRegenerateProse(message);
                         var displayContent = message is null ? string.Empty : GetDisplayContent(message);
 
                         <div class="d-flex flex-column gap-3">
@@ -238,7 +239,7 @@ else
                                                                         else
                                                                         {
                                                                             <div class="small">
-                                                                                <MarkdownContent Markdown="@step.Detail" />
+                                                                                <MarkdownContent Markdown="@step.Detail" CopyLabel="@($"{step.Title} detail")" />
                                                                             </div>
                                                                         }
 
@@ -255,7 +256,7 @@ else
                                                                                 @if (isAppearanceContextExpanded)
                                                                                 {
                                                                                     <div class="pt-3">
-                                                                                        <MarkdownContent Markdown="@appearanceContextBlock.Content" />
+                                                                                        <MarkdownContent Markdown="@appearanceContextBlock.Content" CopyLabel="@appearanceContextBlock.Title" />
                                                                                     </div>
                                                                                 }
                                                                             </div>
@@ -264,7 +265,7 @@ else
                                                                     else if (stepBlocks.Count == 0)
                                                                     {
                                                                         <div class="small">
-                                                                            <MarkdownContent Markdown="@step.Detail" />
+                                                                            <MarkdownContent Markdown="@step.Detail" CopyLabel="@($"{step.Title} detail")" />
                                                                         </div>
                                                                     }
                                                                     else
@@ -275,7 +276,7 @@ else
 
                                                                             <div class="@(blockIndex > 0 ? "pt-3" : string.Empty)">
                                                                                 <div class="fw-semibold mb-2">@block.Title</div>
-                                                                                <MarkdownContent Markdown="@block.Content" />
+                                                                                <MarkdownContent Markdown="@block.Content" CopyLabel="@block.Title" />
                                                                             </div>
                                                                         }
                                                                     }
@@ -334,12 +335,12 @@ else
                                             else if (message.IsNarrator)
                                             {
                                                 <div class="fst-italic">
-                                                    <MarkdownContent Markdown="@displayContent" />
+                                                    <MarkdownContent Markdown="@displayContent" ShowCopyButton="false" />
                                                 </div>
                                             }
                                             else
                                             {
-                                                <MarkdownContent Markdown="@displayContent" />
+                                                <MarkdownContent Markdown="@displayContent" ShowCopyButton="false" />
                                             }
                                         </div>
 
@@ -402,6 +403,20 @@ else
                                                                         title="Retry latest message as a new branch"
                                                                         aria-label="Retry latest message as a new branch">
                                                                 <i class="fa-regular fa-rotate-left" aria-hidden="true"></i>
+                                                            </BusyButton>
+                                                        }
+
+                                                        @if (canRegenerateProse)
+                                                        {
+                                                            <BusyButton Class="btn btn-outline-primary btn-sm"
+                                                                        OnClick="() => RegenerateProseAsync(message)"
+                                                                        IsBusy="@(_regeneratingProseMessageId == message.MessageId)"
+                                                                        BusyText=""
+                                                                        ShowBusyText="false"
+                                                                        Disabled="@(_isSubmitting || _regeneratingProseMessageId.HasValue)"
+                                                                        title="Regenerate prose from saved plan"
+                                                                        aria-label="Regenerate prose from saved plan">
+                                                                <i class="fa-regular fa-repeat" aria-hidden="true"></i>
                                                             </BusyButton>
                                                         }
 
@@ -743,6 +758,7 @@ else
     private Guid? _retrySourceMessageId;
     private string? _retrySpeakerName;
     private Guid? _startingRetryMessageId;
+    private Guid? _regeneratingProseMessageId;
     private Guid? _editingMessageId;
     private string _editingDraft = string.Empty;
     private StorySceneEditAction? _editingAction;
@@ -1024,6 +1040,50 @@ else
     private bool CanRetryMessage(StorySceneMessageView message) =>
         _chat?.SelectedLeafMessageId == message.MessageId
         && message.Process?.Status != ProcessRunStatus.Running;
+
+    private bool CanRegenerateProse(StorySceneMessageView message) =>
+        _chat?.SelectedLeafMessageId == message.MessageId
+        && message.GenerationMode != StoryScenePostMode.Manual
+        && message.Process?.Status != ProcessRunStatus.Running
+        && message.Process?.Context is { GenerationContext: not null, Appearance: not null, Planner: not null };
+
+    private async Task RegenerateProseAsync(StorySceneMessageView message)
+    {
+        if (_chat is null || _isSubmitting || !CanRegenerateProse(message))
+            return;
+
+        _isSubmitting = true;
+        _regeneratingProseMessageId = message.MessageId;
+        _errorMessage = null;
+
+        try
+        {
+            CancelInlineEdit();
+            ClearRetryState(clearDraft: false);
+
+            await StorySceneChatService.RegenerateProseAsync(
+                new RegenerateStorySceneProse(_chat.ThreadId, message.MessageId),
+                HandleMessageStreamUpdateAsync,
+                CancellationToken.None);
+
+            await LoadChatAsync(_chat.ThreadId);
+            ClearStreamedMessageContent();
+            UserFeedbackService.ShowBackgroundSuccess($"The prose was regenerated for {message.CanonicalSpeakerName}.", "Scene Updated");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Regenerating prose from story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
+            await LoadChatAsync(_chat.ThreadId);
+            ClearStreamedMessageContent();
+            _errorMessage = exception.Message;
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Prose Regeneration Failed");
+        }
+        finally
+        {
+            _isSubmitting = false;
+            _regeneratingProseMessageId = null;
+        }
+    }
 
     private static string BuildRetryDraftText(StorySceneMessageView message)
     {

@@ -195,6 +195,191 @@ public sealed class StorySceneChatService(
         PublishWorkspaceRefresh(thread.Id);
     }
 
+    public async Task RegenerateProseAsync(
+        RegenerateStorySceneProse request,
+        StorySceneMessageStreamHandler? streamHandler,
+        CancellationToken cancellationToken)
+    {
+        ConfiguredAgent agent;
+        Guid messageId;
+        Guid runId;
+        StoryMessageProseRequest proseRequest;
+        StorySceneAppearanceResolution appearance;
+        string sourceSpeakerName;
+        string failedPartialProseText = string.Empty;
+
+        await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
+        {
+            var thread = await dbContext.ChatThreads
+                .Include(x => x.Messages)
+                .FirstOrDefaultAsync(x => x.Id == request.ThreadId, cancellationToken)
+                ?? throw new InvalidOperationException("Regenerating the scene prose failed because the selected chat could not be found.");
+            agent = agentCatalog.GetAgentOrDefault(thread.SelectedAgentName)
+                ?? throw new InvalidOperationException("Regenerating the scene prose failed because no AI provider is configured for this chat.");
+            var sourceMessage = thread.Messages.FirstOrDefault(x => x.Id == request.SourceMessageId)
+                ?? throw new InvalidOperationException("Regenerating the scene prose failed because the source message could not be found.");
+            var selectedLeafMessageId = ResolveSelectedLeafMessageId(thread.Messages, thread.ActiveLeafMessageId);
+
+            if (selectedLeafMessageId != sourceMessage.Id)
+                throw new InvalidOperationException("Regenerating the scene prose failed because only the latest selected message can be regenerated.");
+
+            if (sourceMessage.GenerationMode == StoryScenePostMode.Manual)
+                throw new InvalidOperationException("Regenerating the scene prose failed because direct messages do not have reusable AI planning.");
+
+            if (!sourceMessage.SourceProcessRunId.HasValue)
+                throw new InvalidOperationException("Regenerating the scene prose failed because the source message does not have a saved generation process.");
+
+            var sourceRun = await dbContext.ProcessRuns
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == sourceMessage.SourceProcessRunId.Value && x.ThreadId == thread.Id, cancellationToken)
+                ?? throw new InvalidOperationException("Regenerating the scene prose failed because the saved generation process could not be found.");
+
+            if (sourceRun.Status == ProcessRunStatus.Running)
+                throw new InvalidOperationException("Regenerating the scene prose failed because the source generation process is still running.");
+
+            var sourceContext = DeserializeContext(sourceRun.ContextJson)
+                ?? throw new InvalidOperationException("Regenerating the scene prose failed because the saved generation process did not include reusable planning details.");
+            var generationContext = sourceContext.GenerationContext
+                ?? throw new InvalidOperationException("Regenerating the scene prose failed because the saved generation context could not be reused.");
+            appearance = sourceContext.Appearance
+                ?? throw new InvalidOperationException("Regenerating the scene prose failed because the saved appearance context could not be reused.");
+            var planner = sourceContext.Planner
+                ?? throw new InvalidOperationException("Regenerating the scene prose failed because the saved planner result could not be reused.");
+
+            proseRequest = new StoryMessageProseRequest(sourceMessage.GenerationMode, sourceContext.GuidancePrompt, generationContext, planner);
+            sourceSpeakerName = proseRequest.Context.Actor.Name;
+
+            var now = DateTime.UtcNow;
+            var targetMessage = new DbChatMessage
+            {
+                Id = Guid.NewGuid(),
+                ThreadId = thread.Id,
+                Thread = thread,
+                Role = sourceMessage.Role,
+                MessageKind = sourceMessage.MessageKind,
+                Content = string.Empty,
+                CreatedUtc = now,
+                SpeakerCharacterId = sourceMessage.SpeakerCharacterId,
+                GenerationMode = sourceMessage.GenerationMode,
+                ParentMessageId = sourceMessage.ParentMessageId,
+                EditedFromMessageId = sourceMessage.Id
+            };
+
+            var processRun = new ProcessRun
+            {
+                Id = Guid.NewGuid(),
+                ThreadId = thread.Id,
+                Thread = thread,
+                UserMessageId = targetMessage.Id,
+                AssistantMessageId = targetMessage.Id,
+                TargetMessageId = targetMessage.Id,
+                ActorCharacterId = sourceMessage.SpeakerCharacterId,
+                Summary = $"Regenerating prose from the saved plan as {sourceSpeakerName}.",
+                Stage = "Writing",
+                ContextJson = SerializeContext(new StoryMessageProcessContext(
+                    proseRequest.Mode,
+                    proseRequest.GuidancePrompt,
+                    proseRequest.Context,
+                    appearance,
+                    proseRequest.Planner,
+                    proseRequest,
+                    null,
+                    BuildPlanningCompletedStepArtifacts(proseRequest.Mode, proseRequest.GuidancePrompt, proseRequest.Context, appearance, proseRequest.Planner))),
+                Status = ProcessRunStatus.Running,
+                StartedUtc = now,
+                PlanningStartedUtc = now,
+                PlanningCompletedUtc = now,
+                ProseStartedUtc = now,
+                Steps =
+                [
+                    new ProcessStep
+                    {
+                        Id = Guid.NewGuid(),
+                        SortOrder = 0,
+                        Title = "Appearance",
+                        Summary = "Reused the source message's saved appearance context.",
+                        Detail = TruncateProcessDetail(BuildAppearanceDetail(appearance)),
+                        IconCssClass = "fa-regular fa-shirt",
+                        Status = ProcessStepStatus.Completed,
+                        StartedUtc = now,
+                        CompletedUtc = now
+                    },
+                    new ProcessStep
+                    {
+                        Id = Guid.NewGuid(),
+                        SortOrder = 1,
+                        Title = "Planning",
+                        Summary = $"Reused saved plan: {proseRequest.Planner.PlanningSummary}",
+                        Detail = TruncateProcessDetail(BuildPlannerDetail(proseRequest.Planner)),
+                        IconCssClass = "fa-regular fa-map",
+                        Status = ProcessStepStatus.Completed,
+                        StartedUtc = now,
+                        CompletedUtc = now
+                    },
+                    new ProcessStep
+                    {
+                        Id = Guid.NewGuid(),
+                        SortOrder = 2,
+                        Title = "Writing",
+                        Summary = "Drafting a fresh version of the scene message from the saved plan.",
+                        Detail = "The prose stage is reusing the saved planner result to write a new branch.",
+                        IconCssClass = "fa-regular fa-pen-line",
+                        Status = ProcessStepStatus.Running,
+                        StartedUtc = now
+                    }
+                ]
+            };
+
+            targetMessage.SourceProcessRunId = processRun.Id;
+            dbContext.ChatMessages.Add(targetMessage);
+            dbContext.ProcessRuns.Add(processRun);
+
+            thread.SelectedSpeakerCharacterId = sourceMessage.SpeakerCharacterId;
+            thread.ActiveLeafMessageId = targetMessage.Id;
+            thread.UpdatedUtc = now;
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+
+            messageId = targetMessage.Id;
+            runId = processRun.Id;
+        }
+
+        PublishWorkspaceRefresh(request.ThreadId);
+
+        try
+        {
+            var generationSettings = await storyGenerationSettingsService.GetSettingsAsync(cancellationToken);
+            var proseText = await StreamProseStageAsync(
+                agent,
+                request.ThreadId,
+                messageId,
+                proseRequest,
+                generationSettings,
+                streamHandler,
+                partialProseText => failedPartialProseText = partialProseText,
+                cancellationToken);
+            await CompleteRunAsync(request.ThreadId, runId, messageId, proseRequest, appearance, proseText, cancellationToken);
+            if (streamHandler is not null)
+                await streamHandler(new StorySceneMessageStreamUpdate(request.ThreadId, messageId, proseText, true), cancellationToken);
+
+            PublishWorkspaceRefresh(request.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Regenerating story scene prose failed for thread {ThreadId}, source message {SourceMessageId}, and speaker {SpeakerName}.", request.ThreadId, request.SourceMessageId, sourceSpeakerName);
+            await FailRunAsync(
+                request.ThreadId,
+                runId,
+                proseRequest,
+                appearance,
+                failedPartialProseText,
+                exception,
+                cancellationToken);
+            PublishWorkspaceRefresh(request.ThreadId);
+            throw new InvalidOperationException($"Regenerating prose for {sourceSpeakerName} failed while writing the new branch.", exception);
+        }
+    }
+
     public async Task SelectBranchAsync(Guid threadId, Guid leafMessageId, CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -574,7 +759,7 @@ public sealed class StorySceneChatService(
     {
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
         [
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildProseSystemPrompt(request.Context.Actor.IsNarrator)),
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildProseSystemPrompt(request.Context.Actor)),
             new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildProseUserPrompt(request))
         ];
 
@@ -1167,12 +1352,12 @@ public sealed class StorySceneChatService(
         builder.AppendLine("Decide the intent and goals of the next message before any prose is written.");
         builder.AppendLine("Return a concise structured plan only.");
         builder.AppendLine("Keep the plan grounded in the provided story context, snapshot summary, and transcript.");
-        builder.AppendLine("Plan one turn only. Stop early.");
+        builder.AppendLine("Plan one turn only.");
         builder.AppendLine("Choose one immediate beat, not a sequence.");
         builder.AppendLine("A direct reaction from another character is allowed only if it happens immediately.");
         builder.AppendLine("Do not plan follow-up beats.");
         builder.AppendLine("Stop where the next person would naturally answer or act.");
-        builder.AppendLine("Do not write the final message text.");
+        builder.AppendLine("Do not compose the final message text.");
         return builder.ToString().TrimEnd();
     }
 
@@ -1186,38 +1371,54 @@ public sealed class StorySceneChatService(
             builder.AppendLine($"Use this guidance to compose the next message: {request.GuidancePrompt?.Trim()}");
 
         builder.AppendLine();
-        AppendTurnScopeRules(builder);
+        AppendTurnScopeRules(builder, context.Actor, false);
         return builder.ToString().TrimEnd();
     }
 
-    private static string BuildProseSystemPrompt(bool narrator)
+    private static string BuildProseSystemPrompt(StorySceneActorContext actor)
     {
         var builder = new StringBuilder();
         builder.AppendLine(
-            """
+            $"""
             You are the prose stage for a story scene chat.
-            Write only the final message content for the selected actor.
+            Write only the next compact **Transcript** message for {actor.Name} speaking and/or acting in-scene. Do not write from any other character's perspective.
+            
+            Your job is to realize the planner's beat in the fewest vivid words that still feel natural.
             Stay faithful to the character, planner output, current scene facts, snapshot summary, and recent transcript.
+
             Write one turn only to advance the scene one beat.
+            Keep turns short and focused on the main action.
             Do not fast-forward.
             Do not resolve the whole exchange.
             Do not make other characters take major new actions unless it is an immediate reaction.
             Stop at the first natural pause.
             """);
 
-        if (narrator)
+        if (actor.IsNarrator)
         {
             builder.AppendLine("You are speaking as the story narrator guiding the narrative, write a descriptive narration instead of dialogue.");
         }
         else 
         {
             builder.AppendLine(
-                """
-                Write as that character speaking or acting in-scene.
-                Use actions, body language, hidden emotional state selectively to provide subtext. Include only the details that add value to the moment by clarifying intent, strengthening subtext, or sharpening the emotional beat. Prefer the most revealing detail over multiple similar ones.
-                Keep the turn focused on its clearest emotional and narrative movement.
-                Wrap physical actions and internal non-spoken beats in asterisks: *opens the door slowly*
-                Wrap all spoken dialogue in double quotation marks: "I was waiting for you."
+                $"""
+                Treat every line as expensive.
+                Include only the single best action or reaction that sharpens the beat.
+                Do not stack multiple similar signals of emotion, attraction, hesitation, or tension.
+                Do not express the same beat more than once through dialogue, action, and subtext.
+                Once the turn's main move is clear, stop.
+
+                Convey emotion through subtext, word choice, or one revealing action.
+                Do not add explicit internal commentary unless required by the planner.
+
+                Default to a compact turn:
+                - one brief reaction
+                - one main line of dialogue
+                - optionally one short trailing jab or tag
+                Then stop.
+
+                Wrap physical actions and non-spoken beats in asterisks: *opens the door slowly*
+                Wrap all spoken dialogue in double quotes: "I was waiting for you."
                 Never output unwrapped narration.
                 You may combine both in one line: *speaks politely* "Good to see you." *smiles*
                 """);
@@ -1237,28 +1438,41 @@ public sealed class StorySceneChatService(
             builder.AppendLine();
         }
 
-        builder.AppendLine("Planner result:");
+        builder.AppendLine("**Planner result:**");
         builder.AppendLine(BuildPlannerDetail(request.Planner));
-        builder.AppendLine();
-        AppendTurnScopeRules(builder);
+        builder.AppendLine().AppendLine(
+            """
+            Write the turn by fulfilling only:
+            1. the intent
+            2. the immediate goal
+            3. the required factual beats
+            Do not expand beyond them unless necessary for coherence.
+            """).AppendLine();
+        AppendTurnScopeRules(builder, request.Context.Actor, true);
         return builder.ToString().TrimEnd();
     }
 
-    private static void AppendTurnScopeRules(StringBuilder builder)
+    private static void AppendTurnScopeRules(StringBuilder builder, StorySceneActorContext actor, bool includeOutputFormatRules)
     {
         builder.AppendLine(
-        """
+        $"""
         Turn scope rules:
-        - Reply only as the selected actor. Do not write from any other character's perspective.
+        - Reply only as the {actor.Name}. Do not write from any other character's perspective.
         - One turn only.
-        - Keep spoken words concise like natural speech. Focus more on subtext to convey meaning instead of explicit statements.
         - Advance the scene one beat.
         - Direct reaction is okay if it happens immediately.
         - Do not fast-forward into follow-up beats.
-        - Avoid duplicate sentiments; do not repeat the same emotion, hesitation, refusal, or desire in different words.
         - Stop at the first natural pause when another character may want to act.
-        Format reminder: actions use *asterisks*, speech uses "quotes". Never output unwrapped narration.
         """);
+        if (includeOutputFormatRules)
+        {
+            builder.AppendLine(
+            """
+            - Keep spoken words concise like natural speech. Focus more on subtext to convey meaning instead of explicit statements.
+            - Avoid duplicate sentiments; do not repeat the same emotion, hesitation, refusal, or desire in different words.
+            Format reminder: actions use *asterisks*, speech uses "quotes". Never output unwrapped text.
+            """);
+        }
     }
 
     private static string BuildContextSummary(StorySceneGenerationContext context)
@@ -1299,9 +1513,9 @@ public sealed class StorySceneChatService(
         if (sceneCharacters.Count > 0)
         {
             builder.AppendLine("**Characters in the scene:**")
-                .AppendLine($"- {context.Actor.Name}");
+                .AppendLine($"- **{context.Actor.Name}:** current actor");
             foreach (var character in sceneCharacters)
-                builder.AppendLine($"- {character.Name} | {PromptInlineText(character.Summary)} | General appearance: {PromptInlineText(character.GeneralAppearance, "None")}");
+                builder.AppendLine($"- **{character.Name}:** {PromptInlineText(character.Summary)} | General appearance: {PromptInlineText(character.GeneralAppearance, "None")}");
             builder.AppendLine();
         }
 
@@ -1310,7 +1524,7 @@ public sealed class StorySceneChatService(
         {
             builder.AppendLine("**Other characters:**");
             foreach (var character in otherCharacters)
-                builder.AppendLine($"- {character.Name} | {PromptInlineText(character.Summary)}");
+                builder.AppendLine($"- **{character.Name}:** {PromptInlineText(character.Summary)}");
             builder.AppendLine();
         }
 
@@ -1800,7 +2014,7 @@ public sealed class StorySceneChatService(
     [
         new StoryMessageProcessTextBlock("Planning Summary", proseRequest.Planner.PlanningSummary),
         new StoryMessageProcessTextBlock("Planning Full Details", BuildPlannerDetail(proseRequest.Planner)),
-        ..BuildPromptBlocks(BuildProseSystemPrompt(proseRequest.Context.Actor.IsNarrator), BuildProseUserPrompt(proseRequest))
+        ..BuildPromptBlocks(BuildProseSystemPrompt(proseRequest.Context.Actor), BuildProseUserPrompt(proseRequest))
     ];
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildPromptBlocks(string systemPrompt, string userPrompt) =>
