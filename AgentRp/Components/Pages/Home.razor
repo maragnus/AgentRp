@@ -31,7 +31,7 @@ else
 {
     <div class="d-flex h-100 flex-column bg-body shadow-sm">
         <div class="flex-shrink-0 border-bottom bg-body px-3 py-3 px-lg-4">
-            <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+            <div class="d-flex flex-wrap align-items-start gap-3">
                 <div>
                     <h1 class="h5 mb-1">@_chat.Title</h1>
                     <div class="small text-body-secondary">
@@ -40,17 +40,6 @@ else
                         <span>@MessageCountText</span>
                     </div>
                 </div>
-
-                @if (_chat.RootBranchNavigator is not null)
-                {
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="small text-body-secondary">Opening branches</span>
-                        <StoryBranchNavigator Navigator="@_chat.RootBranchNavigator"
-                                              SwitchingBranchLeafId="@_switchingBranchLeafId"
-                                              Disabled="@_isSubmitting"
-                                              OnSelectBranch="SelectBranchAsync" />
-                    </div>
-                }
             </div>
         </div>
 
@@ -87,6 +76,7 @@ else
                         var cardClass = message is null ? string.Empty : BuildMessageCardClass(message);
                         var isEditing = message is not null && _editingMessageId == message.MessageId;
                         var isSnapshotExpanded = snapshot is not null && IsSnapshotExpanded(snapshot.SnapshotId);
+                        var canRetryMessage = message is not null && CanRetryMessage(message);
 
                         <div class="d-flex flex-column gap-3">
                             @if (process is not null)
@@ -400,6 +390,20 @@ else
                                                     }
                                                     else
                                                     {
+                                                        @if (canRetryMessage)
+                                                        {
+                                                            <BusyButton Class="btn btn-outline-primary btn-sm"
+                                                                        OnClick="() => BeginRetryAsync(message)"
+                                                                        IsBusy="@(_startingRetryMessageId == message.MessageId)"
+                                                                        BusyText=""
+                                                                        ShowBusyText="false"
+                                                                        Disabled="@(_isSubmitting || _startingRetryMessageId.HasValue)"
+                                                                        title="Retry latest message as a new branch"
+                                                                        aria-label="Retry latest message as a new branch">
+                                                                <i class="fa-regular fa-rotate-left" aria-hidden="true"></i>
+                                                            </BusyButton>
+                                                        }
+
                                                         @if (message.IsSnapshotCandidate)
                                                         {
                                                             <button type="button"
@@ -581,6 +585,22 @@ else
                     <div class="alert alert-danger mb-3">@_errorMessage</div>
                 }
 
+                @if (_retrySourceMessageId.HasValue)
+                {
+                    <div class="alert alert-primary d-flex align-items-start justify-content-between gap-3 py-2 mb-3" role="status">
+                        <div>
+                            <div class="fw-semibold">Retrying latest message as @_retrySpeakerName</div>
+                            <div class="small">The next submit creates a new branch from before that message.</div>
+                        </div>
+                        <button type="button"
+                                class="btn-close"
+                                title="Cancel retry"
+                                aria-label="Cancel retry"
+                                disabled="@_isSubmitting"
+                                @onclick="CancelRetry"></button>
+                    </div>
+                }
+
                 <div>
                     <label class="visually-hidden" for="scene-message-input">Message or guidance</label>
                     <textarea id="scene-message-input" style="field-sizing: content; height: auto;"
@@ -729,6 +749,9 @@ else
     private bool _isSubmitting;
     private StoryScenePostMode? _submittingMode;
     private string _draftText = string.Empty;
+    private Guid? _retrySourceMessageId;
+    private string? _retrySpeakerName;
+    private Guid? _startingRetryMessageId;
     private Guid? _editingMessageId;
     private string _editingDraft = string.Empty;
     private StorySceneEditAction? _editingAction;
@@ -777,6 +800,7 @@ else
         if (_appliedThreadId != resolvedThreadId || _chat is null)
         {
             _isLoading = true;
+            ClearRetryState(clearDraft: false);
             await LoadChatAsync(resolvedThreadId);
             _appliedThreadId = resolvedThreadId;
             _isLoading = false;
@@ -816,6 +840,7 @@ else
                 && !_chat.Transcript.Any(x => x.Appearance?.AppearanceEntryId == _editingAppearanceEntryId.Value))
                 CancelAppearanceEdit();
 
+            ClearStaleRetryState();
             ShellState?.SetMobileContentHeader(_chat.Title, MessageCountText);
         }
 
@@ -866,6 +891,7 @@ else
 
         _submittingMode = mode;
         _isSubmitting = true;
+        var retrySourceMessageId = _retrySourceMessageId;
 
         try
         {
@@ -875,10 +901,12 @@ else
                     _chat.SelectedSpeaker.CharacterId,
                     mode,
                     mode == StoryScenePostMode.Manual ? _draftText : null,
-                    mode == StoryScenePostMode.GuidedAi ? _draftText : null),
+                    mode == StoryScenePostMode.GuidedAi ? _draftText : null,
+                    retrySourceMessageId),
                 CancellationToken.None);
 
             _draftText = string.Empty;
+            ClearRetryState(clearDraft: false);
             await LoadChatAsync(_chat.ThreadId);
             if (mode != StoryScenePostMode.Manual)
                 UserFeedbackService.ShowBackgroundSuccess(BuildPostSuccessMessage(mode), "Scene Updated");
@@ -889,6 +917,8 @@ else
             _errorMessage = exception.Message;
             if (mode != StoryScenePostMode.Manual)
                 UserFeedbackService.ShowBackgroundError(_errorMessage, "Scene Message Failed");
+            else if (retrySourceMessageId.HasValue)
+                UserFeedbackService.ShowBackgroundError(_errorMessage, "Retry Failed");
         }
         finally
         {
@@ -897,8 +927,79 @@ else
         }
     }
 
+    private async Task BeginRetryAsync(StorySceneMessageView message)
+    {
+        if (_chat is null || _isSubmitting || !CanRetryMessage(message))
+            return;
+
+        _isSubmitting = true;
+        _startingRetryMessageId = message.MessageId;
+        _errorMessage = null;
+
+        try
+        {
+            CancelInlineEdit();
+            _retrySourceMessageId = message.MessageId;
+            _retrySpeakerName = message.CanonicalSpeakerName;
+            _draftText = BuildRetryDraftText(message);
+
+            await StorySceneChatService.SelectSpeakerAsync(_chat.ThreadId, message.SpeakerCharacterId, CancellationToken.None);
+            await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Preparing retry from story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
+            ClearRetryState(clearDraft: false);
+            _errorMessage = $"Preparing retry for '{message.CanonicalSpeakerName}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Retry Failed");
+        }
+        finally
+        {
+            _isSubmitting = false;
+            _startingRetryMessageId = null;
+        }
+    }
+
+    private void CancelRetry() => ClearRetryState(clearDraft: false);
+
+    private void ClearRetryState(bool clearDraft)
+    {
+        _retrySourceMessageId = null;
+        _retrySpeakerName = null;
+        _startingRetryMessageId = null;
+
+        if (clearDraft)
+            _draftText = string.Empty;
+    }
+
+    private void ClearStaleRetryState()
+    {
+        if (!_retrySourceMessageId.HasValue)
+            return;
+
+        var retryMessageIsSelectedLeaf = _chat?.SelectedLeafMessageId == _retrySourceMessageId.Value
+            && _chat.Transcript.Any(x => x.Message?.MessageId == _retrySourceMessageId.Value);
+        if (retryMessageIsSelectedLeaf)
+            return;
+
+        ClearRetryState(clearDraft: false);
+    }
+
+    private bool CanRetryMessage(StorySceneMessageView message) =>
+        _chat?.SelectedLeafMessageId == message.MessageId
+        && message.Process?.Status != ProcessRunStatus.Running;
+
+    private static string BuildRetryDraftText(StorySceneMessageView message)
+    {
+        var guidancePrompt = message.Process?.Context?.GuidancePrompt;
+        return !string.IsNullOrWhiteSpace(guidancePrompt)
+            ? guidancePrompt
+            : message.Content;
+    }
+
     private void BeginInlineEdit(StorySceneMessageView message)
     {
+        ClearRetryState(clearDraft: false);
         _editingMessageId = message.MessageId;
         _editingDraft = message.Content;
         _editingAction = null;
@@ -1012,8 +1113,8 @@ else
         try
         {
             await StorySceneChatService.SelectBranchAsync(_chat.ThreadId, leafMessageId, CancellationToken.None);
+            ClearRetryState(clearDraft: false);
             await LoadChatAsync(_chat.ThreadId);
-            UserFeedbackService.ShowBackgroundSuccess("The selected branch is now active.", "Branch Selected");
         }
         catch (Exception exception)
         {
@@ -1079,13 +1180,10 @@ else
 
         try
         {
-            var committedSnapshot = await StoryChatSnapshotService.CommitDraftAsync(request, CancellationToken.None);
+            await StoryChatSnapshotService.CommitDraftAsync(request, CancellationToken.None);
             _isSnapshotModalOpen = false;
             _snapshotDraft = null;
             await LoadChatAsync(_chat.ThreadId);
-            UserFeedbackService.ShowBackgroundSuccess(
-                $"Snapshot committed with {committedSnapshot.FactCount} facts and {committedSnapshot.TimelineEntryCount} timeline entries.",
-                "Snapshot Committed");
         }
         catch (Exception exception)
         {
@@ -1119,6 +1217,7 @@ else
             _isDeleteModalOpen = false;
             _deleteTargetMessage = null;
             _deleteMode = null;
+            ClearRetryState(clearDraft: false);
             await LoadChatAsync(_chat.ThreadId);
         }
         catch (Exception exception)

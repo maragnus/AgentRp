@@ -14,6 +14,7 @@ public sealed class StorySceneChatService(
     IActivityNotifier activityNotifier,
     IStoryChatSnapshotService storyChatSnapshotService,
     IStoryChatAppearanceService storyChatAppearanceService,
+    IStoryGenerationSettingsService storyGenerationSettingsService,
     IAgentCatalog agentCatalog,
     ILogger<StorySceneChatService> logger) : IStorySceneChatService
 {
@@ -77,13 +78,7 @@ public sealed class StorySceneChatService(
             .OrderBy(x => x.CreatedUtc)
             .ToLookup(x => x.ParentMessageId);
         var descendantCounts = BuildDescendantCounts(messages);
-        var transcript = BuildTranscript(path, childrenLookup, descendantCounts, selectedSpeakerId, characters, processMap, snapshotCandidateMessageIds, snapshots, appearanceEntries);
-        var rootBranchNavigator = BuildBranchNavigator(
-            parentMessageId: null,
-            selectedBranchMessageId: path.FirstOrDefault()?.Id,
-            branchMessages: childrenLookup[null].ToList(),
-            allMessages: messages,
-            characters: characters);
+        var transcript = BuildTranscript(path, messages, childrenLookup, descendantCounts, selectedSpeakerId, characters, processMap, snapshotCandidateMessageIds, snapshots, appearanceEntries);
 
         var currentLocationName = story.Scene.CurrentLocationId.HasValue
             ? story.Locations.Entries.FirstOrDefault(x => x.Id == story.Scene.CurrentLocationId.Value)?.Name
@@ -97,7 +92,6 @@ public sealed class StorySceneChatService(
             selectedLeafMessageId,
             selectedSpeaker,
             speakers,
-            rootBranchNavigator,
             transcript,
             selectedAgentName,
             agentCatalog.HasEnabledAgents);
@@ -286,6 +280,12 @@ public sealed class StorySceneChatService(
         var story = await GetOrCreateStoryAsync(dbContext, request.ThreadId, cancellationToken);
 
         ValidateSpeaker(story, request.SpeakerCharacterId);
+        var postTarget = await ResolvePostTargetAsync(
+            dbContext,
+            thread,
+            request,
+            "Posting the retried manual scene message",
+            cancellationToken);
 
         var now = DateTime.UtcNow;
         var message = new DbChatMessage
@@ -299,7 +299,8 @@ public sealed class StorySceneChatService(
             CreatedUtc = now,
             SpeakerCharacterId = request.SpeakerCharacterId,
             GenerationMode = StoryScenePostMode.Manual,
-            ParentMessageId = thread.ActiveLeafMessageId
+            ParentMessageId = postTarget.ParentMessageId,
+            EditedFromMessageId = postTarget.EditedFromMessageId
         };
         dbContext.ChatMessages.Add(message);
 
@@ -307,6 +308,8 @@ public sealed class StorySceneChatService(
         thread.UpdatedUtc = now;
         thread.ActiveLeafMessageId = message.Id;
         if (thread.Title == "New Chat")
+            thread.Title = BuildThreadTitle(manualText);
+        else if (ShouldRetitleRootRetry(thread.Title, postTarget))
             thread.Title = BuildThreadTitle(manualText);
 
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -335,6 +338,12 @@ public sealed class StorySceneChatService(
             var story = await GetOrCreateStoryAsync(dbContext, request.ThreadId, cancellationToken);
 
             ValidateSpeaker(story, request.SpeakerCharacterId);
+            var postTarget = await ResolvePostTargetAsync(
+                dbContext,
+                thread,
+                request,
+                "Generating the retried scene message",
+                cancellationToken);
             var actor = BuildActorContext(
                 request.SpeakerCharacterId,
                 story.Characters.Entries
@@ -354,7 +363,8 @@ public sealed class StorySceneChatService(
                 CreatedUtc = now,
                 SpeakerCharacterId = request.SpeakerCharacterId,
                 GenerationMode = request.Mode,
-                ParentMessageId = thread.ActiveLeafMessageId
+                ParentMessageId = postTarget.ParentMessageId,
+                EditedFromMessageId = postTarget.EditedFromMessageId
             };
 
             var processContext = new StoryMessageProcessContext(
@@ -425,6 +435,8 @@ public sealed class StorySceneChatService(
             thread.ActiveLeafMessageId = targetMessage.Id;
             if (thread.Title == "New Chat")
                 thread.Title = BuildThreadTitle(BuildThreadSeedText(trimmedGuidancePrompt, actor));
+            else if (ShouldRetitleRootRetry(thread.Title, postTarget))
+                thread.Title = BuildThreadTitle(BuildThreadSeedText(trimmedGuidancePrompt, actor));
 
             await dbContext.SaveChangesAsync(cancellationToken);
 
@@ -442,12 +454,13 @@ public sealed class StorySceneChatService(
             await UpdateAppearanceCompletionAsync(request.ThreadId, runId, request.Mode, trimmedGuidancePrompt, generationContext, appearanceResolution, cancellationToken);
             PublishWorkspaceRefresh(request.ThreadId);
 
-            var planner = await RunPlannerStageAsync(agent, request, generationContext, cancellationToken);
+            var generationSettings = await storyGenerationSettingsService.GetSettingsAsync(cancellationToken);
+            var planner = await RunPlannerStageAsync(agent, request, generationContext, generationSettings, cancellationToken);
             await UpdatePlannerCompletionAsync(request.ThreadId, runId, planner, generationContext, appearanceResolution, trimmedGuidancePrompt, request.Mode, cancellationToken);
             PublishWorkspaceRefresh(request.ThreadId);
 
             var proseRequest = new StoryMessageProseRequest(request.Mode, trimmedGuidancePrompt, generationContext, planner);
-            var proseText = await RunProseStageAsync(agent, proseRequest, cancellationToken);
+            var proseText = await RunProseStageAsync(agent, proseRequest, generationSettings, cancellationToken);
             await StreamMessageAsync(request.ThreadId, messageId, proseText, cancellationToken);
             await CompleteRunAsync(request.ThreadId, runId, proseRequest, appearanceResolution, proseText, cancellationToken);
             PublishWorkspaceRefresh(request.ThreadId);
@@ -461,10 +474,40 @@ public sealed class StorySceneChatService(
         }
     }
 
+    private async Task<StoryScenePostTarget> ResolvePostTargetAsync(
+        DbAppContext dbContext,
+        ChatThread thread,
+        PostStorySceneMessage request,
+        string operation,
+        CancellationToken cancellationToken)
+    {
+        if (!request.RetrySourceMessageId.HasValue)
+            return new StoryScenePostTarget(thread.ActiveLeafMessageId, null, null);
+
+        var messages = await dbContext.ChatMessages
+            .Where(x => x.ThreadId == thread.Id)
+            .OrderBy(x => x.CreatedUtc)
+            .ToListAsync(cancellationToken);
+        var sourceMessage = messages.FirstOrDefault(x => x.Id == request.RetrySourceMessageId.Value)
+            ?? throw new InvalidOperationException($"{operation} failed because the source message could not be found.");
+        var selectedLeafMessageId = ResolveSelectedLeafMessageId(messages, thread.ActiveLeafMessageId);
+
+        if (selectedLeafMessageId != sourceMessage.Id)
+            throw new InvalidOperationException($"{operation} failed because only the latest selected message can be retried.");
+
+        return new StoryScenePostTarget(sourceMessage.ParentMessageId, sourceMessage.Id, sourceMessage);
+    }
+
+    private static bool ShouldRetitleRootRetry(string currentTitle, StoryScenePostTarget postTarget) =>
+        postTarget.SourceMessage is not null
+        && !postTarget.SourceMessage.ParentMessageId.HasValue
+        && string.Equals(currentTitle, BuildThreadTitle(postTarget.SourceMessage.Content), StringComparison.Ordinal);
+
     private async Task<StoryMessagePlannerResult> RunPlannerStageAsync(
         ConfiguredAgent agent,
         PostStorySceneMessage request,
         StorySceneGenerationContext context,
+        StoryGenerationSettingsView generationSettings,
         CancellationToken cancellationToken)
     {
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
@@ -475,7 +518,7 @@ public sealed class StorySceneChatService(
 
         var response = await agent.ChatClient.GetResponseAsync<PlannerStageResponse>(
             messages,
-            options: BuildPlannerOptions(),
+            options: BuildPlannerOptions(generationSettings),
             useJsonSchemaResponseFormat: agent.UseJsonSchemaResponseFormat,
             cancellationToken: cancellationToken);
         var planner = response.Result;
@@ -490,7 +533,11 @@ public sealed class StorySceneChatService(
             RequireValue(planner.PlanningSummary, "planner summary"));
     }
 
-    private async Task<string> RunProseStageAsync(ConfiguredAgent agent, StoryMessageProseRequest request, CancellationToken cancellationToken)
+    private async Task<string> RunProseStageAsync(
+        ConfiguredAgent agent,
+        StoryMessageProseRequest request,
+        StoryGenerationSettingsView generationSettings,
+        CancellationToken cancellationToken)
     {        
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
         [
@@ -500,7 +547,7 @@ public sealed class StorySceneChatService(
 
         var response = await agent.ChatClient.GetResponseAsync(
             messages,
-            options: new ChatOptions { Temperature = 0.9f },
+            options: new ChatOptions { Temperature = (float)generationSettings.ProseTemperature },
             cancellationToken: cancellationToken);
         var prose = response.Text?.Trim();
         var normalizedProse = string.IsNullOrWhiteSpace(prose)
@@ -896,6 +943,7 @@ public sealed class StorySceneChatService(
 
     private static IReadOnlyList<StorySceneTranscriptNodeView> BuildTranscript(
         IReadOnlyList<DbChatMessage> selectedPath,
+        IReadOnlyList<DbChatMessage> allMessages,
         ILookup<Guid?, DbChatMessage> childrenLookup,
         IReadOnlyDictionary<Guid, int> descendantCounts,
         Guid? selectedSpeakerId,
@@ -917,13 +965,13 @@ public sealed class StorySceneChatService(
         for (var index = 0; index < selectedPath.Count; index++)
         {
             var message = selectedPath[index];
-            var selectedBranchMessageId = index < selectedPath.Count - 1 ? selectedPath[index + 1].Id : (Guid?)null;
+            var branchMessages = childrenLookup[message.ParentMessageId].ToList();
             var children = childrenLookup[message.Id].ToList();
             var branchNavigator = BuildBranchNavigator(
+                message.ParentMessageId,
                 message.Id,
-                selectedBranchMessageId,
-                children,
-                childrenLookup.SelectMany(x => x).DistinctBy(x => x.Id).OrderBy(x => x.CreatedUtc).ToList(),
+                branchMessages,
+                allMessages,
                 characters);
             var messageAppearance = appearanceByMessageId.TryGetValue(message.Id, out var appearancesForMessage)
                 ? appearancesForMessage.LastOrDefault()
@@ -1083,23 +1131,30 @@ public sealed class StorySceneChatService(
     private static string BuildProseSystemPrompt(bool narrator)
     {
         var builder = new StringBuilder();
-        builder.AppendLine("You are the prose stage for a story scene chat.");
-        builder.AppendLine("Write only the final message content for the selected actor.");
-        builder.AppendLine("Stay faithful to the character, planner output, current scene facts, snapshot summary, and recent transcript.");
-        builder.AppendLine("Write one turn only.");
-        builder.AppendLine("Advance the scene one beat.");
-        builder.AppendLine("Do not fast-forward.");
-        builder.AppendLine("Do not resolve the whole exchange.");
-        builder.AppendLine("Do not make other characters take major new actions unless it is an immediate reaction.");
-        builder.AppendLine("Stop at the first natural pause.");
+        builder.AppendLine(
+            """
+            You are the prose stage for a story scene chat.
+            Write only the final message content for the selected actor.
+            Stay faithful to the character, planner output, current scene facts, snapshot summary, and recent transcript.
+            Write one turn only to advance the scene one beat.
+            Do not fast-forward.
+            Do not resolve the whole exchange.
+            Do not make other characters take major new actions unless it is an immediate reaction.
+            Stop at the first natural pause.
+            """);
+
         if (narrator)
         {
             builder.AppendLine("You are speaking as the story narrator guiding the narrative, write a descriptive narration instead of dialogue.");
         }
         else 
         {
-            builder.AppendLine("Write as that character speaking or acting in-scene.");
-            builder.AppendLine("Include any actions, body language, hidden emotional state, and internal monologue in *asterisks* in the message.");
+            builder.AppendLine(
+                """
+                Write as that character speaking or acting in-scene.
+                Use actions, body language, hidden emotional state, and internal monologue selectively. Include only the details that add value to the moment by clarifying intent, strengthening subtext, or sharpening the emotional beat. Prefer the most revealing detail over multiple similar ones.
+                Keep the turn focused on its clearest emotional and narrative movement.
+                """);
         }
         return builder.ToString().TrimEnd();
     }
@@ -1118,12 +1173,16 @@ public sealed class StorySceneChatService(
 
     private static void AppendTurnScopeRules(StringBuilder builder)
     {
-        builder.AppendLine("Turn scope rules:");
-        builder.AppendLine("- One turn only.");
-        builder.AppendLine("- Advance the scene one beat.");
-        builder.AppendLine("- Direct reaction is okay if it happens immediately.");
-        builder.AppendLine("- Do not fast-forward into follow-up beats.");
-        builder.AppendLine("- Stop at the next natural pause.");
+        builder.AppendLine("""
+        Turn scope rules:
+        - One turn only.
+        - Keep spoken words concise like natural speech. Focus more on subtext to convey meaning instead of explicit statements.
+        - Advance the scene one beat.
+        - Direct reaction is okay if it happens immediately.
+        - Do not fast-forward into follow-up beats.
+        - Avoid duplicate sentiments; do not repeat the same emotion, hesitation, refusal, or desire in different words.
+        - Stop at the next natural pause.
+        """);
     }
 
     private static string BuildContextSummary(StorySceneGenerationContext context)
@@ -1730,14 +1789,14 @@ public sealed class StorySceneChatService(
             throw new InvalidOperationException("Selecting the scene speaker failed because the chosen character could not be found.");
     }
 
-    private ChatOptions BuildPlannerOptions()
+    private ChatOptions BuildPlannerOptions(StoryGenerationSettingsView generationSettings)
     {
         [Description("Get the actor details, scene state, snapshot summary, and transcript details for the current generation context.")]
         string GetContextDetails() => "The full context is already present in the planner prompt.";
 
         return new ChatOptions
         {
-            Temperature = 0.4f,
+            Temperature = (float)generationSettings.PlannerTemperature,
             Tools = [AIFunctionFactory.Create(GetContextDetails)]
         };
     }
@@ -1772,6 +1831,11 @@ public sealed class StorySceneChatService(
         DateTime CreatedUtc,
         StorySceneSnapshotView? Snapshot,
         StorySceneAppearanceEntryView? Appearance);
+
+    private sealed record StoryScenePostTarget(
+        Guid? ParentMessageId,
+        Guid? EditedFromMessageId,
+        DbChatMessage? SourceMessage);
 
     private sealed record GenerationBuildResult(
         StorySceneGenerationContext Context,

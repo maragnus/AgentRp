@@ -308,10 +308,6 @@
         {
             if (OnApplied.HasDelegate)
                 await OnApplied.InvokeAsync(narrative);
-
-            UserFeedbackService.ShowBackgroundSuccess(
-                $"Applied private motivations to '{BuildDisplayName()}'. Save the character to persist them.",
-                "Private Motivations Applied");
         }
         catch (Exception exception)
         {

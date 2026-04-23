@@ -3,6 +3,7 @@
 @inject IChatStoryService ChatStoryService
 @inject IStorySceneChatService StorySceneChatService
 @inject IThreadAgentService ThreadAgentService
+@inject IStoryGenerationSettingsService StoryGenerationSettingsService
 @inject IActivityNotifier ActivityNotifier
 @inject IUserFeedbackService UserFeedbackService
 @inject NavigationManager NavigationManager
@@ -48,26 +49,51 @@
                 }
                 else
                 {
-                    <div class="d-flex flex-column gap-2">
+                    <div class="row row-cols-3 g-2">
                         @foreach (var agent in _story.AvailableAgents)
                         {
                             var agentButtonClass = string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal)
-                                ? "btn btn-primary btn-sm w-100"
-                                : "btn btn-outline-primary btn-sm w-100";
+                                ? "btn btn-primary btn-sm w-100 text-truncate"
+                                : "btn btn-outline-primary btn-sm w-100 text-truncate";
                             var isSwitchingAgent = _switchingAgentNames.Contains(agent.Name);
 
-                            <BusyButton Class="@agentButtonClass"
-                                        IsBusy="@isSwitchingAgent"
-                                        Disabled="@(isSwitchingAgent || string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal))"
-                                        BusyText=""
-                                        ShowBusyText="false"
-                                        title="@(string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal) ? $"{agent.Name} is already selected" : $"Use {agent.Name} for AI actions")"
-                                        aria-label="@(string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal) ? $"{agent.Name} is already selected" : $"Use {agent.Name} for AI actions")"
-                                        OnClick="() => SelectAgentAsync(agent.Name)">
-                                @agent.Name
-                            </BusyButton>
+                            <div class="col">
+                                <BusyButton Class="@agentButtonClass"
+                                            IsBusy="@isSwitchingAgent"
+                                            Disabled="@(isSwitchingAgent || string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal))"
+                                            BusyText=""
+                                            ShowBusyText="false"
+                                            title="@(string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal) ? $"{agent.Name} is already selected" : $"Use {agent.Name} for AI actions")"
+                                            aria-label="@(string.Equals(_story.SelectedAgentName, agent.Name, StringComparison.Ordinal) ? $"{agent.Name} is already selected" : $"Use {agent.Name} for AI actions")"
+                                            OnClick="() => SelectAgentAsync(agent.Name)">
+                                    @agent.Name
+                                </BusyButton>
+                            </div>
                         }
                     </div>
+
+                    @if (_generationSettings is not null)
+                    {
+                        <div class="border-top pt-2 mt-2">
+                            <div class="d-flex align-items-center justify-content-between gap-2">
+                                <div>
+                                    <div class="small text-uppercase text-body-secondary">Temperature</div>
+                                    <div class="small text-body-secondary">
+                                        Planning @FormatTemperature(_generationSettings.PlannerTemperature)
+                                        <span aria-hidden="true">/</span>
+                                        Writing @FormatTemperature(_generationSettings.ProseTemperature)
+                                    </div>
+                                </div>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit temperature"
+                                        aria-label="Edit AI temperature settings"
+                                        @onclick="OpenGenerationSettingsModal">
+                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                        </div>
+                    }
                 }
             </div>
 
@@ -236,20 +262,89 @@
                        OnChanged="HandleStoryChangedAsync" />
 }
 
+<AppModal IsOpen="@_isGenerationSettingsModalOpen"
+          Title="AI Temperature"
+          DialogClass="modal-dialog modal-dialog-centered modal-fullscreen-sm-down"
+          OnClose="CloseGenerationSettingsModal">
+    <ChildContent>
+        <div class="d-flex flex-column gap-3">
+            <InlineAlert Message="@_generationSettingsErrorMessage" />
+
+            <div class="small text-body-secondary">Lower is steadier. Higher is more varied.</div>
+
+            <div>
+                <label for="@_plannerTemperatureInputId" class="form-label d-flex align-items-center justify-content-between">
+                    <span>Planning</span>
+                    <span class="text-body-secondary">@FormatTemperature(_plannerTemperature)</span>
+                </label>
+                <input id="@_plannerTemperatureInputId"
+                       class="form-range"
+                       type="range"
+                       min="0"
+                       max="2"
+                       step="0.1"
+                       disabled="@_isSavingGenerationSettings"
+                       @bind="_plannerTemperature"
+                       @bind:event="oninput" />
+            </div>
+
+            <div>
+                <label for="@_proseTemperatureInputId" class="form-label d-flex align-items-center justify-content-between">
+                    <span>Writing</span>
+                    <span class="text-body-secondary">@FormatTemperature(_proseTemperature)</span>
+                </label>
+                <input id="@_proseTemperatureInputId"
+                       class="form-range"
+                       type="range"
+                       min="0"
+                       max="2"
+                       step="0.1"
+                       disabled="@_isSavingGenerationSettings"
+                       @bind="_proseTemperature"
+                       @bind:event="oninput" />
+            </div>
+        </div>
+    </ChildContent>
+    <FooterContent>
+        <button type="button"
+                class="btn btn-outline-secondary"
+                disabled="@_isSavingGenerationSettings"
+                @onclick="CloseGenerationSettingsModal">
+            Cancel
+        </button>
+        <BusyButton Class="btn btn-primary"
+                    IsBusy="@_isSavingGenerationSettings"
+                    Disabled="@(!CanSaveGenerationSettings)"
+                    BusyText="Saving..."
+                    OnClick="SaveGenerationSettingsAsync">
+            <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+            Save
+        </BusyButton>
+    </FooterContent>
+</AppModal>
+
 @code {
     private IDisposable? _storySubscription;
     private IDisposable? _chatSubscription;
+    private readonly string _plannerTemperatureInputId = $"story-planner-temperature-{Guid.NewGuid():N}";
+    private readonly string _proseTemperatureInputId = $"story-prose-temperature-{Guid.NewGuid():N}";
     private bool _isLoading;
     private Guid? _threadId;
     private ChatStorySidebarView? _story;
+    private StoryGenerationSettingsView? _generationSettings;
     private bool _isCharacterModalOpen;
     private bool _isLocationsModalOpen;
     private bool _isItemsModalOpen;
     private bool _isHistoryModalOpen;
+    private bool _isGenerationSettingsModalOpen;
+    private bool _isSavingGenerationSettings;
+    private double _plannerTemperature;
+    private double _proseTemperature;
     private Guid? _selectedCharacterIdForModal;
     private Guid? _selectedItemIdForModal;
     private bool _startCharacterModalInCreateMode;
     private string? _errorMessage;
+    private string? _generationSettingsErrorMessage;
     private HashSet<Guid> _togglingCharacterIds = [];
     private HashSet<Guid> _togglingItemIds = [];
     private HashSet<string> _switchingSpeakerKeys = [];
@@ -278,9 +373,21 @@
         try
         {
             _threadId = await ResolveCurrentThreadIdAsync();
-            _story = _threadId.HasValue
-                ? await ChatStoryService.GetSidebarAsync(_threadId.Value, CancellationToken.None)
-                : null;
+            if (_threadId.HasValue)
+            {
+                var storyTask = ChatStoryService.GetSidebarAsync(_threadId.Value, CancellationToken.None);
+                var generationSettingsTask = StoryGenerationSettingsService.GetSettingsAsync(CancellationToken.None);
+                await Task.WhenAll(storyTask, generationSettingsTask);
+
+                _story = storyTask.Result;
+                ApplyGenerationSettings(generationSettingsTask.Result);
+            }
+            else
+            {
+                _story = null;
+                _generationSettings = null;
+                _isGenerationSettingsModalOpen = false;
+            }
         }
         finally
         {
@@ -288,6 +395,12 @@
             StateHasChanged();
         }
     }
+
+    private bool CanSaveGenerationSettings =>
+        !_isSavingGenerationSettings
+        && _generationSettings is not null
+        && (!AreTemperaturesEqual(_plannerTemperature, _generationSettings.PlannerTemperature)
+            || !AreTemperaturesEqual(_proseTemperature, _generationSettings.ProseTemperature));
 
     private async Task<Guid?> ResolveCurrentThreadIdAsync()
     {
@@ -333,6 +446,16 @@
 
     private void OpenHistoryModal() => _isHistoryModalOpen = true;
 
+    private void OpenGenerationSettingsModal()
+    {
+        if (_generationSettings is null)
+            return;
+
+        ApplyGenerationSettingsDraft(_generationSettings);
+        _generationSettingsErrorMessage = null;
+        _isGenerationSettingsModalOpen = true;
+    }
+
     private Task CloseCharacterModal()
     {
         _isCharacterModalOpen = false;
@@ -357,6 +480,19 @@
     private Task CloseHistoryModal()
     {
         _isHistoryModalOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseGenerationSettingsModal()
+    {
+        if (_isSavingGenerationSettings)
+            return Task.CompletedTask;
+
+        _isGenerationSettingsModalOpen = false;
+        _generationSettingsErrorMessage = null;
+        if (_generationSettings is not null)
+            ApplyGenerationSettingsDraft(_generationSettings);
+
         return Task.CompletedTask;
     }
 
@@ -401,7 +537,6 @@
         {
             await ThreadAgentService.SetSelectedAgentAsync(_threadId.Value, agentName, CancellationToken.None);
             await LoadAsync();
-            UserFeedbackService.ShowBackgroundSuccess($"AI actions now use {agentName} for this chat.", "AI Provider Updated");
         }
         catch (Exception exception)
         {
@@ -412,6 +547,39 @@
         finally
         {
             _switchingAgentNames.Remove(agentName);
+            StateHasChanged();
+        }
+    }
+
+    private async Task SaveGenerationSettingsAsync()
+    {
+        if (_generationSettings is null || _isSavingGenerationSettings)
+            return;
+
+        _isSavingGenerationSettings = true;
+        _errorMessage = null;
+        _generationSettingsErrorMessage = null;
+
+        try
+        {
+            var update = new UpdateStoryGenerationSettings(
+                NormalizeTemperature(_plannerTemperature),
+                NormalizeTemperature(_proseTemperature));
+            var savedSettings = await StoryGenerationSettingsService.UpdateSettingsAsync(update, CancellationToken.None);
+            ApplyGenerationSettings(savedSettings);
+            _isGenerationSettingsModalOpen = false;
+            _generationSettingsErrorMessage = null;
+            UserFeedbackService.ShowBackgroundSuccess("AI temperature settings were saved.", "AI Settings Saved");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving AI generation settings failed.");
+            _generationSettingsErrorMessage = "Saving AI temperature settings failed.";
+            UserFeedbackService.ShowBackgroundError(_generationSettingsErrorMessage, "AI Settings Failed");
+        }
+        finally
+        {
+            _isSavingGenerationSettings = false;
             StateHasChanged();
         }
     }
@@ -506,4 +674,26 @@
     }
 
     private static string GetSpeakerKey(Guid? characterId) => characterId?.ToString("N") ?? "narrator";
+
+    private void ApplyGenerationSettings(StoryGenerationSettingsView settings)
+    {
+        _generationSettings = settings;
+        if (!_isGenerationSettingsModalOpen || _isSavingGenerationSettings)
+            ApplyGenerationSettingsDraft(settings);
+    }
+
+    private void ApplyGenerationSettingsDraft(StoryGenerationSettingsView settings)
+    {
+        _plannerTemperature = settings.PlannerTemperature;
+        _proseTemperature = settings.ProseTemperature;
+    }
+
+    private static string FormatTemperature(double temperature) =>
+        NormalizeTemperature(temperature).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static double NormalizeTemperature(double temperature) =>
+        Math.Round(Math.Clamp(temperature, 0, 2), 1, MidpointRounding.AwayFromZero);
+
+    private static bool AreTemperaturesEqual(double left, double right) =>
+        Math.Abs(NormalizeTemperature(left) - NormalizeTemperature(right)) < 0.001;
 }

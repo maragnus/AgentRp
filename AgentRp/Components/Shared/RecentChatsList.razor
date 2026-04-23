@@ -182,9 +182,6 @@ else
         try
         {
             await ChatWorkspaceService.RenameThreadAsync(thread.Id, normalizedTitle, CancellationToken.None);
-            UserFeedbackService.ShowBackgroundSuccess(
-                $"Renamed chat to \"{normalizedTitle}\".",
-                "Chat Renamed");
             CancelRename();
         }
         catch (Exception exception)
@@ -207,11 +204,6 @@ else
         try
         {
             await ChatWorkspaceService.SetThreadStarredAsync(thread.Id, isStarred, CancellationToken.None);
-            UserFeedbackService.ShowBackgroundSuccess(
-                isStarred
-                    ? $"Starred \"{thread.Title}\". Starred chats stay at the top of the list."
-                    : $"Removed the star from \"{thread.Title}\".",
-                isStarred ? "Chat Starred" : "Chat Unstarred");
         }
         catch (Exception exception)
         {

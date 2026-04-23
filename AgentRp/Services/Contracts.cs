@@ -532,7 +532,6 @@ public sealed record StorySceneChatState(
     Guid? SelectedLeafMessageId,
     StorySceneSpeakerView SelectedSpeaker,
     IReadOnlyList<StorySceneSpeakerView> AvailableSpeakers,
-    StorySceneBranchNavigatorView? RootBranchNavigator,
     IReadOnlyList<StorySceneTranscriptNodeView> Transcript,
     string? SelectedAgentName,
     bool IsAiAvailable);
@@ -542,7 +541,8 @@ public sealed record PostStorySceneMessage(
     Guid? SpeakerCharacterId,
     StoryScenePostMode Mode,
     string? ManualText,
-    string? GuidancePrompt);
+    string? GuidancePrompt,
+    Guid? RetrySourceMessageId = null);
 
 public sealed record BranchStorySceneMessage(
     Guid ThreadId,
