@@ -826,7 +826,8 @@ public sealed record StoryMessagePlannerResult(
     string ImmediateGoal,
     string WhyNow,
     string ChangeIntroduced,
-    IReadOnlyList<string> Guardrails);
+    IReadOnlyList<string> NarrativeGuardrails,
+    IReadOnlyList<string> ContentGuardrails);
 
 public sealed record StoryMessageProseRequest(
     StoryScenePostMode Mode,

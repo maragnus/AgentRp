@@ -32,6 +32,7 @@ else
 {
     var selectedSpeakerAiPostAction = GetAdaptiveAiPostAction(respond: false);
     var respondAiPostAction = GetAdaptiveAiPostAction(respond: true);
+    var showRespondAiPostAction = !_retrySourceMessageId.HasValue;
 
     <div class="d-flex h-100 flex-column bg-body shadow-sm">
         <div class="flex-shrink-0 border-bottom bg-body px-3 py-3 px-lg-4">
@@ -695,17 +696,20 @@ else
                             @selectedSpeakerAiPostAction.Label
                         </BusyButton>
 
-                        <BusyButton Class="btn btn-outline-primary"
-                                    OnClick="() => PostAsync(respondAiPostAction.Mode)"
-                                    IsBusy="@(_submittingMode == respondAiPostAction.Mode)"
-                                    BusyText="Generating..."
-                                    Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && _submittingMode != respondAiPostAction.Mode))"
-                                    ShowBusyText="false"
-                                    title="@respondAiPostAction.Title"
-                                    aria-label="@respondAiPostAction.Title">
-                            <i class="@respondAiPostAction.IconCssClass" aria-hidden="true"></i>
-                            @respondAiPostAction.Label
-                        </BusyButton>
+                        @if (showRespondAiPostAction)
+                        {
+                            <BusyButton Class="btn btn-outline-primary"
+                                        OnClick="() => PostAsync(respondAiPostAction.Mode)"
+                                        IsBusy="@(_submittingMode == respondAiPostAction.Mode)"
+                                        BusyText="Generating..."
+                                        Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && _submittingMode != respondAiPostAction.Mode))"
+                                        ShowBusyText="false"
+                                        title="@respondAiPostAction.Title"
+                                        aria-label="@respondAiPostAction.Title">
+                                <i class="@respondAiPostAction.IconCssClass" aria-hidden="true"></i>
+                                @respondAiPostAction.Label
+                            </BusyButton>
+                        }
 
                         <BusyButton Class="btn btn-outline-primary"
                                     OnClick="() => PostAsync(StoryScenePostMode.Manual)"
@@ -824,7 +828,7 @@ else
                             <textarea id="story-plan-guardrails"
                                       class="form-control"
                                       rows="5"
-                                      @bind="_planDraftGuardrails"
+                                      @bind="_planDraftNarrativeGuardrails"
                                       disabled="@_isSubmitting"></textarea>
                             <div class="form-text">Optional. Use one guardrail per line.</div>
                         </div>
@@ -959,7 +963,8 @@ else
     private string _planDraftImmediateGoal = string.Empty;
     private string _planDraftWhyNow = string.Empty;
     private string _planDraftChangeIntroduced = string.Empty;
-    private string _planDraftGuardrails = string.Empty;
+    private string _planDraftNarrativeGuardrails = string.Empty;
+    private string _planDraftContentGuardrails = string.Empty;
     private string? _planEditErrorMessage;
     private bool _isDeleteModalOpen;
     private StorySceneMessageView? _deleteTargetMessage;
@@ -1346,7 +1351,7 @@ else
         _planDraftImmediateGoal = planner.ImmediateGoal;
         _planDraftWhyNow = planner.WhyNow;
         _planDraftChangeIntroduced = planner.ChangeIntroduced;
-        _planDraftGuardrails = string.Join(Environment.NewLine, planner.Guardrails);
+        _planDraftNarrativeGuardrails = string.Join(Environment.NewLine, planner.NarrativeGuardrails);
         _planEditErrorMessage = null;
         _isPlanModalOpen = true;
     }
@@ -1371,7 +1376,7 @@ else
         _planDraftImmediateGoal = string.Empty;
         _planDraftWhyNow = string.Empty;
         _planDraftChangeIntroduced = string.Empty;
-        _planDraftGuardrails = string.Empty;
+        _planDraftNarrativeGuardrails = string.Empty;
         _planEditErrorMessage = null;
     }
 
@@ -1404,7 +1409,8 @@ else
                         _planDraftImmediateGoal,
                         _planDraftWhyNow,
                         _planDraftChangeIntroduced,
-                        NormalizePlanDraftGuardrails())),
+                        NormalizePlanDraftGuardrails(_planDraftNarrativeGuardrails),
+                        NormalizePlanDraftGuardrails(_planDraftContentGuardrails))),
                 CancellationToken.None);
 
             var speakerName = message.CanonicalSpeakerName;
@@ -1944,8 +1950,8 @@ else
         _ => turnShape.ToString()
     };
 
-    private IReadOnlyList<string> NormalizePlanDraftGuardrails() =>
-        _planDraftGuardrails
+    private IReadOnlyList<string> NormalizePlanDraftGuardrails(string guardrails) =>
+        guardrails
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)

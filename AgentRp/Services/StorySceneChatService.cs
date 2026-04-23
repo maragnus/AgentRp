@@ -150,7 +150,6 @@ public sealed class StorySceneChatService(
         var trimmedContent = request.Content.Trim();
         var previousContent = message.Content;
         message.Content = trimmedContent;
-        message.SourceProcessRunId = null;
         thread.UpdatedUtc = DateTime.UtcNow;
 
         if (!message.ParentMessageId.HasValue
@@ -308,7 +307,7 @@ public sealed class StorySceneChatService(
                         SortOrder = 0,
                         Title = "Appearance",
                         Summary = "Reused the source message's saved appearance context.",
-                        Detail = TruncateProcessDetail(BuildAppearanceDetail(appearance)),
+                        Detail = TruncateProcessDetail(StorySceneSharedPromptBuilder.BuildAppearanceDetail(appearance)),
                         IconCssClass = "fa-regular fa-shirt",
                         Status = ProcessStepStatus.Completed,
                         StartedUtc = now,
@@ -320,7 +319,7 @@ public sealed class StorySceneChatService(
                         SortOrder = 1,
                         Title = "Planning",
                         Summary = $"Reused saved plan: {BuildPlannerSummary(proseRequest.Planner)}",
-                        Detail = TruncateProcessDetail(BuildPlannerDetail(proseRequest.Planner)),
+                        Detail = TruncateProcessDetail(StorySceneSharedPromptBuilder.BuildPlannerDetail(proseRequest.Planner)),
                         IconCssClass = "fa-regular fa-map",
                         Status = ProcessStepStatus.Completed,
                         StartedUtc = now,
@@ -547,7 +546,7 @@ public sealed class StorySceneChatService(
         sourceRun.ContextJson = SerializeContext(updatedContext);
         thread.UpdatedUtc = now;
 
-        UpdateStepSummaryIfPresent(sourceRun, ProcessStepKeys.Planning, BuildPlannerSummary(updatedPlanner), BuildPlannerDetail(updatedPlanner));
+        UpdateStepSummaryIfPresent(sourceRun, ProcessStepKeys.Planning, BuildPlannerSummary(updatedPlanner), StorySceneSharedPromptBuilder.BuildPlannerDetail(updatedPlanner));
 
         await dbContext.SaveChangesAsync(cancellationToken);
         PublishWorkspaceRefresh(request.ThreadId);
@@ -839,8 +838,8 @@ public sealed class StorySceneChatService(
     {
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
         [
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildPlannerSystemPrompt()),
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildPlannerUserPrompt(request, context))
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, StoryScenePlanningPromptBuilder.BuildSystemPrompt()),
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, StoryScenePlanningPromptBuilder.BuildUserPrompt(request, context))
         ];
 
         var response = await agent.ChatClient.GetResponseAsync<PlannerStageResponse>(
@@ -857,7 +856,8 @@ public sealed class StorySceneChatService(
             RequireValue(planner.ImmediateGoal, "planner immediate goal"),
             RequireValue(planner.WhyNow, "planner why now"),
             RequireValue(planner.ChangeIntroduced, "planner change introduced"),
-            NormalizeItems(planner.Guardrails));
+            NormalizeItems(planner.NarrativeGuardrails),
+            NormalizeItems(planner.ContentGuardrails));
     }
 
     private async Task<StorySceneResponderSelectionResult> RunResponderSelectionStageAsync(
@@ -884,8 +884,17 @@ public sealed class StorySceneChatService(
 
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
         [
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildResponderSelectionSystemPrompt()),
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildResponderSelectionUserPrompt(activeSpeaker, candidates, context, appearance, UsesGuidance(mode) ? guidancePrompt : null))
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, StorySceneResponderSelectionPromptBuilder.BuildSystemPrompt()),
+            new Microsoft.Extensions.AI.ChatMessage(
+                Microsoft.Extensions.AI.ChatRole.User,
+                StorySceneResponderSelectionPromptBuilder.BuildUserPrompt(
+                    activeSpeaker,
+                    candidates,
+                    context.StoryContext,
+                    context.CurrentLocation,
+                    context.TranscriptSinceSnapshot,
+                    appearance,
+                    UsesGuidance(mode) ? guidancePrompt : null))
         ];
 
         var response = await agent.ChatClient.GetResponseAsync<ResponderStageResponse>(
@@ -915,8 +924,8 @@ public sealed class StorySceneChatService(
     {
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
         [
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildProseSystemPrompt(request)),
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildProseUserPrompt(request))
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, StorySceneProsePromptBuilder.BuildSystemPrompt(request)),
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, StorySceneProsePromptBuilder.BuildUserPrompt(request))
         ];
 
         var rawProseBuilder = new StringBuilder();
@@ -979,7 +988,7 @@ public sealed class StorySceneChatService(
             ProcessStepKeys.Appearance,
             now,
             appearance.LatestEntry?.Summary ?? "Current appearance was resolved for the active branch.",
-            BuildAppearanceDetail(appearance));
+            StorySceneSharedPromptBuilder.BuildAppearanceDetail(appearance));
 
         if (IsRespondMode(mode))
         {
@@ -1042,7 +1051,7 @@ public sealed class StorySceneChatService(
             run,
             ProcessStepKeys.Appearance,
             appearance.LatestEntry?.Summary ?? "The latest branch-local appearance was reused without changes.",
-            BuildAppearanceDetail(appearance));
+            StorySceneSharedPromptBuilder.BuildAppearanceDetail(appearance));
         CompleteStepIfPresent(
             run,
             ProcessStepKeys.Responder,
@@ -1094,10 +1103,10 @@ public sealed class StorySceneChatService(
             run,
             ProcessStepKeys.Appearance,
             appearance.LatestEntry?.Summary ?? "The latest branch-local appearance was reused without changes.",
-            BuildAppearanceDetail(appearance));
+            StorySceneSharedPromptBuilder.BuildAppearanceDetail(appearance));
         if (responderSelection is not null)
             UpdateStepSummaryIfPresent(run, ProcessStepKeys.Responder, BuildResponderSummary(responderSelection), BuildResponderDetail(responderSelection));
-        CompleteStepIfPresent(run, ProcessStepKeys.Planning, now, BuildPlannerSummary(planner), BuildPlannerDetail(planner));
+        CompleteStepIfPresent(run, ProcessStepKeys.Planning, now, BuildPlannerSummary(planner), StorySceneSharedPromptBuilder.BuildPlannerDetail(planner));
         StartStepIfPresent(
             run,
             ProcessStepKeys.Writing,
@@ -1640,7 +1649,7 @@ public sealed class StorySceneChatService(
             if (appearanceStep is not null)
             {
                 appearanceStep.Summary = updatedAppearance.Summary;
-                appearanceStep.Detail = TruncateProcessDetail(BuildAppearanceDetail(refreshedAppearance));
+                appearanceStep.Detail = TruncateProcessDetail(StorySceneSharedPromptBuilder.BuildAppearanceDetail(refreshedAppearance));
             }
 
             hasChanges = true;
@@ -1709,7 +1718,7 @@ public sealed class StorySceneChatService(
                 ? step with
                 {
                     Summary = updatedAppearanceEntry.Summary,
-                    Detail = TruncateProcessDetail(BuildAppearanceDetail(refreshedAppearance))
+                    Detail = TruncateProcessDetail(StorySceneSharedPromptBuilder.BuildAppearanceDetail(refreshedAppearance))
                 }
                 : step)
             .ToList();
@@ -1954,459 +1963,11 @@ public sealed class StorySceneChatService(
         public const string Writing = "writing";
     }
 
-    private static string BuildResponderSelectionSystemPrompt() =>
-    """
-    You choose who in the current scene should respond next in an automatic story chat.
-    Return only structured data.
-
-    Choose exactly one responder from the provided candidate list.
-    Never choose the active speaker.
-    Never choose the narrator.
-    Never choose someone who is not currently present in the scene.
-
-    Pick the responder who creates the most interesting immediate next turn for this exact moment.
-    Favor the character with the strongest local reason, pressure, opportunity, or emotional stake to answer now.
-    """;
-
-    private static string BuildResponderSelectionUserPrompt(
-        StorySceneActorContext activeSpeaker,
-        IReadOnlyList<StorySceneCharacterContext> candidates,
-        StorySceneSharedContext context,
-        StorySceneAppearanceResolution appearance,
-        string? guidancePrompt)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine($"**Active speaker:** {activeSpeaker.Name}");
-        builder.AppendLine($"- This speaker must not be selected as the responder.");
-        builder.AppendLine();
-        if (!string.IsNullOrWhiteSpace(guidancePrompt))
-        {
-            builder.AppendLine($"**Guidance:** {guidancePrompt.Trim()}");
-            builder.AppendLine();
-        }
-        builder.AppendLine("**Eligible responders:**");
-        foreach (var candidate in candidates)
-            builder.AppendLine($"- {candidate.Name}: {PromptInlineText(candidate.Summary)} | Current appearance: {PromptInlineText(candidate.CurrentAppearance, "None")}");
-        builder.AppendLine();
-        if (context.CurrentLocation is not null)
-            builder.AppendLine($"**Location:** {PromptInlineText(context.CurrentLocation.Name)}").AppendLine();
-        AppendStoryContext(builder, context.StoryContext);
-        AppendContentGuidance(builder, context.StoryContext);
-        builder.AppendLine("**Recent transcript:**");
-        if (context.TranscriptSinceSnapshot.Count == 0)
-        {
-            builder.AppendLine("- None");
-        }
-        else
-        {
-            foreach (var message in context.TranscriptSinceSnapshot)
-                builder.AppendLine($"- {message.SpeakerName}: {PromptInlineText(message.Content, "None")}");
-        }
-
-        builder.AppendLine();
-        builder.AppendLine("**Current appearance state:**");
-        builder.AppendLine(BuildAppearanceDetail(appearance));
-        builder.AppendLine();
-        builder.AppendLine("Choose one name from the eligible responders list and explain briefly why they should answer next right now.");
-        return builder.ToString().TrimEnd();
-    }
-
     private static string BuildResponderSummary(StorySceneResponderSelectionResult responderSelection) =>
         $"Selected {responderSelection.CharacterName} to answer next.";
 
     private static string BuildResponderDetail(StorySceneResponderSelectionResult responderSelection) =>
         $"**Responder:** {responderSelection.CharacterName}\n**Why now:** {responderSelection.WhyThisCharacter}";
-
-    private static string BuildPlannerSystemPrompt() =>
-    """
-    You are the planning stage for a story scene message generator.
-    Decide the next turn before any prose is written.
-    Return only a concise structured plan.
-
-    Stay grounded in the provided story context, scene state, character facts, and transcript.
-    Plan one turn only.
-    Choose one immediate beat, not a sequence.
-
-    Build the plan using these fields:
-    - Turn shape: choose exactly one of compact, brief, monologue, or silent.
-    - Beat: the kind of move being made in this turn.
-    - Intent: the actor's immediate intention.
-    - Immediate goal: what this turn tries to achieve right now.
-    - Why now: why this beat fits this exact moment in the transcript.
-    - Change introduced: what becomes different after this turn.
-    - Guardrails: what the prose should avoid. Only things that would make the beat less effective or interesting. DO NOT MENTION EXPLICIT CONTENT RESTRICTIONS HERE.
-
-    Turn shape definitions:
-    - compact = one action beat, one or two phrases, optional short tag (always preferred)
-    - silent = action/subtext only, no spoken lines (common)
-    - brief = one action beat, one to two short lines with a tag in between (rare)
-    - monologue = short monologue allowed (only when asked)
-
-    Prioritize compact and silent almost always.
-    Use brief or monologue only when the turn naturally needs recounting or explanation for an open-ended prompt such as "how was your day".
-
-    Pick the most valuable next beat, not the safest or most literal reply.
-    If a direct reaction is needed, react.
-    If no direct reaction is needed, introduce a small new beat that moves the scene.
-
-    A strong beat changes something.
-    It may shift pressure, test a boundary, redirect attention, create a question, add discomfort, add intimacy, or force a reply.
-
-    Avoid empty beats.
-    Do not only restate rules, confirm the current situation, paraphrase the last line, or preserve the same tension without adding value.
-
-    Keep the beat playable and local.
-    Do not fast-forward.
-    Do not resolve the whole exchange.
-    Do not plan follow-up beats.
-    Stop where the next person would naturally answer or act.
-
-    Respect the supplied story context and content guidance.
-    If content is forbidden, do not plan beats that introduce it.
-    If content is encouraged, you may lean into it when the current scene supports it.
-
-    Do not write the final message text.
-    """;
-
-    private static string BuildPlannerUserPrompt(PostStorySceneMessage request, StorySceneGenerationContext context)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine(BuildContextSummary(context));
-        builder.AppendLine();
-
-        if (UsesGuidance(request.Mode))
-            builder.AppendLine($"Use this guidance to compose the next message: {request.GuidancePrompt?.Trim()}");
-
-        builder.AppendLine();
-        AppendTurnScopeRules(builder, context.Actor, false);
-        return builder.ToString().TrimEnd();
-    }
-
-    private static string BuildProseSystemPrompt(StoryMessageProseRequest request)
-    {
-        var context = request.Context;
-        var speaker = context.Actor.IsNarrator ? "the narrator" : $"{context.Actor.Name}";
-        var inScene = context.Characters
-            .Where(x => x.IsPresentInScene)
-            .Where(x => x.CharacterId != context.Actor.CharacterId)
-            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var builder = new StringBuilder();
-        builder.AppendLine(
-            $"""
-            You are {speaker} in a fictional chat between {string.Join(", ", inScene.Select(x => x.Name))} and yourself.
-            
-            Write {speaker}'s next message only.
-
-            Follow the planner's beat. 
-            Make one short playable move, then stop.
-
-            Priority order:
-            1. Fulfill the beat
-            2. Stay true to {speaker}, the current scene, and recent transcript
-            3. Use as few words as possible
-            4. Stop at the first natural pause
-
-            Respect the supplied story context and content guidance.
-
-            """);
-
-        if (context.Actor.IsNarrator)
-        {
-            builder.AppendLine("You are speaking as the story narrator guiding the narrative, write a descriptive narration instead of dialogue.");
-            return builder.ToString().TrimEnd();
-        }
-
-        switch (request.Planner.TurnShape)
-        {
-            case StoryTurnShape.Compact:
-                builder.AppendLine(
-                    """
-                    This turn has a compact shape, fulfill the beat with one sharp move.
-                    - Keep this very short.
-                    - Start with one brief visible action or reaction.
-                    - Follow with one or two short spoken phrases.
-                    - Optionally add one very short trailing tag if needed.
-                    - Stop immediately.
-                    - Do not add a second move.
-                    """);
-                break;                
-            case StoryTurnShape.Brief:
-                builder.AppendLine(
-                    """
-                    This turn has a brief shape, fulfill the beat with a quick move that may need a little setup or follow-through.
-                    - Keep this short.
-                    - Start with one brief action or reaction.
-                    - Follow with one or two short spoken lines separated by simple action.
-                    - Stop immediately.
-                    - Do not add a new topic or second emotional turn.
-                    """);
-                break;
-            case StoryTurnShape.Monologue:
-                builder.AppendLine(
-                    """
-                    This turn has a monologue shape, fulfill the beat with a longer move.
-                    - A longer reply is allowed here.
-                    - Up to three sentenses maximum of spoken words with simple actions in between.
-                    - Still focus on one beat only.
-                    - Stop at the first clear landing point.
-                    - Do not ramble, recap, or drift into a second move.
-                    """);
-                break;
-            case StoryTurnShape.Silent:
-                builder.AppendLine(
-                    """
-                    This turn has a silent shape, fulfill the beat with a nonverbal move or subtext and no verbal component.
-                    - Prefer action, expression, posture, or a small physical response.
-                    - Do not use dialogue unless a word or two is necessary to land the beat.
-                    - Keep it restrained and readable.
-                    - Stop early once action is clear.
-                    """);
-                break;
-        }
-
-        builder.AppendLine(
-            $"""
-            Rules:
-            - Write only as {speaker}
-            - Stay inside the current moment
-            - Do not fast-forward
-            - Do not resolve the whole exchange
-            - Do not add a second move after the beat lands
-            - Do not restate the same beat in another form
-            - Prefer implication over explanation
-            - Prefer one strong signal over several similar ones
-            - Do not add meta text, labels, or turn markers
-            - Do not write unwrapped narration
-
-            Format:
-            - Actions and non-spoken beats in *asterisks*
-            - Spoken dialogue in "double quotes"
-            - You may combine action and dialogue in the same line
-            """);
-
-        return builder.ToString().TrimEnd();
-    }
-
-    private static string BuildProseUserPrompt(StoryMessageProseRequest request)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine(BuildContextSummary(request.Context));
-        builder.AppendLine();
-        if (!string.IsNullOrWhiteSpace(request.GuidancePrompt))
-        {
-            builder.AppendLine("Guidance to follow strictly:");
-            builder.AppendLine(request.GuidancePrompt.Trim());
-            builder.AppendLine();
-        }
-
-        builder.AppendLine("**Planner result:**");
-        builder.AppendLine(BuildPlannerDetail(request.Planner));
-        builder.AppendLine();
-        builder.AppendLine("**Turn shape template:**");
-        builder.AppendLine(BuildTurnShapeTemplate(request.Planner.TurnShape, request.Context.Actor.IsNarrator));
-
-        // Turn scope reminder
-        builder.AppendLine().AppendLine(
-            """
-            Write the turn by fulfilling only:
-            1. the beat
-            2. the intent
-            3. the immediate goal
-            4. the change introduced
-            Honor why now and the guardrails.
-            Do not expand beyond them unless necessary for coherence.
-            Stop early to prevent ramble, recap, or repeating yourself.
-            """).AppendLine();
-        //AppendTurnScopeRules(builder, request.Context.Actor, true);
-
-        builder.AppendLine("Format reminder: Always wrap actions in *asterisks* and speech in \"quotes\". Never output unwrapped output.").AppendLine();
-
-        builder.Append("REQUIRED STEPS: ");
-        switch (request.Planner.TurnShape)
-        {
-            case StoryTurnShape.Compact:
-                builder.AppendLine(
-                    """
-                    Write only a very short compact turn with:
-                    - One brief visible *action*.
-                    - One or two short "spoken phrases".
-                    - One very short trailing *action* if needed.
-                    """);
-                break;                
-            case StoryTurnShape.Brief:
-                builder.AppendLine(
-                    """
-                    Write only a very brief turn with:
-                    - One brief *action*.
-                    - One or two short "spoken lines" separated by simple *action*.
-                    """);
-                break;
-            case StoryTurnShape.Monologue:
-                builder.AppendLine(
-                    """
-                    Write only a very short monologue turn with:
-                    - Up to three sentences maximum of "spoken word"s with simple *action* in between.
-                    - Stop before repeating.
-                    """);
-                break;
-            case StoryTurnShape.Silent:
-                builder.AppendLine(
-                    """
-                    Write only a quick silent turn with:
-                    - Nonverbal move or subtext *action* and no verbal component.
-                    - Prefer action, expression, posture, or a small physical response.
-                    - Do not use "dialogue" unless a word or two is necessary to land the beat.
-                    - Keep it restrained and readable.
-                    """);
-                break;
-        }
-        builder.AppendLine("- Stop");
-
-        return builder.ToString().TrimEnd();
-    }
-
-    private static void AppendTurnScopeRules(StringBuilder builder, StorySceneActorContext actor, bool proseMode)
-    {
-        builder
-            .AppendLine("Turn scope rules:")
-            .AppendLine($"- {actor.Name} only");
-
-        if (proseMode)
-        {
-            builder.AppendLine(
-            $"""
-            - one playable move
-            - stop eagerly
-            - keep speech natural and brief
-            - no repeated beat
-            - no meta text
-
-            Format reminder: Always wrap actions in *asterisks* and speech in "quotes". Never output unwrapped output.
-            """);
-        }
-        else
-        {
-            builder.AppendLine(
-            """
-            - Choose one immediate beat, not a sequence.
-            - React to the last turn only if it truly requires a response.
-            - Otherwise introduce a small new beat that adds value.
-            - The beat should change something: pressure, focus, distance, tone, or uncertainty.
-            - Avoid empty turns that only restate rules or repeat the current tension.
-            - Keep it grounded and playable.
-            """);
-        }
-    }
-
-    private static string BuildContextSummary(StorySceneGenerationContext context)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine($"**Actor:** {context.Actor.Name}");
-        builder.AppendLine($"- Summary: {PromptInlineText(context.Actor.Summary)}");
-        if (context.Actor.IsNarrator)
-            builder.AppendLine($"- Narrator guidance: {PromptInlineText(context.Actor.NarratorGuidance, "None")}");
-        else
-        {
-            builder.AppendLine($"- General appearance: {PromptInlineText(context.Actor.GeneralAppearance, "None")}");
-            builder.AppendLine($"- Core personality: {PromptInlineText(context.Actor.CorePersonality, "None")}");
-            builder.AppendLine($"- Relationships: {PromptInlineText(context.Actor.Relationships, "None")}");
-            builder.AppendLine($"- Preferences / beliefs: {PromptInlineText(context.Actor.PreferencesBeliefs, "None")}");
-            builder.AppendLine($"- Private motivations: {PromptInlineText(context.Actor.PrivateMotivations, "None")}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(context.Actor.HiddenKnowledge))
-            builder.AppendLine($"- Hidden knowledge: {PromptInlineText(context.Actor.HiddenKnowledge)}");
-
-        builder.AppendLine();
-
-        if (context.CurrentLocation is not null)
-        {
-            builder.AppendLine($"**Location:** {PromptInlineText(context.CurrentLocation.Name)}");
-            if (!string.IsNullOrWhiteSpace(context.CurrentLocation.Summary))
-                builder.AppendLine($"- Summary: {PromptInlineText(context.CurrentLocation.Summary)}");
-            if (!string.IsNullOrWhiteSpace(context.CurrentLocation.Details))
-                builder.AppendLine($"- Details: {PromptInlineText(context.CurrentLocation.Details)}");
-            builder.AppendLine();
-        }
-
-        var nonActorCharacters = context.Actor.CharacterId.HasValue
-            ? context.Characters.Where(x => x.CharacterId != context.Actor.CharacterId.Value).ToList()
-            : context.Characters.ToList();
-        var sceneCharacters = nonActorCharacters.Where(x => x.IsPresentInScene).ToList();
-        if (sceneCharacters.Count > 0)
-        {
-            builder.AppendLine("**Characters in the scene:**")
-                .AppendLine($"- **{context.Actor.Name}:** current actor");
-            foreach (var character in sceneCharacters)
-                builder.AppendLine($"- **{character.Name}:** {PromptInlineText(character.Summary)} | General appearance: {PromptInlineText(character.GeneralAppearance, "None")}");
-            builder.AppendLine();
-        }
-
-        var otherCharacters = nonActorCharacters.Where(x => !x.IsPresentInScene).ToList();
-        if (otherCharacters.Count > 0)
-        {
-            builder.AppendLine("**Other characters:**");
-            foreach (var character in otherCharacters)
-                builder.AppendLine($"- **{character.Name}:** {PromptInlineText(character.Summary)}");
-            builder.AppendLine();
-        }
-
-        if (context.SceneObjects.Count > 0)
-        {
-            builder.AppendLine("**Objects in the scene:**");
-            foreach (var item in context.SceneObjects)
-                builder.AppendLine($"- {item.Name} | {PromptInlineText(item.Summary)} | Details: {PromptInlineText(item.Details, "None")}");
-            builder.AppendLine();
-        }
-
-        AppendStoryContext(builder, context.StoryContext);
-        AppendContentGuidance(builder, context.StoryContext);
-
-        if (!string.IsNullOrEmpty(context.HistorySummary))
-            builder.AppendLine($"**History summary:** {PromptInlineText(context.HistorySummary)}");
-
-        if (!string.IsNullOrEmpty(context.LatestSnapshot?.Summary))
-            builder.AppendLine($"**Snapshot:** {PromptInlineText(context.LatestSnapshot.Summary)}");
-
-        builder.AppendLine("**Transcript:**");
-        if (context.TranscriptSinceSnapshot.Count > 0)
-        {
-            foreach (var message in context.TranscriptSinceSnapshot)
-                builder.AppendLine($"- {message.SpeakerName}: {PromptInlineText(message.Content, "None")}");
-        }
-        else
-        {
-            builder.AppendLine("- None");
-        }
-        builder.AppendLine();
-
-        var currentAppearanceCharacters = context.Characters
-            .Where(x => x.IsPresentInScene && !string.IsNullOrWhiteSpace(x.CurrentAppearance))
-            .ToList();
-        if (currentAppearanceCharacters.Count > 0)
-        {
-            builder.AppendLine("**Character appearances:**");
-            foreach (var character in currentAppearanceCharacters)
-                builder.AppendLine($"- {character.Name}: {PromptInlineText(character.CurrentAppearance, "None")}");
-        }
-
-        return builder.ToString().TrimEnd();
-    }
-
-    private static string BuildPlannerDetail(StoryMessagePlannerResult planner)
-    {
-        var builder = new StringBuilder();
-        builder.AppendLine($"**Turn shape:** {FormatTurnShape(planner.TurnShape)}");
-        builder.AppendLine($"**Beat:** {planner.Beat}");
-        builder.AppendLine($"**Intent:** {planner.Intent}");
-        builder.AppendLine($"**Immediate goal:** {planner.ImmediateGoal}");
-        builder.AppendLine($"**Why now:** {planner.WhyNow}");
-        builder.AppendLine($"**Change introduced:** {planner.ChangeIntroduced}");
-        builder.AppendLine($"**Guardrails:** {FormatList(planner.Guardrails)}");
-        return builder.ToString().TrimEnd();
-    }
 
     private static string BuildProseDetail(StoryMessageProseRequest request, string finalMessage)
     {
@@ -2421,23 +1982,6 @@ public sealed class StorySceneChatService(
         return builder.ToString().TrimEnd();
     }
 
-    private static string BuildAppearanceDetail(StorySceneAppearanceResolution appearance)
-    {
-        var builder = new StringBuilder();
-        if (appearance.EffectiveCharacters.Count == 0)
-        {
-            builder.AppendLine("No current appearance or physical state details have been captured for this scene yet.");
-        }
-        else
-        {
-            builder.AppendLine($"**Latest appearance block:** {appearance.LatestEntry?.Summary ?? "None"}");
-            builder.AppendLine("**Current appearances:**");
-            foreach (var character in appearance.EffectiveCharacters)
-                builder.AppendLine($"- {character.CharacterName}: {PromptInlineText(character.CurrentAppearance, "None captured yet")}");
-        }
-
-        return builder.ToString().TrimEnd();
-    }
 
     private static string NormalizeProseForDisplay(string text, StorySceneActorContext actor, bool isFinal)
     {
@@ -2532,7 +2076,7 @@ public sealed class StorySceneChatService(
             : $"Preparing a {DescribeMode(mode).ToLowerInvariant()} message as {actor.Name}.";
 
     private static string BuildPlannerSummary(StoryMessagePlannerResult planner) =>
-        $"{FormatTurnShape(planner.TurnShape)} turn, {planner.Beat}: {planner.ImmediateGoal}";
+        $"{StorySceneSharedPromptBuilder.FormatTurnShape(planner.TurnShape)} turn, {planner.Beat}: {planner.ImmediateGoal}";
 
     private static string BuildThreadSeedText(StoryScenePostMode mode, string? guidancePrompt, StorySceneActorContext actor) =>
         !string.IsNullOrWhiteSpace(guidancePrompt)
@@ -2861,7 +2405,7 @@ public sealed class StorySceneChatService(
                 ProcessStepKeys.Appearance,
                 "Appearance",
                 BuildAppearanceInputBlocks(context.StoryContext, context.Characters, appearance),
-                [new StoryMessageProcessTextBlock("Resolved Appearance", BuildAppearanceDetail(appearance))])
+                [new StoryMessageProcessTextBlock("Resolved Appearance", StorySceneSharedPromptBuilder.BuildAppearanceDetail(appearance))])
         };
 
         if (responderSelection is not null)
@@ -2880,8 +2424,8 @@ public sealed class StorySceneChatService(
             ProcessStepKeys.Planning,
             "Planning",
             BuildPromptBlocks(
-                BuildPlannerSystemPrompt(),
-                BuildPlannerUserPrompt(
+                StoryScenePlanningPromptBuilder.BuildSystemPrompt(),
+                StoryScenePlanningPromptBuilder.BuildUserPrompt(
                     new PostStorySceneMessage(Guid.Empty, context.Actor.CharacterId, mode, null, guidancePrompt),
                     context)),
             BuildPlanningOutputBlocks(planner)));
@@ -2904,7 +2448,7 @@ public sealed class StorySceneChatService(
                 ProcessStepKeys.Appearance,
                 "Appearance",
                 BuildAppearanceInputBlocks(context.StoryContext, context.Characters, appearance),
-                [new StoryMessageProcessTextBlock("Resolved Appearance", BuildAppearanceDetail(appearance))])
+                [new StoryMessageProcessTextBlock("Resolved Appearance", StorySceneSharedPromptBuilder.BuildAppearanceDetail(appearance))])
         };
 
         if (IsRespondMode(mode))
@@ -2946,7 +2490,7 @@ public sealed class StorySceneChatService(
                 ProcessStepKeys.Appearance,
                 "Appearance",
                 BuildAppearanceInputBlocks(context.StoryContext, context.Characters, appearance),
-                [new StoryMessageProcessTextBlock("Resolved Appearance", BuildAppearanceDetail(appearance))]),
+                [new StoryMessageProcessTextBlock("Resolved Appearance", StorySceneSharedPromptBuilder.BuildAppearanceDetail(appearance))]),
             new(
                 ProcessStepKeys.Responder,
                 "Responder",
@@ -2978,7 +2522,7 @@ public sealed class StorySceneChatService(
                 ProcessStepKeys.Appearance,
                 "Appearance",
                 BuildAppearanceInputBlocks(proseRequest.Context.StoryContext, proseRequest.Context.Characters, appearance),
-                [new StoryMessageProcessTextBlock("Resolved Appearance", BuildAppearanceDetail(appearance))])
+                [new StoryMessageProcessTextBlock("Resolved Appearance", StorySceneSharedPromptBuilder.BuildAppearanceDetail(appearance))])
         };
 
         if (responderSelection is not null)
@@ -2997,8 +2541,8 @@ public sealed class StorySceneChatService(
             ProcessStepKeys.Planning,
             "Planning",
             BuildPromptBlocks(
-                BuildPlannerSystemPrompt(),
-                BuildPlannerUserPrompt(
+                StoryScenePlanningPromptBuilder.BuildSystemPrompt(),
+                StoryScenePlanningPromptBuilder.BuildUserPrompt(
                     new PostStorySceneMessage(Guid.Empty, proseRequest.Context.Actor.CharacterId, proseRequest.Mode, null, proseRequest.GuidancePrompt),
                     proseRequest.Context)),
             BuildPlanningOutputBlocks(proseRequest.Planner)));
@@ -3029,7 +2573,7 @@ public sealed class StorySceneChatService(
     }
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildPlanningOutputBlocks(StoryMessagePlannerResult planner) =>
-        [new StoryMessageProcessTextBlock("Planning Outcome", BuildPlannerDetail(planner))];
+        [new StoryMessageProcessTextBlock("Planning Outcome", StorySceneSharedPromptBuilder.BuildPlannerDetail(planner))];
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildAppearanceInputBlocks(
         StoryNarrativeSettingsView storyContext,
@@ -3039,19 +2583,19 @@ public sealed class StorySceneChatService(
         var promptCharacters = characters
             .Where(x => x.IsPresentInScene)
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(x => new StoryChatAppearancePromptCharacter(x.Name, x.CurrentAppearance))
+            .Select(x => new StorySceneAppearancePromptCharacter(x.Name, x.CurrentAppearance))
             .ToList();
 
         return
         [
             ..BuildPromptBlocks(
-                StoryChatAppearancePromptBuilder.BuildSystemPrompt(),
-                StoryChatAppearancePromptBuilder.BuildUserPrompt(
+                StorySceneAppearancePromptBuilder.BuildSystemPrompt(),
+                StorySceneAppearancePromptBuilder.BuildUserPrompt(
                     promptCharacters,
                     appearance.TranscriptSinceLatestEntry,
                     storyContext.ExplicitContent,
                     storyContext.ViolentContent)),
-            new StoryMessageProcessTextBlock("Appearance Context", BuildAppearanceContextSummary(storyContext, characters, appearance))
+            new StoryMessageProcessTextBlock("Appearance Context", StorySceneSharedPromptBuilder.BuildAppearanceContextSummary(storyContext, characters, appearance))
         ];
     }
 
@@ -3074,8 +2618,15 @@ public sealed class StorySceneChatService(
         }
 
         return BuildPromptBlocks(
-            BuildResponderSelectionSystemPrompt(),
-            BuildResponderSelectionUserPrompt(activeSpeaker, candidates, context, appearance, guidancePrompt));
+            StorySceneResponderSelectionPromptBuilder.BuildSystemPrompt(),
+            StorySceneResponderSelectionPromptBuilder.BuildUserPrompt(
+                activeSpeaker,
+                candidates,
+                context.StoryContext,
+                context.CurrentLocation,
+                context.TranscriptSinceSnapshot,
+                appearance,
+                guidancePrompt));
     }
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildResponderOutputBlocks(StorySceneResponderSelectionResult responderSelection) =>
@@ -3084,8 +2635,8 @@ public sealed class StorySceneChatService(
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildWritingInputBlocks(StoryMessageProseRequest proseRequest) =>
     [
         new StoryMessageProcessTextBlock("Planning Summary", BuildPlannerSummary(proseRequest.Planner)),
-        new StoryMessageProcessTextBlock("Planning Full Details", BuildPlannerDetail(proseRequest.Planner)),
-        ..BuildPromptBlocks(BuildProseSystemPrompt(proseRequest), BuildProseUserPrompt(proseRequest))
+        new StoryMessageProcessTextBlock("Planning Full Details", StorySceneSharedPromptBuilder.BuildPlannerDetail(proseRequest.Planner)),
+        ..BuildPromptBlocks(StorySceneProsePromptBuilder.BuildSystemPrompt(proseRequest), StorySceneProsePromptBuilder.BuildUserPrompt(proseRequest))
     ];
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildPromptBlocks(string systemPrompt, string userPrompt) =>
@@ -3118,40 +2669,6 @@ public sealed class StorySceneChatService(
         }
     }
 
-    private static string FormatList(IReadOnlyList<string> values) => values.Count == 0 ? "None" : string.Join("; ", values);
-
-    private static string PromptInlineText(string? value, string fallback = "Unknown") =>
-        string.IsNullOrWhiteSpace(value) ? fallback : CollapseWhitespace(value);
-
-    private static string CollapseWhitespace(string value) =>
-        string.Join(" ", value
-            .Split([' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-
-    private static string BuildAppearanceContextSummary(
-        StoryNarrativeSettingsView storyContext,
-        IReadOnlyList<StorySceneCharacterContext> characters,
-        StorySceneAppearanceResolution appearance)
-    {
-        var builder = new StringBuilder();
-        AppendContentGuidance(builder, storyContext);
-        builder.AppendLine("Characters currently in the scene:");
-        foreach (var character in characters.Where(x => x.IsPresentInScene))
-            builder.AppendLine($"- {character.Name} | General appearance: {PromptInlineText(character.GeneralAppearance, "None")} | Prior current appearance: {PromptInlineText(character.CurrentAppearance, "None")}");
-
-        builder.AppendLine("Transcript:");
-        if (appearance.TranscriptSinceLatestEntry.Count == 0)
-        {
-            builder.AppendLine("- None");
-        }
-        else
-        {
-            foreach (var message in appearance.TranscriptSinceLatestEntry)
-                builder.AppendLine($"- {message.SpeakerName}: {PromptInlineText(message.Content, "None")}");
-        }
-
-        return builder.ToString().TrimEnd();
-    }
-
     private static StoryNarrativeSettingsView MapNarrativeSettings(ChatStoryContextDocument document) => new(
         document.Genre,
         document.Setting,
@@ -3159,53 +2676,6 @@ public sealed class StorySceneChatService(
         document.StoryDirection,
         document.ExplicitContent,
         document.ViolentContent);
-
-    private static void AppendStoryContext(StringBuilder builder, StoryNarrativeSettingsView? storyContext)
-    {
-        var context = storyContext ?? CreateDefaultStoryContext();
-        var hasGenre = !string.IsNullOrWhiteSpace(context.Genre);
-        var hasSetting = !string.IsNullOrWhiteSpace(context.Setting);
-        var hasTone = !string.IsNullOrWhiteSpace(context.Tone);
-        var hasDirection = !string.IsNullOrWhiteSpace(context.StoryDirection);
-
-        if (!hasGenre && !hasSetting && !hasTone && !hasDirection)
-            return;
-
-        builder.AppendLine("**Story context:**");
-        if (hasGenre)
-            builder.AppendLine($"- Genre: {PromptInlineText(context.Genre)}");
-        if (hasSetting)
-            builder.AppendLine($"- Setting: {PromptInlineText(context.Setting)}");
-        if (hasTone)
-            builder.AppendLine($"- Tone: {PromptInlineText(context.Tone)}");
-        if (hasDirection)
-            builder.AppendLine($"- Story premise / direction: {PromptInlineText(context.StoryDirection)}");
-        builder.AppendLine();
-    }
-
-    private static void AppendContentGuidance(StringBuilder builder, StoryNarrativeSettingsView? storyContext)
-    {
-        var context = storyContext ?? CreateDefaultStoryContext();
-        builder.AppendLine("**Content guidance:**");
-        builder.AppendLine($"- Explicit content: {FormatContentIntensity(context.ExplicitContent)}");
-        builder.AppendLine($"- Violent content: {FormatContentIntensity(context.ViolentContent)}");
-        builder.AppendLine();
-    }
-
-    private static string FormatContentIntensity(StoryContentIntensity intensity) => intensity switch
-    {
-        StoryContentIntensity.Forbidden => "Forbidden. Do not introduce or describe this content.",
-        StoryContentIntensity.Encouraged => "Encouraged when supported and scene-relevant. Lean into it without inventing it.",
-        _ => "Allowed when naturally supported by the scene."
-    };
-
-    private static StoryNarrativeSettingsView CreateDefaultStoryContext() => new(
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        StoryContentIntensity.Allowed,
-        StoryContentIntensity.Allowed);
 
     private static string TruncateProcessDetail(string detail) =>
         detail.Length <= 4000 ? detail : $"{detail[..3997].TrimEnd()}...";
@@ -3234,7 +2704,8 @@ public sealed class StorySceneChatService(
         RequireEditablePlannerValue(planner.ImmediateGoal, "immediate goal"),
         RequireEditablePlannerValue(planner.WhyNow, "why now"),
         RequireEditablePlannerValue(planner.ChangeIntroduced, "change introduced"),
-        NormalizeItems(planner.Guardrails));
+        NormalizeItems(planner.NarrativeGuardrails),
+        NormalizeItems(planner.ContentGuardrails));
 
     private static string RequireEditablePlannerValue(string? value, string fieldName)
     {
@@ -3377,7 +2848,9 @@ public sealed class StorySceneChatService(
 
         public string ChangeIntroduced { get; set; } = string.Empty;
 
-        public IReadOnlyList<string>? Guardrails { get; set; }
+        public IReadOnlyList<string>? NarrativeGuardrails { get; set; }
+
+        public IReadOnlyList<string>? ContentGuardrails { get; set; }
     }
 
     private sealed class ResponderStageResponse
@@ -3401,29 +2874,4 @@ public sealed class StorySceneChatService(
         };
     }
 
-    private static string FormatTurnShape(StoryTurnShape turnShape) => turnShape switch
-    {
-        StoryTurnShape.Compact => "compact",
-        StoryTurnShape.Brief => "brief",
-        StoryTurnShape.Monologue => "monologue",
-        StoryTurnShape.Silent => "silent",
-        _ => turnShape.ToString().ToLowerInvariant()
-    };
-
-    private static string BuildTurnShapeTemplate(StoryTurnShape turnShape, bool isNarrator) => turnShape switch
-    {
-        StoryTurnShape.Compact => isNarrator
-            ? "- Use one action beat and one short narration line.\n- An optional short tag is allowed if it sharpens the beat.\n- Stop as soon as the move lands."
-            : "- Use one action beat and at most one spoken line.\n- An optional short trailing tag is allowed.\n- Stop as soon as the move lands.",
-        StoryTurnShape.Brief => isNarrator
-            ? "- Use one to two short narration lines.\n- Keep the turn focused on a single beat.\n- Do not drift into explanation."
-            : "- Use one to two short lines total.\n- Keep any action beat brief and supportive.\n- Do not drift into explanation.",
-        StoryTurnShape.Monologue => isNarrator
-            ? "- A short monologue is allowed.\n- Use it only to recount or explain something open-ended.\n- Keep it contained to one concise turn."
-            : "- A short monologue is allowed.\n- Use it only to recount or explain something open-ended.\n- Keep it contained to one concise turn.",
-        StoryTurnShape.Silent => isNarrator
-            ? "- Use action, gesture, atmosphere, or subtext only.\n- Do not add spoken dialogue.\n- Add words only if silence would make the beat unclear."
-            : "- Use action, gesture, or subtext only.\n- Do not add a spoken line unless silence would make the beat unclear.\n- Let the silence itself carry pressure.",
-        _ => throw new InvalidOperationException("Building the prose prompt failed because the turn shape was invalid.")
-    };
 }
