@@ -432,11 +432,11 @@
     private static IReadOnlyList<DraftFieldView> GetCharacterDraftFields(CharacterAiDraftView draft) =>
     [
         DraftFieldView.SingleLine("Name", draft.Name),
-        DraftFieldView.Multiline("Summary", draft.Summary, 2),
-        DraftFieldView.Multiline("General Appearance", draft.GeneralAppearance),
-        DraftFieldView.Multiline("Core Personality", draft.CorePersonality),
-        DraftFieldView.Multiline("Relationships", draft.Relationships),
-        DraftFieldView.Multiline("Preferences / Likes / Beliefs", draft.PreferencesBeliefs),
+        DraftFieldView.Multiline("Summary", draft.UserSheet.Summary, 2),
+        DraftFieldView.Multiline("General Appearance", draft.UserSheet.GeneralAppearance),
+        DraftFieldView.Multiline("Core Personality", draft.UserSheet.CorePersonality),
+        DraftFieldView.Multiline("Relationships", draft.UserSheet.Relationships),
+        DraftFieldView.Multiline("Preferences / Likes / Beliefs", draft.UserSheet.PreferencesBeliefs),
         DraftFieldView.SingleLine("Currently In Scene", draft.IsPresentInScene ? "Yes" : "No")
     ];
 

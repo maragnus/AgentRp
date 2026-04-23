@@ -25,6 +25,7 @@ public sealed class StoryCharacterPrivateMotivationsService(
         }
 
         var snapshot = await LoadSnapshotAsync(request.ThreadId, cancellationToken);
+        StoryCharacterModelSheetSupport.EnsureReady(snapshot.Characters, _ => true, "Generating private motivations");
         var brainstormResponse = await agent.ChatClient.GetResponseAsync<BrainstormStageResponse>(
             [
                 new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildBrainstormSystemPrompt()),
@@ -65,6 +66,7 @@ public sealed class StoryCharacterPrivateMotivationsService(
         }
 
         var snapshot = await LoadSnapshotAsync(request.ThreadId, cancellationToken);
+        StoryCharacterModelSheetSupport.EnsureReady(snapshot.Characters, _ => true, "Composing private motivations");
         var response = await agent.ChatClient.GetResponseAsync<ComposeNarrativeResponse>(
             [
                 new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildComposeSystemPrompt()),
@@ -100,12 +102,23 @@ public sealed class StoryCharacterPrivateMotivationsService(
     private static StoryCharacterDraftContext Normalize(StoryCharacterDraftContext character) => character with
     {
         Name = NormalizeText(character.Name),
-        Summary = NormalizeText(character.Summary),
-        GeneralAppearance = NormalizeText(character.GeneralAppearance),
-        CorePersonality = NormalizeText(character.CorePersonality),
-        Relationships = NormalizeText(character.Relationships),
-        PreferencesBeliefs = NormalizeText(character.PreferencesBeliefs),
-        PrivateMotivations = NormalizeText(character.PrivateMotivations)
+        UserSheet = new StoryCharacterUserSheetView(
+            NormalizeText(character.UserSheet.Summary),
+            NormalizeText(character.UserSheet.GeneralAppearance),
+            NormalizeText(character.UserSheet.CorePersonality),
+            NormalizeText(character.UserSheet.Relationships),
+            NormalizeText(character.UserSheet.PreferencesBeliefs),
+            NormalizeText(character.UserSheet.PrivateMotivations)),
+        ModelSheet = new StoryCharacterModelSheetView(
+            NormalizeText(character.ModelSheet.Summary),
+            NormalizeText(character.ModelSheet.Appearance),
+            NormalizeText(character.ModelSheet.Voice),
+            NormalizeText(character.ModelSheet.Hides),
+            NormalizeText(character.ModelSheet.Tendency),
+            NormalizeText(character.ModelSheet.Constraint),
+            NormalizeText(character.ModelSheet.Relationships),
+            NormalizeText(character.ModelSheet.LikesBeliefs),
+            NormalizeText(character.ModelSheet.PrivateMotivations))
     };
 
     private static void ValidateDraft(StoryCharacterDraftContext character, string operation)
@@ -113,16 +126,18 @@ public sealed class StoryCharacterPrivateMotivationsService(
         var hasAnyContext = new[]
         {
             character.Name,
-            character.Summary,
-            character.GeneralAppearance,
-            character.CorePersonality,
-            character.Relationships,
-            character.PreferencesBeliefs,
-            character.PrivateMotivations
+            character.ModelSheet.Summary,
+            character.ModelSheet.Appearance,
+            character.ModelSheet.Voice,
+            character.ModelSheet.Relationships,
+            character.ModelSheet.PrivateMotivations
         }.Any(x => !string.IsNullOrWhiteSpace(x));
 
         if (!hasAnyContext)
             throw new InvalidOperationException($"{operation} failed because the character draft is still blank. Add at least a name or a few notes first.");
+
+        if (character.ModelSheetStatus != StoryCharacterModelSheetStatus.Ready)
+            throw new InvalidOperationException($"{operation} failed because '{BuildDisplayName(character.Name)}' does not have a saved ready model-ready character sheet yet. Regenerate, review, and save the model-ready sheet first.");
     }
 
     private static IReadOnlyList<StoryCharacterPrivateMotivationOption> MapOptions(
@@ -273,11 +288,11 @@ public sealed class StoryCharacterPrivateMotivationsService(
             builder.AppendLine($"  Why it fits: {option.WhyItFits}");
         }
 
-        if (!string.IsNullOrWhiteSpace(character.PrivateMotivations))
+        if (!string.IsNullOrWhiteSpace(character.UserSheet.PrivateMotivations))
         {
             builder.AppendLine();
             builder.AppendLine("Existing private motivations text to harmonize with if possible:");
-            builder.AppendLine(character.PrivateMotivations);
+            builder.AppendLine(character.UserSheet.PrivateMotivations);
         }
 
         builder.AppendLine();
@@ -379,12 +394,15 @@ public sealed class StoryCharacterPrivateMotivationsService(
             var builder = new StringBuilder();
             builder.AppendLine("Target character draft:");
             builder.AppendLine($"Name: {BuildDisplayName(target.Name)}");
-            builder.AppendLine($"Summary: {FallbackText(target.Summary)}");
-            builder.AppendLine($"General appearance: {FallbackText(target.GeneralAppearance)}");
-            builder.AppendLine($"Core personality: {FallbackText(target.CorePersonality)}");
-            builder.AppendLine($"Relationships: {FallbackText(target.Relationships)}");
-            builder.AppendLine($"Preferences / beliefs: {FallbackText(target.PreferencesBeliefs)}");
-            builder.AppendLine($"Existing private motivations: {FallbackText(target.PrivateMotivations)}");
+            builder.AppendLine($"Summary: {FallbackText(target.ModelSheet.Summary)}");
+            builder.AppendLine($"Appearance: {FallbackText(target.ModelSheet.Appearance)}");
+            builder.AppendLine($"Voice: {FallbackText(target.ModelSheet.Voice)}");
+            builder.AppendLine($"Hides: {FallbackText(target.ModelSheet.Hides)}");
+            builder.AppendLine($"Tendency: {FallbackText(target.ModelSheet.Tendency)}");
+            builder.AppendLine($"Constraint: {FallbackText(target.ModelSheet.Constraint)}");
+            builder.AppendLine($"Relationships: {FallbackText(target.ModelSheet.Relationships)}");
+            builder.AppendLine($"Likes / beliefs: {FallbackText(target.ModelSheet.LikesBeliefs)}");
+            builder.AppendLine($"Existing private motivations: {FallbackText(target.UserSheet.PrivateMotivations)}");
             builder.AppendLine($"Present in current scene: {(target.IsPresentInScene ? "Yes" : "No")}");
             builder.AppendLine();
             builder.AppendLine($"Current scene: {BuildSceneSummary()}");
@@ -435,15 +453,22 @@ public sealed class StoryCharacterPrivateMotivationsService(
             Characters
                 .Where(x => !target.CharacterId.HasValue || x.Id != target.CharacterId.Value)
                 .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-                .Select(x => new OtherCharacterContext(
-                    x.Name,
-                    x.Summary,
-                    x.GeneralAppearance,
-                    x.CorePersonality,
-                    x.Relationships,
-                    x.PreferencesBeliefs,
-                    x.PrivateMotivations,
-                    Scene.PresentCharacterIds.Contains(x.Id)))
+                .Select(x =>
+                {
+                    var modelSheet = StoryCharacterModelSheetSupport.GetModelSheet(x);
+                    return new OtherCharacterContext(
+                        x.Name,
+                        modelSheet.Summary,
+                        modelSheet.Appearance,
+                        modelSheet.Voice,
+                        modelSheet.Hides,
+                        modelSheet.Tendency,
+                        modelSheet.Constraint,
+                        modelSheet.Relationships,
+                        modelSheet.LikesBeliefs,
+                        modelSheet.PrivateMotivations,
+                        Scene.PresentCharacterIds.Contains(x.Id));
+                })
                 .ToList();
 
         private IReadOnlyList<string> BuildRelevantLocations(StoryCharacterDraftContext target)
@@ -454,9 +479,9 @@ public sealed class StoryCharacterPrivateMotivationsService(
 
             foreach (var location in Locations)
             {
-                if (ContainsName(target.Relationships, location.Name)
-                    || ContainsName(target.PrivateMotivations, location.Name)
-                    || ContainsName(target.Summary, location.Name))
+                if (ContainsName(target.ModelSheet.Relationships, location.Name)
+                    || ContainsName(target.ModelSheet.PrivateMotivations, location.Name)
+                    || ContainsName(target.ModelSheet.Summary, location.Name))
                     locationIds.Add(location.Id);
             }
 
@@ -479,9 +504,9 @@ public sealed class StoryCharacterPrivateMotivationsService(
 
             foreach (var item in Items)
             {
-                if (ContainsName(target.Relationships, item.Name)
-                    || ContainsName(target.PrivateMotivations, item.Name)
-                    || ContainsName(target.Summary, item.Name))
+                if (ContainsName(target.ModelSheet.Relationships, item.Name)
+                    || ContainsName(target.ModelSheet.PrivateMotivations, item.Name)
+                    || ContainsName(target.ModelSheet.Summary, item.Name))
                     itemIds.Add(item.Id);
             }
 
@@ -513,8 +538,9 @@ public sealed class StoryCharacterPrivateMotivationsService(
 
             foreach (var character in Characters)
             {
-                if (ContainsName(target.Relationships, character.Name)
-                    || ContainsName(character.Relationships, targetName))
+                var modelSheet = StoryCharacterModelSheetSupport.GetModelSheet(character);
+                if (ContainsName(target.ModelSheet.Relationships, character.Name)
+                    || ContainsName(modelSheet.Relationships, targetName))
                     relatedCharacterIds.Add(character.Id);
             }
 
@@ -589,10 +615,13 @@ public sealed class StoryCharacterPrivateMotivationsService(
             {
                 builder.AppendLine($"- {BuildDisplayName(character.Name)}");
                 builder.AppendLine($"  Summary: {FallbackText(character.Summary)}");
-                builder.AppendLine($"  General appearance: {FallbackText(character.GeneralAppearance)}");
-                builder.AppendLine($"  Core personality: {FallbackText(character.CorePersonality)}");
+                builder.AppendLine($"  Appearance: {FallbackText(character.Appearance)}");
+                builder.AppendLine($"  Voice: {FallbackText(character.Voice)}");
+                builder.AppendLine($"  Hides: {FallbackText(character.Hides)}");
+                builder.AppendLine($"  Tendency: {FallbackText(character.Tendency)}");
+                builder.AppendLine($"  Constraint: {FallbackText(character.Constraint)}");
                 builder.AppendLine($"  Relationships: {FallbackText(character.Relationships)}");
-                builder.AppendLine($"  Preferences / beliefs: {FallbackText(character.PreferencesBeliefs)}");
+                builder.AppendLine($"  Likes / beliefs: {FallbackText(character.LikesBeliefs)}");
                 builder.AppendLine($"  Private motivations: {FallbackText(character.PrivateMotivations)}");
                 builder.AppendLine($"  Present in current scene: {(character.IsPresentInScene ? "Yes" : "No")}");
             }
@@ -621,10 +650,13 @@ public sealed class StoryCharacterPrivateMotivationsService(
         private sealed record OtherCharacterContext(
             string Name,
             string Summary,
-            string GeneralAppearance,
-            string CorePersonality,
+            string Appearance,
+            string Voice,
+            string Hides,
+            string Tendency,
+            string Constraint,
             string Relationships,
-            string PreferencesBeliefs,
+            string LikesBeliefs,
             string PrivateMotivations,
             bool IsPresentInScene);
     }

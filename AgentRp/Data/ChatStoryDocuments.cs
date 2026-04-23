@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace AgentRp.Data;
 
@@ -129,16 +130,73 @@ public sealed record ChatStoryContextDocument(
         StoryContentIntensity.Allowed);
 }
 
-public sealed record StoryCharacterDocument(
-    Guid Id,
-    string Name,
+public sealed record StoryCharacterUserSheetDocument(
     string Summary,
     string GeneralAppearance,
     string CorePersonality,
     string Relationships,
     string PreferencesBeliefs,
-    string PrivateMotivations,
-    bool IsArchived);
+    string PrivateMotivations)
+{
+    public static StoryCharacterUserSheetDocument Empty { get; } = new(
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty);
+}
+
+public sealed record StoryCharacterModelSheetDocument(
+    string Summary,
+    string Appearance,
+    string Voice,
+    string Hides,
+    string Tendency,
+    string Constraint,
+    string Relationships,
+    string LikesBeliefs,
+    string PrivateMotivations)
+{
+    public static StoryCharacterModelSheetDocument Empty { get; } = new(
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty);
+}
+
+public sealed record StoryCharacterDocument(
+    Guid Id,
+    string Name,
+    StoryCharacterUserSheetDocument? UserSheet,
+    StoryCharacterModelSheetDocument? ModelSheet,
+    int UserSheetRevision,
+    int? ModelSheetReviewedAgainstRevision,
+    bool IsArchived)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Summary { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GeneralAppearance { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CorePersonality { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Relationships { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PreferencesBeliefs { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PrivateMotivations { get; init; }
+}
 
 public sealed record StoryLocationDocument(
     Guid Id,
@@ -276,13 +334,59 @@ public static class StoryDocumentNormalizer
     private static StoryCharacterDocument Normalize(StoryCharacterDocument? document) => new(
         document?.Id ?? Guid.Empty,
         NormalizeText(document?.Name),
-        NormalizeText(document?.Summary),
-        NormalizeText(document?.GeneralAppearance),
-        NormalizeText(document?.CorePersonality),
-        NormalizeText(document?.Relationships),
-        NormalizeText(document?.PreferencesBeliefs),
-        NormalizeText(document?.PrivateMotivations),
+        Normalize(document?.UserSheet, document),
+        Normalize(document?.ModelSheet),
+        NormalizeUserSheetRevision(document),
+        NormalizeModelSheetReviewedAgainstRevision(document),
         document?.IsArchived ?? false);
+
+    private static StoryCharacterUserSheetDocument Normalize(
+        StoryCharacterUserSheetDocument? document,
+        StoryCharacterDocument? legacyDocument = null) => new(
+        NormalizeText(document?.Summary ?? legacyDocument?.Summary),
+        NormalizeText(document?.GeneralAppearance ?? legacyDocument?.GeneralAppearance),
+        NormalizeText(document?.CorePersonality ?? legacyDocument?.CorePersonality),
+        NormalizeText(document?.Relationships ?? legacyDocument?.Relationships),
+        NormalizeText(document?.PreferencesBeliefs ?? legacyDocument?.PreferencesBeliefs),
+        NormalizeText(document?.PrivateMotivations ?? legacyDocument?.PrivateMotivations));
+
+    private static StoryCharacterModelSheetDocument Normalize(StoryCharacterModelSheetDocument? document) => new(
+        NormalizeText(document?.Summary),
+        NormalizeText(document?.Appearance),
+        NormalizeText(document?.Voice),
+        NormalizeText(document?.Hides),
+        NormalizeText(document?.Tendency),
+        NormalizeText(document?.Constraint),
+        NormalizeText(document?.Relationships),
+        NormalizeText(document?.LikesBeliefs),
+        NormalizeText(document?.PrivateMotivations));
+
+    private static int NormalizeUserSheetRevision(StoryCharacterDocument? document)
+    {
+        if (document is null)
+            return 0;
+
+        if (document.UserSheetRevision > 0)
+            return document.UserSheetRevision;
+
+        return HasLegacyUserSheetContent(document) ? 1 : 0;
+    }
+
+    private static int? NormalizeModelSheetReviewedAgainstRevision(StoryCharacterDocument? document)
+    {
+        if (document?.ModelSheetReviewedAgainstRevision is int revision && revision > 0)
+            return revision;
+
+        return null;
+    }
+
+    private static bool HasLegacyUserSheetContent(StoryCharacterDocument document) =>
+        !string.IsNullOrWhiteSpace(document.Summary)
+        || !string.IsNullOrWhiteSpace(document.GeneralAppearance)
+        || !string.IsNullOrWhiteSpace(document.CorePersonality)
+        || !string.IsNullOrWhiteSpace(document.Relationships)
+        || !string.IsNullOrWhiteSpace(document.PreferencesBeliefs)
+        || !string.IsNullOrWhiteSpace(document.PrivateMotivations);
 
     private static StoryLocationDocument Normalize(StoryLocationDocument? document) => new(
         document?.Id ?? Guid.Empty,

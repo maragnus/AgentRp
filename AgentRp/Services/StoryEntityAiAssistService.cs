@@ -77,6 +77,8 @@ public sealed class StoryEntityAiAssistService(
             throw new InvalidOperationException("Generating the AI draft failed because no AI provider is configured for this chat.");
         }
 
+        StoryCharacterModelSheetSupport.EnsureReady(snapshot.Characters, _ => true, "Generating the AI draft");
+
         var guidance = await storyFieldGuidanceService.GetGuidanceAsync(entityKind, cancellationToken);
         if (entityKind == StoryEntityKind.Character)
             guidance = guidance.Where(x => x.FieldKey != StoryEntityFieldKey.PrivateMotivations).ToList();
@@ -113,11 +115,13 @@ public sealed class StoryEntityAiAssistService(
         var model = response.Result;
         var draft = new CharacterAiDraftView(
             RequireText(model.Name, "character name"),
-            model.Summary?.Trim() ?? string.Empty,
-            model.GeneralAppearance?.Trim() ?? string.Empty,
-            model.CorePersonality?.Trim() ?? string.Empty,
-            model.Relationships?.Trim() ?? string.Empty,
-            model.PreferencesBeliefs?.Trim() ?? string.Empty,
+            new StoryCharacterUserSheetView(
+                model.Summary?.Trim() ?? string.Empty,
+                model.GeneralAppearance?.Trim() ?? string.Empty,
+                model.CorePersonality?.Trim() ?? string.Empty,
+                model.Relationships?.Trim() ?? string.Empty,
+                model.PreferencesBeliefs?.Trim() ?? string.Empty,
+                string.Empty),
             model.IsPresentInScene);
 
         return CreateSession(snapshot, StoryEntityKind.Character, entityId, prompt, promptHistory, draft, model.ReviewSummary, draft.Name);
@@ -254,7 +258,7 @@ public sealed class StoryEntityAiAssistService(
         {
             privateMotivations = (await chatStoryService.GetCharactersAsync(request.ThreadId, cancellationToken))
                 .FirstOrDefault(x => x.CharacterId == request.Session.EntityId.Value)?
-                .PrivateMotivations
+                .UserSheet.PrivateMotivations
                 ?? string.Empty;
         }
 
@@ -263,12 +267,7 @@ public sealed class StoryEntityAiAssistService(
                 request.ThreadId,
                 request.Session.EntityId,
                 draft.Name,
-                draft.Summary,
-                draft.GeneralAppearance,
-                draft.CorePersonality,
-                draft.Relationships,
-                draft.PreferencesBeliefs,
-                privateMotivations,
+                draft.UserSheet with { PrivateMotivations = privateMotivations },
                 draft.IsPresentInScene,
                 false),
             cancellationToken);
@@ -716,11 +715,11 @@ public sealed class StoryEntityAiAssistService(
             CharacterAiDraftView draft =>
                 $$"""
                 Name: {{draft.Name}}
-                Summary: {{draft.Summary}}
-                General appearance: {{draft.GeneralAppearance}}
-                Core personality: {{draft.CorePersonality}}
-                Relationships: {{draft.Relationships}}
-                Preferences / beliefs: {{draft.PreferencesBeliefs}}
+                Summary: {{draft.UserSheet.Summary}}
+                General appearance: {{draft.UserSheet.GeneralAppearance}}
+                Core personality: {{draft.UserSheet.CorePersonality}}
+                Relationships: {{draft.UserSheet.Relationships}}
+                Preferences / beliefs: {{draft.UserSheet.PreferencesBeliefs}}
                 Present in scene: {{draft.IsPresentInScene}}
                 """,
             ItemAiDraftView draft =>
@@ -841,7 +840,7 @@ public sealed class StoryEntityAiAssistService(
         private string BuildCharacterSummary() =>
             Characters.Count == 0
                 ? "None yet."
-                : string.Join("; ", Characters.Select(x => $"{x.Name} [{x.Id}] - {x.Summary}"));
+                : string.Join("; ", Characters.Select(x => $"{x.Name} [{x.Id}] - {StoryCharacterModelSheetSupport.GetModelSheet(x).Summary}"));
 
         private string BuildLocationSummary() =>
             Locations.Count == 0
@@ -884,16 +883,22 @@ public sealed class StoryEntityAiAssistService(
         private string BuildCharacterDetails(Guid entityId)
         {
             var character = Characters.FirstOrDefault(x => x.Id == entityId);
+            var modelSheet = character is null
+                ? StoryCharacterModelSheetDocument.Empty
+                : StoryCharacterModelSheetSupport.GetModelSheet(character);
             return character is null
                 ? "Character not found."
                 : $$"""
                 Name: {{character.Name}}
-                Summary: {{character.Summary}}
-                General appearance: {{character.GeneralAppearance}}
-                Core personality: {{character.CorePersonality}}
-                Relationships: {{character.Relationships}}
-                Preferences / beliefs: {{character.PreferencesBeliefs}}
-                Private motivations: {{character.PrivateMotivations}}
+                Summary: {{modelSheet.Summary}}
+                Appearance: {{modelSheet.Appearance}}
+                Voice: {{modelSheet.Voice}}
+                Hides: {{modelSheet.Hides}}
+                Tendency: {{modelSheet.Tendency}}
+                Constraint: {{modelSheet.Constraint}}
+                Relationships: {{modelSheet.Relationships}}
+                Likes / beliefs: {{modelSheet.LikesBeliefs}}
+                Private motivations: {{modelSheet.PrivateMotivations}}
                 Present in scene: {{Scene.PresentCharacterIds.Contains(character.Id)}}
                 """;
         }

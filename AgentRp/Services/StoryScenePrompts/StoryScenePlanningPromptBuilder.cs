@@ -36,7 +36,8 @@ internal static class StoryScenePlanningPromptBuilder
         - Pick the most valuable next beat, not the safest or most literal reply.
         - If a direct reaction is needed, react.
         - If no direct reaction is needed, introduce a small new beat that moves the scene.
-        - Never end an exchange when it can be continued with a strong beat.
+        - Never end an exchange.
+        - Never end a conversation.
 
         **strong beat:** changes something, shifts pressure, tests a boundary, redirects attention, creates a question, adds discomfort, adds intimacy, or forces a reply.
 

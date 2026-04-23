@@ -32,9 +32,11 @@ builder.Services.AddScoped<IStoryChatSnapshotService, StoryChatSnapshotService>(
 builder.Services.AddScoped<IStoryChatAppearanceService, StoryChatAppearanceService>();
 builder.Services.AddScoped<IStorySceneChatService, StorySceneChatService>();
 builder.Services.AddScoped<IStoryEntityAiAssistService, StoryEntityAiAssistService>();
+builder.Services.AddScoped<IStoryCharacterModelSheetService, StoryCharacterModelSheetService>();
 builder.Services.AddScoped<IStoryCharacterPrivateMotivationsService, StoryCharacterPrivateMotivationsService>();
 builder.Services.AddScoped<IStoryFieldGuidanceService, StoryFieldGuidanceService>();
 builder.Services.AddScoped<IStoryGenerationSettingsService, StoryGenerationSettingsService>();
+builder.Services.AddScoped<IStorySceneChatDisplayPreferencesService, StorySceneChatDisplayPreferencesService>();
 
 var app = builder.Build();
 

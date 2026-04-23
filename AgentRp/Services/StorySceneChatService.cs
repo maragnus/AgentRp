@@ -1464,6 +1464,7 @@ public sealed class StorySceneChatService(
             .Where(x => !x.IsArchived)
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        StoryCharacterModelSheetSupport.EnsureReady(characters, _ => true, "Building the scene generation context");
         var locations = story.Locations.Entries
             .Where(x => !x.IsArchived)
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
@@ -1493,16 +1494,24 @@ public sealed class StorySceneChatService(
             currentLocation is null
                 ? null
                 : new StorySceneLocationContext(currentLocation.Id, currentLocation.Name, currentLocation.Summary, currentLocation.Details),
-            characters.Select(character => new StorySceneCharacterContext(
-                    character.Id,
-                    character.Name,
-                    character.Summary,
-                    character.GeneralAppearance,
-                    currentAppearanceLookup.TryGetValue(character.Id, out var currentAppearance) ? currentAppearance : string.Empty,
-                    character.CorePersonality,
-                    character.Relationships,
-                    character.PreferencesBeliefs,
-                    story.Scene.PresentCharacterIds.Contains(character.Id)))
+            characters.Select(character =>
+                {
+                    var modelSheet = StoryCharacterModelSheetSupport.GetModelSheet(character);
+                    return new StorySceneCharacterContext(
+                        character.Id,
+                        character.Name,
+                        modelSheet.Summary,
+                        modelSheet.Appearance,
+                        currentAppearanceLookup.TryGetValue(character.Id, out var currentAppearance) ? currentAppearance : string.Empty,
+                        modelSheet.Voice,
+                        modelSheet.Hides,
+                        modelSheet.Tendency,
+                        modelSheet.Constraint,
+                        modelSheet.Relationships,
+                        modelSheet.LikesBeliefs,
+                        modelSheet.PrivateMotivations,
+                        story.Scene.PresentCharacterIds.Contains(character.Id));
+                })
                 .ToList(),
             items.Where(item => story.Scene.PresentItemIds.Contains(item.Id))
                 .Select(item => new StorySceneObjectContext(item.Id, item.Name, item.Summary, item.Details))
@@ -1546,23 +1555,30 @@ public sealed class StorySceneChatService(
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
                 "Speak in concise descriptive prose. Introduce or clarify facts without inventing contradictions.",
                 BuildNarratorHiddenKnowledge(characters));
         }
 
         var character = characters.FirstOrDefault(x => x.Id == speakerCharacterId.Value)
             ?? throw new InvalidOperationException("Building the scene context failed because the selected speaker could not be found.");
+        var modelSheet = StoryCharacterModelSheetSupport.GetModelSheet(character);
 
         return new StorySceneActorContext(
             character.Id,
             character.Name,
             false,
-            character.Summary,
-            character.GeneralAppearance,
-            character.CorePersonality,
-            character.Relationships,
-            character.PreferencesBeliefs,
-            character.PrivateMotivations,
+            modelSheet.Summary,
+            modelSheet.Appearance,
+            modelSheet.Voice,
+            modelSheet.Hides,
+            modelSheet.Tendency,
+            modelSheet.Constraint,
+            modelSheet.Relationships,
+            modelSheet.LikesBeliefs,
+            modelSheet.PrivateMotivations,
             string.Empty,
             string.Empty);
     }
@@ -1570,8 +1586,13 @@ public sealed class StorySceneChatService(
     private static string BuildNarratorHiddenKnowledge(IReadOnlyList<StoryCharacterDocument> characters)
     {
         var hiddenDetails = characters
-            .Where(x => !string.IsNullOrWhiteSpace(x.PrivateMotivations))
-            .Select(x => $"{x.Name}: {x.PrivateMotivations}")
+            .Select(x => new
+            {
+                x.Name,
+                ModelSheet = StoryCharacterModelSheetSupport.GetModelSheet(x)
+            })
+            .Where(x => !string.IsNullOrWhiteSpace(x.ModelSheet.Hides) || !string.IsNullOrWhiteSpace(x.ModelSheet.PrivateMotivations))
+            .Select(x => $"{x.Name}: Hides: {StorySceneSharedPromptBuilder.PromptInlineText(x.ModelSheet.Hides, "None")}; Private motivations: {StorySceneSharedPromptBuilder.PromptInlineText(x.ModelSheet.PrivateMotivations, "None")}")
             .ToList();
 
         return hiddenDetails.Count == 0
@@ -1598,7 +1619,7 @@ public sealed class StorySceneChatService(
         speakers.AddRange(characters.Select(character => new StorySceneSpeakerView(
             character.Id,
             character.Name,
-            character.Summary,
+            StoryCharacterModelSheetSupport.GetUserSheet(character).Summary,
             false,
             story.Scene.PresentCharacterIds.Contains(character.Id),
             selectedSpeakerId == character.Id)));
@@ -1995,6 +2016,9 @@ public sealed class StorySceneChatService(
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
                 "Speak in concise descriptive prose. Introduce or clarify facts without inventing contradictions.",
                 string.Empty);
         }
@@ -2012,17 +2036,23 @@ public sealed class StorySceneChatService(
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
                 string.Empty)
             : new StorySceneActorContext(
                 activeSpeaker.CharacterId,
                 activeSpeaker.Name,
                 false,
                 activeSpeaker.Summary,
-                activeSpeaker.GeneralAppearance,
-                activeSpeaker.CorePersonality,
+                activeSpeaker.Appearance,
+                activeSpeaker.Voice,
+                activeSpeaker.Hides,
+                activeSpeaker.Tendency,
+                activeSpeaker.Constraint,
                 activeSpeaker.Relationships,
-                activeSpeaker.PreferencesBeliefs,
-                string.Empty,
+                activeSpeaker.LikesBeliefs,
+                activeSpeaker.PrivateMotivations,
                 string.Empty,
                 string.Empty);
     }

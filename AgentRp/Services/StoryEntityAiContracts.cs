@@ -43,11 +43,7 @@ public sealed record StoryEntityReferenceView(
 
 public sealed record CharacterAiDraftView(
     string Name,
-    string Summary,
-    string GeneralAppearance,
-    string CorePersonality,
-    string Relationships,
-    string PreferencesBeliefs,
+    StoryCharacterUserSheetView UserSheet,
     bool IsPresentInScene) : StoryEntityAiDraftView(StoryEntityKind.Character);
 
 public sealed record ItemAiDraftView(

@@ -153,12 +153,24 @@
     public StoryCharacterDraftContext Character { get; set; } = new(
         null,
         string.Empty,
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        string.Empty,
-        string.Empty,
+        new StoryCharacterUserSheetView(
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty),
+        new StoryCharacterModelSheetView(
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty),
+        StoryCharacterModelSheetStatus.Missing,
         false);
 
     [Parameter]

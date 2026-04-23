@@ -1,8 +1,10 @@
 @inject IChatStoryService ChatStoryService
+@inject IStoryCharacterModelSheetService StoryCharacterModelSheetService
 @inject IStoryFieldGuidanceService StoryFieldGuidanceService
+@inject IUserFeedbackService UserFeedbackService
 @inject ILogger<StoryCharacterModal> Logger
 
-<AppModal IsOpen="IsOpen" Title="Characters" OnClose="CloseAsync">
+<AppModal IsOpen="IsOpen" Title="Characters" OnClose="CloseAsync" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down">
     @if (_isLoading)
     {
         <div class="d-flex align-items-center gap-3 py-3">
@@ -38,18 +40,15 @@
                             var isSelected = _selectedCharacterId == character.CharacterId;
 
                             <StoryEntitySelectorListItem Name="@character.Name"
-                                                         Summary="@character.Summary"
+                                                         Summary="@character.UserSheet.Summary"
                                                          IsSelected="@isSelected"
                                                          OnClick="() => SelectCharacter(character.CharacterId)">
                                 <StatusContent>
-                                    @if (character.IsPresentInScene) 
-                                    {
-                                        <i class="fa-regular fa-eye"></i>
-                                    }
-                                    else
-                                    {
-                                        <i class="fa-regular fa-eye-slash"></i>
-                                    }
+                                    <span class="@BuildModelSheetBadgeClass(character.ModelSheetStatus)"
+                                          title="@BuildModelSheetStatusText(character.ModelSheetStatus)"
+                                          aria-label="@BuildModelSheetStatusText(character.ModelSheetStatus)">
+                                        <i class="@BuildModelSheetStatusIcon(character.ModelSheetStatus)" aria-hidden="true"></i>
+                                    </span>
                                 </StatusContent>
                             </StoryEntitySelectorListItem>
                         }
@@ -61,159 +60,286 @@
                 <div class="d-flex flex-column gap-3">
                     <InlineAlert Message="@_errorMessage" />
 
-                    <div>
-                        <div class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="form-label mb-0" for="story-character-name">Name</label>
+                    <ul class="nav nav-tabs">
+                        <li class="nav-item">
                             <button type="button"
-                                    class="btn btn-outline-secondary btn-sm"
-                                    title="Edit name guidance"
-                                    aria-label="Edit name guidance"
-                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.Name)'>
-                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                    class="nav-link @(_activeTab == StoryCharacterEditorTab.UserFriendly ? "active" : string.Empty)"
+                                    @onclick="() => SetActiveTab(StoryCharacterEditorTab.UserFriendly)">
+                                User-Friendly
                             </button>
-                        </div>
-                        <input id="story-character-name" class="form-control" @bind="_name" />
-                        @RenderGuidanceSummary(StoryEntityFieldKey.Name)
-                    </div>
-
-                    <div>
-                        <div class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="form-label mb-0" for="story-character-summary">Summary</label>
+                        </li>
+                        <li class="nav-item">
                             <button type="button"
-                                    class="btn btn-outline-secondary btn-sm"
-                                    title="Edit summary guidance"
-                                    aria-label="Edit summary guidance"
-                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.Summary)'>
-                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                    class="nav-link @(_activeTab == StoryCharacterEditorTab.ModelReady ? "active" : string.Empty)"
+                                    @onclick="() => SetActiveTab(StoryCharacterEditorTab.ModelReady)">
+                                Model-Ready
                             </button>
-                        </div>
-                        <textarea id="story-character-summary" class="form-control" rows="2" @bind="_summary"></textarea>
-                        @RenderGuidanceSummary(StoryEntityFieldKey.Summary)
-                    </div>
+                        </li>
+                    </ul>
 
-                    <div>
-                        <div class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="form-label mb-0" for="story-character-core-personality">Core Personality</label>
-                            <button type="button"
-                                    class="btn btn-outline-secondary btn-sm"
-                                    title="Edit core personality guidance"
-                                    aria-label="Edit core personality guidance"
-                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.CorePersonality)'>
-                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                            </button>
-                        </div>
-                        <textarea id="story-character-core-personality" class="form-control" rows="3" @bind="_corePersonality"></textarea>
-                        @RenderGuidanceSummary(StoryEntityFieldKey.CorePersonality)
-                    </div>
+                    @if (_activeTab == StoryCharacterEditorTab.UserFriendly)
+                    {
+                        <div class="d-flex flex-column gap-3">
+                            <div>
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <label class="form-label mb-0" for="story-character-name">Name</label>
+                                    <button type="button"
+                                            class="btn btn-outline-secondary btn-sm"
+                                            title="Edit name guidance"
+                                            aria-label="Edit name guidance"
+                                            @onclick='() => OpenGuidance(StoryEntityFieldKey.Name)'>
+                                        <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <input id="story-character-name" class="form-control" @bind="_name" />
+                                @RenderGuidanceSummary(StoryEntityFieldKey.Name)
+                            </div>
 
-                    <div>
-                        <div class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="form-label mb-0" for="story-character-general-appearance">General Appearance</label>
-                            <button type="button"
-                                    class="btn btn-outline-secondary btn-sm"
-                                    title="Edit general appearance guidance"
-                                    aria-label="Edit general appearance guidance"
-                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.GeneralAppearance)'>
-                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                            </button>
-                        </div>
-                        <textarea id="story-character-general-appearance" class="form-control" rows="3" @bind="_generalAppearance"></textarea>
-                        @RenderGuidanceSummary(StoryEntityFieldKey.GeneralAppearance)
-                    </div>
+                            <div>
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <label class="form-label mb-0" for="story-character-summary">Summary</label>
+                                    <button type="button"
+                                            class="btn btn-outline-secondary btn-sm"
+                                            title="Edit summary guidance"
+                                            aria-label="Edit summary guidance"
+                                            @onclick='() => OpenGuidance(StoryEntityFieldKey.Summary)'>
+                                        <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <textarea id="story-character-summary" class="form-control" rows="2" @bind="_summary"></textarea>
+                                @RenderGuidanceSummary(StoryEntityFieldKey.Summary)
+                            </div>
 
-                    <div>
-                        <div class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="form-label mb-0" for="story-character-relationships">Relationships</label>
-                            <button type="button"
-                                    class="btn btn-outline-secondary btn-sm"
-                                    title="Edit relationships guidance"
-                                    aria-label="Edit relationships guidance"
-                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.Relationships)'>
-                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                            </button>
-                        </div>
-                        <textarea id="story-character-relationships" class="form-control" rows="3" @bind="_relationships"></textarea>
-                        @RenderGuidanceSummary(StoryEntityFieldKey.Relationships)
-                    </div>
+                            <div>
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <label class="form-label mb-0" for="story-character-core-personality">Core Personality</label>
+                                    <button type="button"
+                                            class="btn btn-outline-secondary btn-sm"
+                                            title="Edit core personality guidance"
+                                            aria-label="Edit core personality guidance"
+                                            @onclick='() => OpenGuidance(StoryEntityFieldKey.CorePersonality)'>
+                                        <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <textarea id="story-character-core-personality" class="form-control" rows="3" @bind="_corePersonality"></textarea>
+                                @RenderGuidanceSummary(StoryEntityFieldKey.CorePersonality)
+                            </div>
 
-                    <div>
-                        <div class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="form-label mb-0" for="story-character-preferences">Preferences / Likes / Beliefs</label>
-                            <button type="button"
-                                    class="btn btn-outline-secondary btn-sm"
-                                    title="Edit preferences guidance"
-                                    aria-label="Edit preferences guidance"
-                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.PreferencesBeliefs)'>
-                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                            </button>
-                        </div>
-                        <textarea id="story-character-preferences" class="form-control" rows="3" @bind="_preferencesBeliefs"></textarea>
-                        @RenderGuidanceSummary(StoryEntityFieldKey.PreferencesBeliefs)
-                    </div>
+                            <div>
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <label class="form-label mb-0" for="story-character-general-appearance">General Appearance</label>
+                                    <button type="button"
+                                            class="btn btn-outline-secondary btn-sm"
+                                            title="Edit general appearance guidance"
+                                            aria-label="Edit general appearance guidance"
+                                            @onclick='() => OpenGuidance(StoryEntityFieldKey.GeneralAppearance)'>
+                                        <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <textarea id="story-character-general-appearance" class="form-control" rows="3" @bind="_generalAppearance"></textarea>
+                                @RenderGuidanceSummary(StoryEntityFieldKey.GeneralAppearance)
+                            </div>
 
-                    <div>
-                        <div class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="form-label mb-0" for="story-character-private-motivations">Private Motivations</label>
-                            <div class="d-flex gap-2">
-                                <button type="button"
-                                        class="btn btn-outline-secondary btn-sm"
-                                        title="Generate private motivations"
-                                        aria-label="Generate private motivations"
-                                        @onclick="OpenPrivateMotivations">
-                                    <i class="fa-regular fa-brain" aria-hidden="true"></i>
-                                </button>
-                                <button type="button"
-                                        class="btn btn-outline-secondary btn-sm"
-                                        title="Edit private motivations guidance"
-                                        aria-label="Edit private motivations guidance"
-                                        @onclick='() => OpenGuidance(StoryEntityFieldKey.PrivateMotivations)'>
-                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                                </button>
+                            <div>
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <label class="form-label mb-0" for="story-character-relationships">Relationships</label>
+                                    <button type="button"
+                                            class="btn btn-outline-secondary btn-sm"
+                                            title="Edit relationships guidance"
+                                            aria-label="Edit relationships guidance"
+                                            @onclick='() => OpenGuidance(StoryEntityFieldKey.Relationships)'>
+                                        <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <textarea id="story-character-relationships" class="form-control" rows="3" @bind="_relationships"></textarea>
+                                @RenderGuidanceSummary(StoryEntityFieldKey.Relationships)
+                            </div>
+
+                            <div>
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <label class="form-label mb-0" for="story-character-preferences">Preferences / Likes / Beliefs</label>
+                                    <button type="button"
+                                            class="btn btn-outline-secondary btn-sm"
+                                            title="Edit preferences guidance"
+                                            aria-label="Edit preferences guidance"
+                                            @onclick='() => OpenGuidance(StoryEntityFieldKey.PreferencesBeliefs)'>
+                                        <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                                <textarea id="story-character-preferences" class="form-control" rows="3" @bind="_preferencesBeliefs"></textarea>
+                                @RenderGuidanceSummary(StoryEntityFieldKey.PreferencesBeliefs)
+                            </div>
+
+                            <div>
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <label class="form-label mb-0" for="story-character-private-motivations">Private Motivations</label>
+                                    <div class="d-flex gap-2">
+                                        <button type="button"
+                                                class="btn btn-outline-secondary btn-sm"
+                                                title="Generate private motivations"
+                                                aria-label="Generate private motivations"
+                                                @onclick="OpenPrivateMotivations">
+                                            <i class="fa-regular fa-brain" aria-hidden="true"></i>
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-outline-secondary btn-sm"
+                                                title="Edit private motivations guidance"
+                                                aria-label="Edit private motivations guidance"
+                                                @onclick='() => OpenGuidance(StoryEntityFieldKey.PrivateMotivations)'>
+                                            <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <textarea id="story-character-private-motivations" class="form-control" rows="4" @bind="_privateMotivations"></textarea>
+                                @RenderGuidanceSummary(StoryEntityFieldKey.PrivateMotivations)
+                            </div>
+
+                            <div class="form-check">
+                                <input id="story-character-presence" class="form-check-input" type="checkbox" @bind="_isPresentInScene" />
+                                <label class="form-check-label" for="story-character-presence">Currently in the scene</label>
+                            </div>
+
+                            <div class="d-flex flex-wrap justify-content-between gap-2 border-top pt-3">
+                                <div class="d-flex gap-2">
+                                    @if (_selectedCharacterId.HasValue)
+                                    {
+                                        <BusyButton Class="btn btn-outline-danger"
+                                                    IsBusy="_isDeleting"
+                                                    Disabled="@(_isSavingUserSheet || _isDeleting || IsModelOperationBusy)"
+                                                    BusyText="Deleting..."
+                                                    OnClick="DeleteAsync">
+                                            <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
+                                            Delete
+                                        </BusyButton>
+                                    }
+                                </div>
+
+                                <div class="d-flex gap-2">
+                                    <button type="button"
+                                            class="btn btn-outline-primary"
+                                            title="@BuildAiButtonTitle()"
+                                            aria-label="@BuildAiButtonTitle()"
+                                            disabled="@IsModelOperationBusy"
+                                            @onclick="OpenAiAssist">
+                                        <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-outline-secondary" disabled="@IsAnyBusy" @onclick="CloseAsync">Close</button>
+                                    <BusyButton Class="btn btn-primary"
+                                                IsBusy="_isSavingUserSheet"
+                                                Disabled="@IsAnyBusy"
+                                                BusyText="Saving..."
+                                                OnClick="SaveUserFriendlyAsync">
+                                        <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                                        Save User-Friendly
+                                    </BusyButton>
+                                </div>
                             </div>
                         </div>
-                        <textarea id="story-character-private-motivations" class="form-control" rows="4" @bind="_privateMotivations"></textarea>
-                        @RenderGuidanceSummary(StoryEntityFieldKey.PrivateMotivations)
-                    </div>
+                    }
+                    else
+                    {
+                        <div class="d-flex flex-column gap-3">
+                            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                                <div class="d-flex align-items-center gap-2">
+                                    <span class="@BuildModelSheetBadgePillClass(_modelSheetStatus)">@BuildModelSheetStatusText(_modelSheetStatus)</span>
+                                    <span class="small text-body-secondary">AI uses only the saved model-ready sheet.</span>
+                                </div>
 
-                    <div class="form-check">
-                        <input id="story-character-presence" class="form-check-input" type="checkbox" @bind="_isPresentInScene" />
-                        <label class="form-check-label" for="story-character-presence">Currently in the scene</label>
-                    </div>
+                                <div class="d-flex gap-2">
+                                    <BusyButton Class="btn btn-outline-primary btn-sm"
+                                                IsBusy="_isGeneratingModelSheet"
+                                                Disabled="@(!_selectedCharacterId.HasValue || IsAnyBusy)"
+                                                BusyText="Generating..."
+                                                OnClick="GenerateModelSheetAsync">
+                                        <i class="fa-regular fa-wand-magic-sparkles me-2" aria-hidden="true"></i>
+                                        @(_modelSheetStatus == StoryCharacterModelSheetStatus.Missing ? "Generate" : "Regenerate")
+                                    </BusyButton>
+                                    <BusyButton Class="btn btn-primary btn-sm"
+                                                IsBusy="_isSavingModelSheet"
+                                                Disabled="@(!_selectedCharacterId.HasValue || IsAnyBusy)"
+                                                BusyText="Saving..."
+                                                OnClick="SaveModelReadyAsync">
+                                        <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                                        Save Model-Ready
+                                    </BusyButton>
+                                </div>
+                            </div>
 
-                    <div class="d-flex flex-wrap justify-content-between gap-2 border-top pt-3">
-                        <div class="d-flex gap-2">
-                            @if (_selectedCharacterId.HasValue)
+                            @if (!string.IsNullOrWhiteSpace(_modelSheetAlertMessage))
                             {
-                                <BusyButton Class="btn btn-outline-danger"
-                                            IsBusy="_isDeleting"
-                                            Disabled="@(_isSaving || _isDeleting)"
-                                            BusyText="Deleting..."
-                                            OnClick="DeleteAsync">
-                                    <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
-                                            Delete
-                                </BusyButton>
+                                <div class="alert alert-warning mb-0">
+                                    <div class="fw-semibold mb-1">Review Required</div>
+                                    <div>@_modelSheetAlertMessage</div>
+                                </div>
                             }
-                        </div>
 
-                        <div class="d-flex gap-2">
-                            <button type="button"
-                                    class="btn btn-outline-primary"
-                                    title="@BuildAiButtonTitle()"
-                                    aria-label="@BuildAiButtonTitle()"
-                                    @onclick="OpenAiAssist">
-                                <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
-                            </button>
-                            <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
-                            <BusyButton Class="btn btn-primary"
-                                        IsBusy="_isSaving"
-                                        Disabled="@(_isSaving || _isDeleting)"
-                                        BusyText="Saving..."
-                                        OnClick="SaveAsync">
-                                <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
-                                Save
-                            </BusyButton>
+                            @if (!string.IsNullOrWhiteSpace(_modelReviewSummary))
+                            {
+                                <div class="alert alert-light border mb-0">
+                                    <div class="fw-semibold mb-1">Draft Review</div>
+                                    <div>@_modelReviewSummary</div>
+                                </div>
+                            }
+
+                            @if (!_selectedCharacterId.HasValue)
+                            {
+                                <div class="alert alert-light border mb-0">
+                                    Save the user-friendly character notes first, then generate and review the model-ready sheet here.
+                                </div>
+                            }
+
+                            <div>
+                                <label class="form-label" for="story-character-model-summary">Summary</label>
+                                <textarea id="story-character-model-summary" class="form-control" rows="2" @bind="_modelSummary"></textarea>
+                            </div>
+
+                            <div>
+                                <label class="form-label" for="story-character-model-appearance">Appearance</label>
+                                <textarea id="story-character-model-appearance" class="form-control" rows="2" @bind="_modelAppearance"></textarea>
+                            </div>
+
+                            <div class="row g-3">
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label" for="story-character-model-voice">Voice</label>
+                                    <textarea id="story-character-model-voice" class="form-control" rows="2" @bind="_modelVoice"></textarea>
+                                </div>
+
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label" for="story-character-model-hides">Hides</label>
+                                    <textarea id="story-character-model-hides" class="form-control" rows="2" @bind="_modelHides"></textarea>
+                                </div>
+
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label" for="story-character-model-tendency">Tendency</label>
+                                    <textarea id="story-character-model-tendency" class="form-control" rows="2" @bind="_modelTendency"></textarea>
+                                </div>
+
+                                <div class="col-12 col-md-6">
+                                    <label class="form-label" for="story-character-model-constraint">Constraint</label>
+                                    <textarea id="story-character-model-constraint" class="form-control" rows="2" @bind="_modelConstraint"></textarea>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="form-label" for="story-character-model-relationships">Relationships</label>
+                                <textarea id="story-character-model-relationships" class="form-control" rows="3" @bind="_modelRelationships"></textarea>
+                            </div>
+
+                            <div>
+                                <label class="form-label" for="story-character-model-likes">Likes / Beliefs</label>
+                                <textarea id="story-character-model-likes" class="form-control" rows="3" @bind="_modelLikesBeliefs"></textarea>
+                            </div>
+
+                            <div>
+                                <label class="form-label" for="story-character-model-private">Private Motivations</label>
+                                <textarea id="story-character-model-private" class="form-control" rows="3" @bind="_modelPrivateMotivations"></textarea>
+                            </div>
+
+                            <div class="d-flex justify-content-end gap-2 border-top pt-3">
+                                <button type="button" class="btn btn-outline-secondary" disabled="@IsAnyBusy" @onclick="CloseAsync">Close</button>
+                            </div>
                         </div>
-                    </div>
+                    }
                 </div>
             </div>
         </div>
@@ -257,7 +383,9 @@
     public EventCallback OnChanged { get; set; }
 
     private bool _isLoading;
-    private bool _isSaving;
+    private bool _isSavingUserSheet;
+    private bool _isSavingModelSheet;
+    private bool _isGeneratingModelSheet;
     private bool _isDeleting;
     private bool _wasOpen;
     private Guid? _loadedThreadId;
@@ -270,6 +398,15 @@
     private string _relationships = string.Empty;
     private string _preferencesBeliefs = string.Empty;
     private string _privateMotivations = string.Empty;
+    private string _modelSummary = string.Empty;
+    private string _modelAppearance = string.Empty;
+    private string _modelVoice = string.Empty;
+    private string _modelHides = string.Empty;
+    private string _modelTendency = string.Empty;
+    private string _modelConstraint = string.Empty;
+    private string _modelRelationships = string.Empty;
+    private string _modelLikesBeliefs = string.Empty;
+    private string _modelPrivateMotivations = string.Empty;
     private bool _isPresentInScene;
     private bool _isAiAssistOpen;
     private bool _isGuidanceOpen;
@@ -277,6 +414,16 @@
     private StoryEntityFieldKey _selectedGuidanceFieldKey = StoryEntityFieldKey.Name;
     private IReadOnlyList<StoryEntityFieldGuidanceView> _fieldGuidance = [];
     private string? _errorMessage;
+    private string? _modelReviewSummary;
+    private string? _modelSheetAlertMessage;
+    private StoryCharacterModelSheetStatus _modelSheetStatus = StoryCharacterModelSheetStatus.Missing;
+    private StoryCharacterEditorTab _activeTab = StoryCharacterEditorTab.UserFriendly;
+
+    private bool IsCreatingCharacter => !_selectedCharacterId.HasValue;
+
+    private bool IsModelOperationBusy => _isGeneratingModelSheet || _isSavingModelSheet;
+
+    private bool IsAnyBusy => _isSavingUserSheet || _isDeleting || IsModelOperationBusy;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -326,6 +473,7 @@
     {
         _errorMessage = null;
         _selectedCharacterId = null;
+        _activeTab = StoryCharacterEditorTab.UserFriendly;
         _name = string.Empty;
         _summary = string.Empty;
         _generalAppearance = string.Empty;
@@ -334,6 +482,10 @@
         _preferencesBeliefs = string.Empty;
         _privateMotivations = string.Empty;
         _isPresentInScene = false;
+        ClearModelSheetDraft();
+        _modelSheetStatus = StoryCharacterModelSheetStatus.Missing;
+        _modelReviewSummary = null;
+        _modelSheetAlertMessage = "Save the user-friendly notes, then generate and review the model-ready sheet before using AI with this character.";
     }
 
     private void SelectCharacter(Guid characterId)
@@ -348,19 +500,23 @@
         _errorMessage = null;
         _selectedCharacterId = character.CharacterId;
         _name = character.Name;
-        _summary = character.Summary;
-        _generalAppearance = character.GeneralAppearance;
-        _corePersonality = character.CorePersonality;
-        _relationships = character.Relationships;
-        _preferencesBeliefs = character.PreferencesBeliefs;
-        _privateMotivations = character.PrivateMotivations;
+        _summary = character.UserSheet.Summary;
+        _generalAppearance = character.UserSheet.GeneralAppearance;
+        _corePersonality = character.UserSheet.CorePersonality;
+        _relationships = character.UserSheet.Relationships;
+        _preferencesBeliefs = character.UserSheet.PreferencesBeliefs;
+        _privateMotivations = character.UserSheet.PrivateMotivations;
         _isPresentInScene = character.IsPresentInScene;
+        ApplyModelSheet(character.ModelSheet);
+        _modelSheetStatus = character.ModelSheetStatus;
+        _modelReviewSummary = null;
+        _modelSheetAlertMessage = BuildModelSheetAlertMessage(character.Name, character.ModelSheetStatus);
     }
 
-    private async Task SaveAsync()
+    private async Task SaveUserFriendlyAsync()
     {
         _errorMessage = null;
-        _isSaving = true;
+        _isSavingUserSheet = true;
         try
         {
             var savedCharacter = await ChatStoryService.UpsertCharacterAsync(
@@ -368,27 +524,97 @@
                     ThreadId,
                     _selectedCharacterId,
                     _name,
-                    _summary,
-                    _generalAppearance,
-                    _corePersonality,
-                    _relationships,
-                    _preferencesBeliefs,
-                    _privateMotivations,
+                    BuildUserSheet(),
                     _isPresentInScene,
                     false),
                 CancellationToken.None);
 
             await LoadAsync(savedCharacter.CharacterId);
+            _activeTab = StoryCharacterEditorTab.ModelReady;
+            _modelSheetAlertMessage = BuildModelSheetAlertMessage(savedCharacter.Name, savedCharacter.ModelSheetStatus);
+            UserFeedbackService.ShowBackgroundSuccess($"Saved user-friendly notes for '{savedCharacter.Name}'.", "Character Saved");
+            if (savedCharacter.ModelSheetStatus != StoryCharacterModelSheetStatus.Ready)
+                UserFeedbackService.ShowBackgroundInfo($"Review and save the model-ready sheet for '{savedCharacter.Name}' before using AI with this character.", "Model-Ready Review Needed");
+
             await NotifyChangedAsync();
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving character {CharacterName} failed for chat {ChatId}.", _name, ThreadId);
             _errorMessage = $"Saving character '{BuildDisplayName()}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Character Save Failed");
         }
         finally
         {
-            _isSaving = false;
+            _isSavingUserSheet = false;
+        }
+    }
+
+    private async Task GenerateModelSheetAsync()
+    {
+        if (!_selectedCharacterId.HasValue)
+        {
+            _errorMessage = "Generating the model-ready character sheet failed because the character has not been saved yet.";
+            return;
+        }
+
+        _errorMessage = null;
+        _isGeneratingModelSheet = true;
+        try
+        {
+            var draft = await StoryCharacterModelSheetService.GenerateDraftAsync(
+                new GenerateStoryCharacterModelSheetDraft(ThreadId, _selectedCharacterId.Value),
+                CancellationToken.None);
+            ApplyModelSheet(draft.ModelSheet);
+            _modelReviewSummary = draft.ReviewSummary;
+            _modelSheetStatus = draft.Status;
+            _modelSheetAlertMessage = "Review the compact sheet below, make any adjustments you want, then save it. AI stays blocked until the reviewed model-ready sheet is saved.";
+            UserFeedbackService.ShowBackgroundSuccess($"Generated a model-ready draft for '{draft.CharacterName}'.", "Model-Ready Draft");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Generating the model-ready sheet failed for character {CharacterId} in chat {ChatId}.", _selectedCharacterId.Value, ThreadId);
+            _errorMessage = $"Generating the model-ready sheet for '{BuildDisplayName()}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Model-Ready Draft Failed");
+        }
+        finally
+        {
+            _isGeneratingModelSheet = false;
+        }
+    }
+
+    private async Task SaveModelReadyAsync()
+    {
+        if (!_selectedCharacterId.HasValue)
+        {
+            _errorMessage = "Saving the model-ready character sheet failed because the character has not been saved yet.";
+            return;
+        }
+
+        _errorMessage = null;
+        _isSavingModelSheet = true;
+        try
+        {
+            var savedCharacter = await ChatStoryService.SaveCharacterModelSheetAsync(
+                new SaveStoryCharacterModelSheet(ThreadId, _selectedCharacterId.Value, BuildModelSheet()),
+                CancellationToken.None);
+
+            await LoadAsync(savedCharacter.CharacterId);
+            _activeTab = StoryCharacterEditorTab.ModelReady;
+            _modelReviewSummary = null;
+            _modelSheetAlertMessage = BuildModelSheetAlertMessage(savedCharacter.Name, savedCharacter.ModelSheetStatus);
+            UserFeedbackService.ShowBackgroundSuccess($"Saved the model-ready sheet for '{savedCharacter.Name}'.", "Model-Ready Saved");
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving the model-ready sheet failed for character {CharacterId} in chat {ChatId}.", _selectedCharacterId.Value, ThreadId);
+            _errorMessage = $"Saving the model-ready sheet for '{BuildDisplayName()}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Model-Ready Save Failed");
+        }
+        finally
+        {
+            _isSavingModelSheet = false;
         }
     }
 
@@ -404,12 +630,14 @@
         {
             await ChatStoryService.DeleteCharacterAsync(new DeleteCharacter(ThreadId, _selectedCharacterId.Value), CancellationToken.None);
             await LoadAsync();
+            UserFeedbackService.ShowBackgroundSuccess($"Deleted character '{displayName}'.", "Character Deleted");
             await NotifyChangedAsync();
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Deleting character {CharacterId} failed for chat {ChatId}.", _selectedCharacterId.Value, ThreadId);
             _errorMessage = $"Deleting character '{displayName}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Character Delete Failed");
         }
         finally
         {
@@ -433,6 +661,8 @@
         _isGuidanceOpen = true;
     }
 
+    private void SetActiveTab(StoryCharacterEditorTab tab) => _activeTab = tab;
+
     private Task CloseAiAssistAsync()
     {
         _isAiAssistOpen = false;
@@ -455,6 +685,7 @@
     {
         _isAiAssistOpen = false;
         await LoadAsync(result.EntityId);
+        _activeTab = StoryCharacterEditorTab.ModelReady;
         await NotifyChangedAsync();
     }
 
@@ -465,9 +696,7 @@
         return Task.CompletedTask;
     }
 
-    private Task CloseAsync() => OnClose.InvokeAsync();
-
-    private bool IsCreatingCharacter => !_selectedCharacterId.HasValue;
+    private Task CloseAsync() => IsAnyBusy ? Task.CompletedTask : OnClose.InvokeAsync();
 
     private string BuildDisplayName() => string.IsNullOrWhiteSpace(_name) ? "Untitled Character" : _name.Trim();
 
@@ -482,13 +711,53 @@
     private StoryCharacterDraftContext BuildDraftContext() => new(
         _selectedCharacterId,
         _name,
+        BuildUserSheet(),
+        BuildModelSheet(),
+        _modelSheetStatus,
+        _isPresentInScene);
+
+    private StoryCharacterUserSheetView BuildUserSheet() => new(
         _summary,
         _generalAppearance,
         _corePersonality,
         _relationships,
         _preferencesBeliefs,
-        _privateMotivations,
-        _isPresentInScene);
+        _privateMotivations);
+
+    private StoryCharacterModelSheetView BuildModelSheet() => new(
+        _modelSummary,
+        _modelAppearance,
+        _modelVoice,
+        _modelHides,
+        _modelTendency,
+        _modelConstraint,
+        _modelRelationships,
+        _modelLikesBeliefs,
+        _modelPrivateMotivations);
+
+    private void ApplyModelSheet(StoryCharacterModelSheetView modelSheet)
+    {
+        _modelSummary = modelSheet.Summary;
+        _modelAppearance = modelSheet.Appearance;
+        _modelVoice = modelSheet.Voice;
+        _modelHides = modelSheet.Hides;
+        _modelTendency = modelSheet.Tendency;
+        _modelConstraint = modelSheet.Constraint;
+        _modelRelationships = modelSheet.Relationships;
+        _modelLikesBeliefs = modelSheet.LikesBeliefs;
+        _modelPrivateMotivations = modelSheet.PrivateMotivations;
+    }
+
+    private void ClearModelSheetDraft() => ApplyModelSheet(new StoryCharacterModelSheetView(
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty,
+        string.Empty));
 
     private async Task HandleGuidanceSavedAsync(StoryEntityFieldGuidanceView guidance)
     {
@@ -536,4 +805,45 @@
         StoryFieldGuidanceFormat.BulletList => "items",
         _ => guidanceFormat.ToString().ToLowerInvariant()
     };
+
+    private static string BuildModelSheetAlertMessage(string name, StoryCharacterModelSheetStatus status) => status switch
+    {
+        StoryCharacterModelSheetStatus.Ready => $"The saved model-ready sheet for '{name}' is current and will be used by AI.",
+        StoryCharacterModelSheetStatus.Stale => $"The saved model-ready sheet for '{name}' is stale. Regenerate, review, and save it before using AI with this character.",
+        _ => $"'{name}' does not have a saved model-ready sheet yet. Generate, review, and save one before using AI with this character."
+    };
+
+    private static string BuildModelSheetStatusText(StoryCharacterModelSheetStatus status) => status switch
+    {
+        StoryCharacterModelSheetStatus.Ready => "Ready",
+        StoryCharacterModelSheetStatus.Stale => "Stale",
+        _ => "Missing"
+    };
+
+    private static string BuildModelSheetBadgeClass(StoryCharacterModelSheetStatus status) => status switch
+    {
+        StoryCharacterModelSheetStatus.Ready => "text-success",
+        StoryCharacterModelSheetStatus.Stale => "text-warning",
+        _ => "text-body-secondary"
+    };
+
+    private static string BuildModelSheetStatusIcon(StoryCharacterModelSheetStatus status) => status switch
+    {
+        StoryCharacterModelSheetStatus.Ready => "fa-regular fa-circle-check",
+        StoryCharacterModelSheetStatus.Stale => "fa-regular fa-triangle-exclamation",
+        _ => "fa-regular fa-circle",
+    };
+
+    private static string BuildModelSheetBadgePillClass(StoryCharacterModelSheetStatus status) => status switch
+    {
+        StoryCharacterModelSheetStatus.Ready => "badge text-bg-success",
+        StoryCharacterModelSheetStatus.Stale => "badge text-bg-warning",
+        _ => "badge text-bg-secondary"
+    };
+
+    private enum StoryCharacterEditorTab
+    {
+        UserFriendly,
+        ModelReady
+    }
 }

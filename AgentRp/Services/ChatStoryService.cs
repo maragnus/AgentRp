@@ -97,23 +97,23 @@ public sealed class ChatStoryService(
             ?? throw new InvalidOperationException("The selected chat story could not be found.");
 
         var name = RequireValue(command.Name, "character name");
-        var summary = NormalizeOptionalValue(command.Summary);
-        var generalAppearance = NormalizeOptionalValue(command.GeneralAppearance);
-        var corePersonality = NormalizeOptionalValue(command.CorePersonality);
-        var relationships = NormalizeOptionalValue(command.Relationships);
-        var preferencesBeliefs = NormalizeOptionalValue(command.PreferencesBeliefs);
-        var privateMotivations = NormalizeOptionalValue(command.PrivateMotivations);
+        var userSheet = Normalize(command.UserSheet);
         var documents = story.Characters.Entries.ToList();
         var characterId = command.CharacterId ?? Guid.NewGuid();
+        var existingDocument = documents.FirstOrDefault(x => x.Id == characterId);
+        var userSheetChanged = existingDocument is null
+            || !AreEquivalent(StoryCharacterModelSheetSupport.GetUserSheet(existingDocument), userSheet)
+            || !string.Equals(existingDocument.Name, name, StringComparison.Ordinal);
+        var nextUserSheetRevision = userSheetChanged
+            ? Math.Max(existingDocument?.UserSheetRevision ?? 0, 0) + 1
+            : existingDocument?.UserSheetRevision ?? 0;
         var document = new StoryCharacterDocument(
             characterId,
             name,
-            summary,
-            generalAppearance,
-            corePersonality,
-            relationships,
-            preferencesBeliefs,
-            privateMotivations,
+            MapUserSheetDocument(userSheet),
+            existingDocument?.ModelSheet ?? StoryCharacterModelSheetDocument.Empty,
+            nextUserSheetRevision,
+            existingDocument?.ModelSheetReviewedAgainstRevision,
             command.IsArchived);
 
         ReplaceOrAdd(documents, document, x => x.Id);
@@ -124,6 +124,32 @@ public sealed class ChatStoryService(
 
         await SaveStoryAsync(dbContext, story, cancellationToken);
         return MapCharacter(story, document);
+    }
+
+    public async Task<StoryCharacterEditorView> SaveCharacterModelSheetAsync(SaveStoryCharacterModelSheet command, CancellationToken cancellationToken)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var story = await GetOrCreateStoryAsync(dbContext, command.ThreadId, cancellationToken)
+            ?? throw new InvalidOperationException("The selected chat story could not be found.");
+
+        var documents = story.Characters.Entries.ToList();
+        var existingDocument = documents.FirstOrDefault(x => x.Id == command.CharacterId)
+            ?? throw new InvalidOperationException("Saving the model-ready character sheet failed because the selected character could not be found.");
+        var modelSheet = Normalize(command.ModelSheet);
+        if (IsEmpty(modelSheet))
+            throw new InvalidOperationException($"Saving the model-ready character sheet failed because '{existingDocument.Name}' did not have any model-ready content to save.");
+
+        var updatedDocument = existingDocument with
+        {
+            ModelSheet = MapModelSheetDocument(modelSheet),
+            ModelSheetReviewedAgainstRevision = existingDocument.UserSheetRevision
+        };
+
+        ReplaceOrAdd(documents, updatedDocument, x => x.Id);
+        story.Characters = new ChatStoryCharactersDocument(documents);
+
+        await SaveStoryAsync(dbContext, story, cancellationToken);
+        return MapCharacter(story, updatedDocument);
     }
 
     public async Task DeleteCharacterAsync(DeleteCharacter command, CancellationToken cancellationToken)
@@ -501,7 +527,7 @@ public sealed class ChatStoryService(
                 .Select(x => new StoryCharacterListItemView(
                     x.Id,
                     x.Name,
-                    x.Summary,
+                    StoryCharacterModelSheetSupport.GetUserSheet(x).Summary,
                     story.Scene.PresentCharacterIds.Contains(x.Id),
                     selectedSpeakerId == x.Id))
                 .ToList(),
@@ -534,7 +560,7 @@ public sealed class ChatStoryService(
         speakers.AddRange(characters.Select(character => new StorySidebarSpeakerView(
             character.Id,
             character.Name,
-            character.Summary,
+            StoryCharacterModelSheetSupport.GetUserSheet(character).Summary,
             false,
             story.Scene.PresentCharacterIds.Contains(character.Id),
             selectedSpeakerId == character.Id)));
@@ -552,12 +578,10 @@ public sealed class ChatStoryService(
     private static StoryCharacterEditorView MapCharacter(ChatStory story, StoryCharacterDocument document) => new(
         document.Id,
         document.Name,
-        document.Summary,
-        document.GeneralAppearance,
-        document.CorePersonality,
-        document.Relationships,
-        document.PreferencesBeliefs,
-        document.PrivateMotivations,
+        MapUserSheetView(StoryCharacterModelSheetSupport.GetUserSheet(document)),
+        MapModelSheetView(StoryCharacterModelSheetSupport.GetModelSheet(document)),
+        StoryCharacterModelSheetSupport.GetStatus(document),
+        StoryCharacterModelSheetSupport.IsReady(document),
         story.Scene.PresentCharacterIds.Contains(document.Id));
 
     private static IReadOnlyList<StoryLocationListItemView> MapLocationList(ChatStory story) =>
@@ -673,6 +697,103 @@ public sealed class ChatStoryService(
 
         return value.Trim();
     }
+
+    private static StoryCharacterUserSheetView Normalize(StoryCharacterUserSheetView view) => new(
+        NormalizeOptionalValue(view.Summary),
+        NormalizeOptionalValue(view.GeneralAppearance),
+        NormalizeOptionalValue(view.CorePersonality),
+        NormalizeOptionalValue(view.Relationships),
+        NormalizeOptionalValue(view.PreferencesBeliefs),
+        NormalizeOptionalValue(view.PrivateMotivations));
+
+    private static StoryCharacterModelSheetView Normalize(StoryCharacterModelSheetView view) => new(
+        NormalizeOptionalValue(view.Summary),
+        NormalizeOptionalValue(view.Appearance),
+        NormalizeOptionalValue(view.Voice),
+        NormalizeOptionalValue(view.Hides),
+        NormalizeOptionalValue(view.Tendency),
+        NormalizeOptionalValue(view.Constraint),
+        NormalizeOptionalValue(view.Relationships),
+        NormalizeOptionalValue(view.LikesBeliefs),
+        NormalizeOptionalValue(view.PrivateMotivations));
+
+    private static StoryCharacterUserSheetDocument MapUserSheetDocument(StoryCharacterUserSheetView view) => new(
+        view.Summary,
+        view.GeneralAppearance,
+        view.CorePersonality,
+        view.Relationships,
+        view.PreferencesBeliefs,
+        view.PrivateMotivations);
+
+    private static StoryCharacterModelSheetDocument MapModelSheetDocument(StoryCharacterModelSheetView view) => new(
+        view.Summary,
+        view.Appearance,
+        view.Voice,
+        view.Hides,
+        view.Tendency,
+        view.Constraint,
+        view.Relationships,
+        view.LikesBeliefs,
+        view.PrivateMotivations);
+
+    private static StoryCharacterUserSheetView MapUserSheetView(StoryCharacterUserSheetDocument document) => new(
+        document.Summary,
+        document.GeneralAppearance,
+        document.CorePersonality,
+        document.Relationships,
+        document.PreferencesBeliefs,
+        document.PrivateMotivations);
+
+    private static StoryCharacterModelSheetView MapModelSheetView(StoryCharacterModelSheetDocument document) => new(
+        document.Summary,
+        document.Appearance,
+        document.Voice,
+        document.Hides,
+        document.Tendency,
+        document.Constraint,
+        document.Relationships,
+        document.LikesBeliefs,
+        document.PrivateMotivations);
+
+    private static StoryCharacterModelSheetStatus GetModelSheetStatus(StoryCharacterDocument document)
+    {
+        if (IsEmpty(StoryCharacterModelSheetSupport.GetModelSheet(document)))
+            return StoryCharacterModelSheetStatus.Missing;
+
+        return document.ModelSheetReviewedAgainstRevision == document.UserSheetRevision
+            ? StoryCharacterModelSheetStatus.Ready
+            : StoryCharacterModelSheetStatus.Stale;
+    }
+
+    private static bool AreEquivalent(StoryCharacterUserSheetDocument left, StoryCharacterUserSheetView right) =>
+        string.Equals(left.Summary, right.Summary, StringComparison.Ordinal)
+        && string.Equals(left.GeneralAppearance, right.GeneralAppearance, StringComparison.Ordinal)
+        && string.Equals(left.CorePersonality, right.CorePersonality, StringComparison.Ordinal)
+        && string.Equals(left.Relationships, right.Relationships, StringComparison.Ordinal)
+        && string.Equals(left.PreferencesBeliefs, right.PreferencesBeliefs, StringComparison.Ordinal)
+        && string.Equals(left.PrivateMotivations, right.PrivateMotivations, StringComparison.Ordinal);
+
+    private static bool IsEmpty(StoryCharacterModelSheetView view) =>
+        string.IsNullOrWhiteSpace(view.Summary)
+        && string.IsNullOrWhiteSpace(view.Appearance)
+        && string.IsNullOrWhiteSpace(view.Voice)
+        && string.IsNullOrWhiteSpace(view.Hides)
+        && string.IsNullOrWhiteSpace(view.Tendency)
+        && string.IsNullOrWhiteSpace(view.Constraint)
+        && string.IsNullOrWhiteSpace(view.Relationships)
+        && string.IsNullOrWhiteSpace(view.LikesBeliefs)
+        && string.IsNullOrWhiteSpace(view.PrivateMotivations);
+
+    private static bool IsEmpty(StoryCharacterModelSheetDocument document) =>
+        string.IsNullOrWhiteSpace(document.Summary)
+        && string.IsNullOrWhiteSpace(document.Appearance)
+        && string.IsNullOrWhiteSpace(document.Voice)
+        && string.IsNullOrWhiteSpace(document.Hides)
+        && string.IsNullOrWhiteSpace(document.Tendency)
+        && string.IsNullOrWhiteSpace(document.Constraint)
+        && string.IsNullOrWhiteSpace(document.Relationships)
+        && string.IsNullOrWhiteSpace(document.LikesBeliefs)
+        && string.IsNullOrWhiteSpace(document.PrivateMotivations);
 
     private static string NormalizeOptionalValue(string? value) => value?.Trim() ?? string.Empty;
 

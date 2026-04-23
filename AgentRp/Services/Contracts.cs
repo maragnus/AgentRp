@@ -244,15 +244,39 @@ public sealed record StoryLocationListItemView(
     string Summary,
     bool IsCurrent);
 
-public sealed record StoryCharacterEditorView(
-    Guid CharacterId,
-    string Name,
+public sealed record StoryCharacterUserSheetView(
     string Summary,
     string GeneralAppearance,
     string CorePersonality,
     string Relationships,
     string PreferencesBeliefs,
-    string PrivateMotivations,
+    string PrivateMotivations);
+
+public sealed record StoryCharacterModelSheetView(
+    string Summary,
+    string Appearance,
+    string Voice,
+    string Hides,
+    string Tendency,
+    string Constraint,
+    string Relationships,
+    string LikesBeliefs,
+    string PrivateMotivations);
+
+public enum StoryCharacterModelSheetStatus
+{
+    Missing,
+    Stale,
+    Ready
+}
+
+public sealed record StoryCharacterEditorView(
+    Guid CharacterId,
+    string Name,
+    StoryCharacterUserSheetView UserSheet,
+    StoryCharacterModelSheetView ModelSheet,
+    StoryCharacterModelSheetStatus ModelSheetStatus,
+    bool IsModelSheetReady,
     bool IsPresentInScene);
 
 public sealed record StoryLocationEditorView(
@@ -309,14 +333,25 @@ public sealed record UpsertCharacter(
     Guid ThreadId,
     Guid? CharacterId,
     string Name,
-    string Summary,
-    string GeneralAppearance,
-    string CorePersonality,
-    string Relationships,
-    string PreferencesBeliefs,
-    string PrivateMotivations,
+    StoryCharacterUserSheetView UserSheet,
     bool IsPresentInScene,
     bool IsArchived);
+
+public sealed record GenerateStoryCharacterModelSheetDraft(
+    Guid ThreadId,
+    Guid CharacterId);
+
+public sealed record SaveStoryCharacterModelSheet(
+    Guid ThreadId,
+    Guid CharacterId,
+    StoryCharacterModelSheetView ModelSheet);
+
+public sealed record StoryCharacterModelSheetDraftView(
+    Guid CharacterId,
+    string CharacterName,
+    StoryCharacterModelSheetView ModelSheet,
+    StoryCharacterModelSheetStatus Status,
+    string ReviewSummary);
 
 public sealed record StorySceneCharacterAppearanceView(
     Guid CharacterId,
@@ -770,10 +805,13 @@ public sealed record StorySceneActorContext(
     string Name,
     bool IsNarrator,
     string Summary,
-    string GeneralAppearance,
-    string CorePersonality,
+    string Appearance,
+    string Voice,
+    string Hides,
+    string Tendency,
+    string Constraint,
     string Relationships,
-    string PreferencesBeliefs,
+    string LikesBeliefs,
     string PrivateMotivations,
     string NarratorGuidance,
     string HiddenKnowledge);
@@ -794,11 +832,15 @@ public sealed record StorySceneCharacterContext(
     Guid CharacterId,
     string Name,
     string Summary,
-    string GeneralAppearance,
+    string Appearance,
     string CurrentAppearance,
-    string CorePersonality,
+    string Voice,
+    string Hides,
+    string Tendency,
+    string Constraint,
     string Relationships,
-    string PreferencesBeliefs,
+    string LikesBeliefs,
+    string PrivateMotivations,
     bool IsPresentInScene);
 
 public sealed record StorySceneAppearanceResolution(
@@ -965,6 +1007,8 @@ public interface IChatStoryService
 
     Task<StoryCharacterEditorView> UpsertCharacterAsync(UpsertCharacter command, CancellationToken cancellationToken);
 
+    Task<StoryCharacterEditorView> SaveCharacterModelSheetAsync(SaveStoryCharacterModelSheet command, CancellationToken cancellationToken);
+
     Task DeleteCharacterAsync(DeleteCharacter command, CancellationToken cancellationToken);
 
     Task<StoryLocationEditorView> UpsertLocationAsync(UpsertLocation command, CancellationToken cancellationToken);
@@ -988,6 +1032,13 @@ public interface IChatStoryService
     Task<StoryNarrativeSettingsView> UpdateStoryNarrativeSettingsAsync(UpdateStoryNarrativeSettings command, CancellationToken cancellationToken);
 
     Task UpdateScenePresenceAsync(UpdateScenePresence command, CancellationToken cancellationToken);
+}
+
+public interface IStoryCharacterModelSheetService
+{
+    Task<StoryCharacterModelSheetDraftView> GenerateDraftAsync(
+        GenerateStoryCharacterModelSheetDraft request,
+        CancellationToken cancellationToken);
 }
 
 public interface IStoryFieldGuidanceService

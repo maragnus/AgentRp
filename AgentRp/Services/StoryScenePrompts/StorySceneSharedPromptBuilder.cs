@@ -14,10 +14,13 @@ internal static class StorySceneSharedPromptBuilder
             builder.AppendLine($"- Narrator guidance: {PromptInlineText(context.Actor.NarratorGuidance, "None")}");
         else
         {
-            builder.AppendLine($"- General appearance: {PromptInlineText(context.Actor.GeneralAppearance, "None")}");
-            builder.AppendLine($"- Core personality: {PromptInlineText(context.Actor.CorePersonality, "None")}");
+            builder.AppendLine($"- Appearance: {PromptInlineText(context.Actor.Appearance, "None")}");
+            builder.AppendLine($"- Voice: {PromptInlineText(context.Actor.Voice, "None")}");
+            builder.AppendLine($"- Hides: {PromptInlineText(context.Actor.Hides, "None")}");
+            builder.AppendLine($"- Tendency: {PromptInlineText(context.Actor.Tendency, "None")}");
+            builder.AppendLine($"- Constraint: {PromptInlineText(context.Actor.Constraint, "None")}");
             builder.AppendLine($"- Relationships: {PromptInlineText(context.Actor.Relationships, "None")}");
-            builder.AppendLine($"- Preferences / beliefs: {PromptInlineText(context.Actor.PreferencesBeliefs, "None")}");
+            builder.AppendLine($"- Likes / beliefs: {PromptInlineText(context.Actor.LikesBeliefs, "None")}");
             builder.AppendLine($"- Private motivations: {PromptInlineText(context.Actor.PrivateMotivations, "None")}");
         }
 
@@ -45,16 +48,14 @@ internal static class StorySceneSharedPromptBuilder
             builder.AppendLine("**Characters in the scene:**")
                 .AppendLine($"- **{context.Actor.Name}:** current actor");
             foreach (var character in sceneCharacters)
-                builder.AppendLine($"- **{character.Name}:** {PromptInlineText(character.Summary)} | General appearance: {PromptInlineText(character.GeneralAppearance, "None")}");
+                builder.AppendLine($"- **{character.Name}:** {PromptInlineText(character.Summary)} | Appearance: {PromptInlineText(character.Appearance, "None")} | Voice: {PromptInlineText(character.Voice, "None")} | Relationships: {PromptInlineText(character.Relationships, "None")}");
             builder.AppendLine();
         }
 
         var otherCharacters = nonActorCharacters.Where(x => !x.IsPresentInScene).ToList();
         if (otherCharacters.Count > 0)
         {
-            builder.AppendLine("**Other characters:**");
-            foreach (var character in otherCharacters)
-                builder.AppendLine($"- **{character.Name}:** {PromptInlineText(character.Summary)}");
+            builder.AppendLine($"**Other known characters:** {string.Join(", ", otherCharacters.Select(x => x.Name))}");
             builder.AppendLine();
         }
 
@@ -140,7 +141,7 @@ internal static class StorySceneSharedPromptBuilder
         AppendContentGuidance(builder, storyContext);
         builder.AppendLine("Characters currently in the scene:");
         foreach (var character in characters.Where(x => x.IsPresentInScene))
-            builder.AppendLine($"- {character.Name} | General appearance: {PromptInlineText(character.GeneralAppearance, "None")} | Prior current appearance: {PromptInlineText(character.CurrentAppearance, "None")}");
+            builder.AppendLine($"- {character.Name} | Appearance: {PromptInlineText(character.Appearance, "None")} | Prior current appearance: {PromptInlineText(character.CurrentAppearance, "None")}");
 
         builder.AppendLine("Transcript:");
         if (appearance.TranscriptSinceLatestEntry.Count == 0)

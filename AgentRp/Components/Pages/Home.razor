@@ -7,6 +7,7 @@
 @inject IActivityNotifier ActivityNotifier
 @inject IModelOperationRegistry ModelOperationRegistry
 @inject IUserFeedbackService UserFeedbackService
+@inject IStorySceneChatDisplayPreferencesService StorySceneChatDisplayPreferencesService
 @inject NavigationManager NavigationManager
 @inject ILogger<Home> Logger
 @inject IJSRuntime JSRuntime
@@ -44,6 +45,29 @@ else
                         <span class="mx-2">•</span>
                         <span>@MessageCountText</span>
                     </div>
+                </div>
+
+                <div class="ms-lg-auto d-flex flex-wrap align-items-center gap-2">
+                    @if (!_showProcessPanels && ActiveRunningProcess is not null)
+                    {
+                        <span class="badge text-bg-light border text-body-secondary">@ActiveRunningProcess.DisplayStatusText</span>
+
+                        <StopOperationButton Class="btn btn-outline-danger btn-sm"
+                                             IsStopping="@IsStoppingRun(ActiveRunningProcess.RunId)"
+                                             Disabled="@IsStoppingRun(ActiveRunningProcess.RunId)"
+                                             Title="Stop this scene generation"
+                                             OnClick="() => StopSceneRunAsync(ActiveRunningProcess.RunId)" />
+                    }
+
+                    <BusyButton Class="btn btn-outline-secondary btn-sm"
+                                OnClick="ToggleProcessPanelsAsync"
+                                IsBusy="@_isUpdatingDisplayPreferences"
+                                BusyText="Saving..."
+                                title="@ProcessPanelsToggleTitle"
+                                aria-label="@ProcessPanelsToggleTitle">
+                        <i class="fa-regular @ProcessPanelsToggleIconCss me-2" aria-hidden="true"></i>
+                        @ProcessPanelsToggleText
+                    </BusyButton>
                 </div>
             </div>
         </div>
@@ -92,7 +116,7 @@ else
                         var displayContent = message is null ? string.Empty : GetDisplayContent(message);
 
                         <div class="d-flex flex-column gap-3">
-                            @if (process is not null)
+                            @if (process is not null && _showProcessPanels)
                             {
                                 <div class="card border-0 bg-body-tertiary shadow-sm">
                                     <div class="card-body p-0">
@@ -337,6 +361,28 @@ else
                                         </section>
                                         </div>
                                     </div>
+                            }
+                            else if (process?.Status == ProcessRunStatus.Running)
+                            {
+                                <div class="card border-0 bg-body-tertiary shadow-sm">
+                                    <div class="card-body d-flex flex-wrap align-items-center justify-content-between gap-3">
+                                        <div class="d-flex align-items-start gap-3">
+                                            <div class="pt-1">
+                                                <i class="fa-regular fa-gears text-body-secondary" aria-hidden="true"></i>
+                                            </div>
+                                            <div>
+                                                <div class="fw-semibold">Scene generation in progress</div>
+                                                <div class="small text-body-secondary">@GetHiddenProcessSummary(process, processDurationText)</div>
+                                            </div>
+                                        </div>
+
+                                        <StopOperationButton Class="btn btn-outline-danger btn-sm"
+                                                             IsStopping="@IsStoppingRun(process.RunId)"
+                                                             Disabled="@IsStoppingRun(process.RunId)"
+                                                             Title="Stop this scene generation"
+                                                             OnClick="() => StopSceneRunAsync(process.RunId)" />
+                                    </div>
+                                </div>
                             }
 
                             @if (message is not null)
@@ -984,6 +1030,7 @@ else
     private bool _isSnapshotModalOpen;
     private bool _isSnapshotDraftLoading;
     private bool _isCommittingSnapshot;
+    private bool _isUpdatingDisplayPreferences;
     private StoryChatSnapshotDraftView? _snapshotDraft;
     private bool _isPlanModalOpen;
     private Guid? _editingPlanMessageId;
@@ -1002,6 +1049,7 @@ else
     private StorySceneDeleteMode? _deleteMode;
     private string? _errorMessage;
     private StorySceneChatState? _chat;
+    private bool _showProcessPanels = true;
     private DateTime _processDurationNowUtc = DateTime.UtcNow;
     private readonly Dictionary<Guid, bool> _expandedProcessRunStates = [];
     private readonly Dictionary<Guid, bool> _expandedProcessAppearanceStates = [];
@@ -1025,6 +1073,7 @@ else
     protected override async Task OnInitializedAsync()
     {
         _workspaceSubscription = ActivityNotifier.Subscribe(ActivityStreams.StoryChatWorkspace, _ => InvokeAsync(HandleWorkspaceUpdatedAsync));
+        await LoadDisplayPreferencesAsync();
         await base.OnInitializedAsync();
     }
 
@@ -1098,6 +1147,20 @@ else
         SyncStoppingRuns();
         SyncProcessDurationRefreshTimer();
         StateHasChanged();
+    }
+
+    private async Task LoadDisplayPreferencesAsync()
+    {
+        try
+        {
+            var preferences = await StorySceneChatDisplayPreferencesService.GetPreferencesAsync(CancellationToken.None);
+            _showProcessPanels = preferences.ShowProcessPanels;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Loading story scene chat display preferences failed.");
+            _showProcessPanels = true;
+        }
     }
 
     private async Task HandleMessageStreamUpdateAsync(StorySceneMessageStreamUpdate update, CancellationToken cancellationToken)
@@ -1842,6 +1905,39 @@ else
         return string.Join(" ", classes);
     }
 
+    private async Task ToggleProcessPanelsAsync()
+    {
+        _isUpdatingDisplayPreferences = true;
+        _errorMessage = null;
+
+        try
+        {
+            var preferences = await StorySceneChatDisplayPreferencesService.UpdatePreferencesAsync(
+                new UpdateStorySceneChatDisplayPreferences(!_showProcessPanels),
+                CancellationToken.None);
+
+            _showProcessPanels = preferences.ShowProcessPanels;
+            if (!_showProcessPanels)
+                CancelAppearanceEdit();
+
+            UserFeedbackService.ShowBackgroundSuccess(
+                _showProcessPanels
+                    ? "Appearance and process panels are now visible."
+                    : "Appearance and process panels are now hidden.",
+                "Display Updated");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving story scene chat display preferences failed.");
+            _errorMessage = "Saving the display preference for appearance and process panels failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Display Update Failed");
+        }
+        finally
+        {
+            _isUpdatingDisplayPreferences = false;
+        }
+    }
+
     private async Task CopyMessageAsync(string content)
     {
         _errorMessage = null;
@@ -1856,6 +1952,15 @@ else
             _errorMessage = "Copying the scene message failed.";
         }
     }
+
+    private string ProcessPanelsToggleTitle =>
+        _showProcessPanels ? "Hide appearance and process blocks" : "Show appearance and process blocks";
+
+    private string ProcessPanelsToggleText =>
+        _showProcessPanels ? "Hide AI Details" : "Show AI Details";
+
+    private string ProcessPanelsToggleIconCss =>
+        _showProcessPanels ? "fa-eye-slash" : "fa-eye";
 
     private void ToggleProcessRun(Guid runId)
     {
@@ -1955,6 +2060,19 @@ else
         return !string.IsNullOrWhiteSpace(process.ActiveStage)
             ? $"Active stage: {process.ActiveStage}"
             : "Review the saved machine trace for this message.";
+    }
+
+    private static string GetHiddenProcessSummary(StorySceneMessageProcessView process, string? processDurationText)
+    {
+        var segments = new List<string> { process.DisplayStatusText };
+
+        if (!string.IsNullOrWhiteSpace(process.ActiveStage))
+            segments.Add($"Active stage: {process.ActiveStage}");
+
+        if (!string.IsNullOrWhiteSpace(processDurationText))
+            segments.Add(processDurationText);
+
+        return string.Join(" • ", segments);
     }
 
     private void ToggleProcessAppearance(Guid runId)

@@ -14,12 +14,9 @@ public enum StoryCharacterPrivateMotivationCategory
 public sealed record StoryCharacterDraftContext(
     Guid? CharacterId,
     string Name,
-    string Summary,
-    string GeneralAppearance,
-    string CorePersonality,
-    string Relationships,
-    string PreferencesBeliefs,
-    string PrivateMotivations,
+    StoryCharacterUserSheetView UserSheet,
+    StoryCharacterModelSheetView ModelSheet,
+    StoryCharacterModelSheetStatus ModelSheetStatus,
     bool IsPresentInScene);
 
 public sealed record StoryCharacterPrivateMotivationOption(
