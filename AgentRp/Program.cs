@@ -22,6 +22,8 @@ builder.Services.AddSingleton<IMarkdownRenderer, MarkdownRenderer>();
 builder.Services.AddSingleton<IModelOperationRegistry, ModelOperationRegistry>();
 builder.Services.AddSingleton<IAgentTurnComposer, AgentTurnComposer>();
 builder.Services.AddSingleton<IAgentCatalog, AgentCatalog>();
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IAgentEndpointManagementService, AgentEndpointManagementService>();
 builder.Services.AddScoped<IThreadAgentService, ThreadAgentService>();
 builder.Services.AddScoped<IChatWorkspaceService, ChatWorkspaceService>();
 builder.Services.AddScoped<IChatTransferService, ChatTransferService>();

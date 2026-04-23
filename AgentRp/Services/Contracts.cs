@@ -165,6 +165,34 @@ public enum ChatTransferApplyMode
     Import
 }
 
+public enum AgentProviderKind
+{
+    OpenAiCompatible,
+    HuggingFaceInferenceEndpoint
+}
+
+public enum ManagedAgentAction
+{
+    Start,
+    Pause,
+    ScaleToZero
+}
+
+public sealed record AgentEndpointStatusView(
+    string AgentName,
+    AgentProviderKind ProviderKind,
+    bool IsLinked,
+    string? State,
+    string? StatusMessage,
+    DateTime? StatusUpdatedUtc,
+    string? Repository,
+    string? Namespace,
+    string? EndpointName,
+    bool CanStart,
+    bool CanPause,
+    bool CanScaleToZero,
+    string? UnlinkedReason);
+
 public sealed record ChatStorySidebarView(
     Guid ThreadId,
     string? CurrentLocationName,
@@ -176,7 +204,9 @@ public sealed record ChatStorySidebarView(
     int TimelineEntryCount,
     string? SelectedAgentName,
     IReadOnlyList<AgentProviderOptionView> AvailableAgents,
-    bool IsAiAvailable);
+    bool IsAiAvailable,
+    IReadOnlyList<AgentEndpointStatusView> ManagedAgentEndpoints,
+    string? ManagedAgentEndpointsErrorMessage);
 
 public sealed record StorySidebarSpeakerView(
     Guid? CharacterId,
@@ -425,6 +455,13 @@ public interface IMarkdownRenderer
 public interface IAgentTurnComposer
 {
     Task<ComposedAgentTurn> ComposeAsync(string prompt, bool isBranch, CancellationToken cancellationToken);
+}
+
+public interface IAgentEndpointManagementService
+{
+    Task<IReadOnlyList<AgentEndpointStatusView>> GetStatusesAsync(CancellationToken cancellationToken);
+
+    Task<AgentEndpointStatusView> ExecuteActionAsync(string agentName, ManagedAgentAction action, CancellationToken cancellationToken);
 }
 
 public sealed record ComposedAgentTurn(

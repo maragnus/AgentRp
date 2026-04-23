@@ -60,14 +60,14 @@ public sealed class StorySceneChatService(
         var selectedSpeakerId = ResolveSelectedSpeakerId(thread.SelectedSpeakerCharacterId, characters);
         var speakers = BuildSpeakers(story, characters, selectedSpeakerId);
         var selectedSpeaker = speakers.First(x => x.IsSelected);
-        var processMap = runs
+        var processStatusMap = runs
             .Where(x => x.TargetMessageId.HasValue)
-            .ToDictionary(x => x.TargetMessageId!.Value, MapProcess);
+            .ToDictionary(x => x.TargetMessageId!.Value, x => x.Status);
         var selectedLeafMessageId = ResolveSelectedLeafMessageId(messages, thread.ActiveLeafMessageId);
         var path = selectedLeafMessageId.HasValue
             ? BuildSelectedPath(messages, selectedLeafMessageId.Value)
             : [];
-        var effectivePath = ExcludeStoppedPlaceholderMessages(path, processMap);
+        var effectivePath = ExcludeStoppedPlaceholderMessages(path, processStatusMap);
         var effectiveLeafMessageId = effectivePath.LastOrDefault()?.Id;
         var latestSnapshot = effectiveLeafMessageId.HasValue
             ? await storyChatSnapshotService.GetLatestSnapshotAsync(threadId, effectiveLeafMessageId.Value, cancellationToken)
@@ -78,6 +78,10 @@ public sealed class StorySceneChatService(
         var appearanceEntries = effectivePath.Count == 0
             ? []
             : await storyChatAppearanceService.GetEntriesForPathAsync(threadId, effectivePath, story, cancellationToken);
+        var appearanceEntriesById = appearanceEntries.ToDictionary(x => x.AppearanceEntryId);
+        var processMap = runs
+            .Where(x => x.TargetMessageId.HasValue)
+            .ToDictionary(x => x.TargetMessageId!.Value, x => MapProcess(x, appearanceEntriesById));
         var snapshotCandidateMessageIds = StoryChatSnapshotService.GetSnapshotCandidateMessageIds(effectivePath, latestSnapshot).ToHashSet();
         var childrenLookup = messages
             .OrderBy(x => x.CreatedUtc)
@@ -472,7 +476,8 @@ public sealed class StorySceneChatService(
 
     public async Task UpdateAppearanceEntryAsync(UpdateStorySceneAppearanceEntry request, CancellationToken cancellationToken)
     {
-        await storyChatAppearanceService.UpdateLatestEntryAsync(request, cancellationToken);
+        var updatedAppearance = await storyChatAppearanceService.UpdateLatestEntryAsync(request, cancellationToken);
+        await RefreshProcessAppearanceAsync(request.ThreadId, updatedAppearance, cancellationToken);
         PublishWorkspaceRefresh(request.ThreadId);
     }
 
@@ -1415,7 +1420,51 @@ public sealed class StorySceneChatService(
             selectedOptionIndex < 0 ? 1 : selectedOptionIndex + 1);
     }
 
-    private static StorySceneMessageProcessView MapProcess(ProcessRun source)
+    private async Task RefreshProcessAppearanceAsync(
+        Guid threadId,
+        StorySceneAppearanceEntryView updatedAppearance,
+        CancellationToken cancellationToken)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var runs = await dbContext.ProcessRuns
+            .Where(x => x.ThreadId == threadId && x.ContextJson != null)
+            .Include(x => x.Steps)
+            .ToListAsync(cancellationToken);
+        var hasChanges = false;
+
+        foreach (var run in runs)
+        {
+            var processContext = DeserializeContext(run.ContextJson);
+            if (processContext?.Appearance?.LatestEntry?.AppearanceEntryId != updatedAppearance.AppearanceEntryId)
+                continue;
+
+            var refreshedAppearance = processContext.Appearance with
+            {
+                LatestEntry = updatedAppearance,
+                EffectiveCharacters = updatedAppearance.Characters
+            };
+
+            run.ContextJson = SerializeContext(processContext with { Appearance = refreshedAppearance });
+
+            var appearanceStep = run.Steps.FirstOrDefault(step =>
+                step.SortOrder == 0
+                || string.Equals(step.Title, "Appearance", StringComparison.OrdinalIgnoreCase));
+            if (appearanceStep is not null)
+            {
+                appearanceStep.Summary = updatedAppearance.Summary;
+                appearanceStep.Detail = TruncateProcessDetail(BuildAppearanceDetail(refreshedAppearance));
+            }
+
+            hasChanges = true;
+        }
+
+        if (hasChanges)
+            await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private static StorySceneMessageProcessView MapProcess(
+        ProcessRun source,
+        IReadOnlyDictionary<Guid, StorySceneAppearanceEntryView> appearanceEntriesById)
     {
         var processContext = DeserializeContext(source.ContextJson);
         var steps = source.Steps
@@ -1433,7 +1482,7 @@ public sealed class StorySceneChatService(
                 ResolveStepArtifact(processContext, step)))
             .ToList();
 
-        return new StorySceneMessageProcessView(
+        var process = new StorySceneMessageProcessView(
             source.Id,
             source.Summary,
             source.Status,
@@ -1449,6 +1498,39 @@ public sealed class StorySceneChatService(
             source.CompletedUtc,
             steps,
             processContext);
+
+        return RehydrateProcessAppearance(process, appearanceEntriesById);
+    }
+
+    private static StorySceneMessageProcessView RehydrateProcessAppearance(
+        StorySceneMessageProcessView process,
+        IReadOnlyDictionary<Guid, StorySceneAppearanceEntryView> appearanceEntriesById)
+    {
+        if (process.Context?.Appearance?.LatestEntry is not { } latestEntry
+            || !appearanceEntriesById.TryGetValue(latestEntry.AppearanceEntryId, out var updatedAppearanceEntry))
+            return process;
+
+        var refreshedAppearance = process.Context.Appearance with
+        {
+            LatestEntry = updatedAppearanceEntry,
+            EffectiveCharacters = updatedAppearanceEntry.Characters
+        };
+        var refreshedContext = process.Context with { Appearance = refreshedAppearance };
+        var refreshedSteps = process.Steps
+            .Select(step => string.Equals(step.Title, "Appearance", StringComparison.OrdinalIgnoreCase)
+                ? step with
+                {
+                    Summary = updatedAppearanceEntry.Summary,
+                    Detail = TruncateProcessDetail(BuildAppearanceDetail(refreshedAppearance))
+                }
+                : step)
+            .ToList();
+
+        return process with
+        {
+            Steps = refreshedSteps,
+            Context = refreshedContext
+        };
     }
 
     private static void StartProcessStep(ProcessStep step, DateTime startedUtc, string detail)
@@ -1846,7 +1928,7 @@ public sealed class StorySceneChatService(
             builder.AppendLine($"**Latest appearance block:** {appearance.LatestEntry?.Summary ?? "None"}");
             builder.AppendLine("**Current appearances:**");
             foreach (var character in appearance.EffectiveCharacters)
-                builder.AppendLine($"- {character.CharacterName}: {FallbackText(character.CurrentAppearance)}");
+                builder.AppendLine($"- {character.CharacterName}: {PromptInlineText(character.CurrentAppearance, "None captured yet")}");
         }
 
         return builder.ToString().TrimEnd();
@@ -2214,7 +2296,7 @@ public sealed class StorySceneChatService(
             new(
                 "appearance",
                 "Appearance",
-                [new StoryMessageProcessTextBlock("Appearance Context", BuildAppearanceContextSummary(context, appearance))],
+                BuildAppearanceInputBlocks(context, appearance),
                 [new StoryMessageProcessTextBlock("Resolved Appearance", BuildAppearanceDetail(appearance))]),
             new(
                 "planning",
@@ -2242,7 +2324,7 @@ public sealed class StorySceneChatService(
             new(
                 "appearance",
                 "Appearance",
-                [new StoryMessageProcessTextBlock("Appearance Context", BuildAppearanceContextSummary(context, appearance))],
+                BuildAppearanceInputBlocks(context, appearance),
                 [new StoryMessageProcessTextBlock("Resolved Appearance", BuildAppearanceDetail(appearance))]),
             new(
                 "planning",
@@ -2268,7 +2350,7 @@ public sealed class StorySceneChatService(
             new(
                 "appearance",
                 "Appearance",
-                [new StoryMessageProcessTextBlock("Appearance Context", BuildAppearanceContextSummary(proseRequest.Context, appearance))],
+                BuildAppearanceInputBlocks(proseRequest.Context, appearance),
                 [new StoryMessageProcessTextBlock("Resolved Appearance", BuildAppearanceDetail(appearance))]),
             new(
                 "planning",
@@ -2289,6 +2371,25 @@ public sealed class StorySceneChatService(
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildPlanningOutputBlocks(StoryMessagePlannerResult planner) =>
         [new StoryMessageProcessTextBlock("Planning Outcome", BuildPlannerDetail(planner))];
+
+    private static IReadOnlyList<StoryMessageProcessTextBlock> BuildAppearanceInputBlocks(
+        StorySceneGenerationContext context,
+        StorySceneAppearanceResolution appearance)
+    {
+        var promptCharacters = context.Characters
+            .Where(x => x.IsPresentInScene)
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(x => new StoryChatAppearancePromptCharacter(x.Name, x.CurrentAppearance))
+            .ToList();
+
+        return
+        [
+            ..BuildPromptBlocks(
+                StoryChatAppearancePromptBuilder.BuildSystemPrompt(),
+                StoryChatAppearancePromptBuilder.BuildUserPrompt(promptCharacters, appearance.TranscriptSinceLatestEntry)),
+            new StoryMessageProcessTextBlock("Appearance Context", BuildAppearanceContextSummary(context, appearance))
+        ];
+    }
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildWritingInputBlocks(StoryMessageProseRequest proseRequest) =>
     [
@@ -2335,8 +2436,6 @@ public sealed class StorySceneChatService(
     }
 
     private static string FormatList(IReadOnlyList<string> values) => values.Count == 0 ? "None" : string.Join("; ", values);
-
-    private static string FallbackText(string? value) => string.IsNullOrWhiteSpace(value) ? "Unknown" : value.Trim();
 
     private static string PromptInlineText(string? value, string fallback = "Unknown") =>
         string.IsNullOrWhiteSpace(value) ? fallback : CollapseWhitespace(value);

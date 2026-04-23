@@ -28,12 +28,16 @@ public sealed class AgentEndpointOptions
     public bool UseJsonSchemaResponseFormat { get; set; }
 }
 
-public sealed record AgentProviderOptionView(string Name);
+public sealed record AgentProviderOptionView(
+    string Name,
+    AgentProviderKind ProviderKind);
 
 public sealed record ConfiguredAgent(
     string Name,
     string EndPoint,
+    string ApiKey,
     string TextModel,
+    AgentProviderKind ProviderKind,
     bool UseJsonSchemaResponseFormat,
     IChatClient ChatClient);
 
@@ -47,6 +51,8 @@ public interface IAgentCatalog
     bool HasEnabledAgents { get; }
 
     IReadOnlyList<AgentProviderOptionView> GetEnabledAgents();
+
+    IReadOnlyList<ConfiguredAgent> GetConfiguredAgents();
 
     string? GetDefaultAgentName();
 
@@ -73,6 +79,8 @@ public sealed class AgentCatalog(
     public bool HasEnabledAgents => _enabledAgents.Count > 0;
 
     public IReadOnlyList<AgentProviderOptionView> GetEnabledAgents() => BuildAgentViews(_enabledAgents);
+
+    public IReadOnlyList<ConfiguredAgent> GetConfiguredAgents() => _enabledAgents;
 
     public string? GetDefaultAgentName() => _enabledAgents.FirstOrDefault()?.Name;
 
@@ -119,10 +127,13 @@ public sealed class AgentCatalog(
                 continue;
 
             ValidateEnabledAgent(agent);
+            var providerKind = DetectProviderKind(agent.EndPoint.Trim());
             configuredAgents.Add(new ConfiguredAgent(
                 name,
                 agent.EndPoint.Trim(),
+                agent.ApiKey.Trim(),
                 agent.TextModel.Trim(),
+                providerKind,
                 agent.UseJsonSchemaResponseFormat,
                 BuildChatClient(agent, serviceProvider)));
         }
@@ -131,7 +142,7 @@ public sealed class AgentCatalog(
     }
 
     private static IReadOnlyList<AgentProviderOptionView> BuildAgentViews(IReadOnlyList<ConfiguredAgent> agents) =>
-        agents.Select(x => new AgentProviderOptionView(x.Name)).ToList();
+        agents.Select(x => new AgentProviderOptionView(x.Name, x.ProviderKind)).ToList();
 
     private static bool IsEnabled(AgentEndpointOptions agent)
     {
@@ -195,6 +206,14 @@ public sealed class AgentCatalog(
         return new ChatClientBuilder(openAiClient)
             .UseFunctionInvocation(serviceProvider.GetService<ILoggerFactory>(), configure: null)
             .Build(serviceProvider);
+    }
+
+    private static AgentProviderKind DetectProviderKind(string endpoint)
+    {
+        var endpointUri = new Uri(endpoint);
+        return endpointUri.Host.EndsWith(".endpoints.huggingface.cloud", StringComparison.OrdinalIgnoreCase)
+            ? AgentProviderKind.HuggingFaceInferenceEndpoint
+            : AgentProviderKind.OpenAiCompatible;
     }
 
     private sealed class AnonymousAuthenticationPolicy : AuthenticationPolicy

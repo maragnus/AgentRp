@@ -72,8 +72,12 @@ else
                         var snapshot = node.Snapshot;
                         var process = message?.Process;
                         var processDurationText = process is null ? null : DescribeDuration(process.StartedUtc, process.CompletedUtc);
-                        var isExpanded = process is not null && IsProcessExpanded(process.RunId);
                         var expandedStepId = process is null ? null : GetExpandedStepId(process.RunId);
+                        var processAppearanceEntry = process is null ? null : GetProcessAppearanceEntry(process);
+                        var processAppearanceCharacters = process is null ? Array.Empty<StorySceneCharacterAppearanceView>() : GetProcessAppearanceCharacters(process);
+                        var isEditingProcessAppearance = processAppearanceEntry is not null && _editingAppearanceEntryId == processAppearanceEntry.AppearanceEntryId;
+                        var isAppearanceSectionExpanded = process is not null && IsProcessAppearanceExpanded(process.RunId);
+                        var isProcessTraceExpanded = process is not null && IsProcessTraceExpanded(process.RunId);
                         var cardClass = message is null ? string.Empty : BuildMessageCardClass(message);
                         var isEditing = message is not null && _editingMessageId == message.MessageId;
                         var isSnapshotExpanded = snapshot is not null && IsSnapshotExpanded(snapshot.SnapshotId);
@@ -86,223 +90,232 @@ else
                             {
                                 <div class="card border-0 bg-body-tertiary shadow-sm">
                                     <div class="card-body p-0">
-                                        <div class="d-flex align-items-start justify-content-between gap-3 p-3">
-                                            <button type="button"
-                                                    class="btn btn-link flex-grow-1 p-0 text-start text-decoration-none text-reset"
-                                                    aria-expanded="@isExpanded"
-                                                    @onclick="() => ToggleProcessRun(process.RunId)">
-                                                <div class="d-flex align-items-start gap-3">
-                                                    <div class="pt-1">
-                                                        <i class="fa-regular fa-gears text-body-secondary" aria-hidden="true"></i>
+                                        <section>
+                                            <div class="d-flex align-items-start justify-content-between gap-3 p-3">
+                                                <button type="button"
+                                                        class="btn btn-link flex-grow-1 p-0 text-start text-decoration-none text-reset"
+                                                        aria-expanded="@isAppearanceSectionExpanded"
+                                                        @onclick="() => ToggleProcessAppearance(process.RunId)">
+                                                    <div class="d-flex align-items-start gap-3">
+                                                        <div class="pt-1">
+                                                            <i class="fa-regular fa-shirt text-body-secondary" aria-hidden="true"></i>
+                                                        </div>
+                                                        <div>
+                                                            <div class="fw-semibold">Appearance</div>
+                                                            <div class="small text-body-secondary">@GetProcessAppearanceSectionSubtitle(process)</div>
+                                                        </div>
                                                     </div>
-                                                    <div>
-                                                        <div class="fw-semibold">Process</div>
-                                                        <div class="small text-body-secondary">@process.Summary</div>
-                                                        @if (!string.IsNullOrWhiteSpace(process.ActiveStage))
+                                                </button>
+
+                                                <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                                                    <span class="badge text-bg-light border text-body-secondary">@(processAppearanceCharacters.Count == 1 ? "1 character" : $"{processAppearanceCharacters.Count} characters")</span>
+                                                    <button type="button"
+                                                            class="btn btn-link d-flex align-items-center gap-2 p-0 text-decoration-none text-reset"
+                                                            aria-expanded="@isAppearanceSectionExpanded"
+                                                            @onclick="() => ToggleProcessAppearance(process.RunId)">
+                                                        <i class="fa-regular @(isAppearanceSectionExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            @if (isAppearanceSectionExpanded)
+                                            {
+                                                <div class="border-top px-3 py-3">
+                                                    <div class="d-flex flex-column gap-3">
+                                                        @if (processAppearanceEntry is not null)
                                                         {
-                                                            <div class="small text-body-secondary">Active stage: @process.ActiveStage</div>
+                                                            <div class="d-flex flex-wrap gap-3 small text-body-secondary">
+                                                                <span>Recorded @processAppearanceEntry.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
+                                                                <span>@(processAppearanceCharacters.Count == 1 ? "1 character" : $"{processAppearanceCharacters.Count} characters")</span>
+                                                            </div>
+
+                                                            @if (isEditingProcessAppearance)
+                                                            {
+                                                                @foreach (var character in processAppearanceEntry.Characters)
+                                                                {
+                                                                    <div>
+                                                                        <label class="form-label" for="@GetAppearanceEditorId(processAppearanceEntry.AppearanceEntryId, character.CharacterId)">@character.CharacterName</label>
+                                                                        <textarea id="@GetAppearanceEditorId(processAppearanceEntry.AppearanceEntryId, character.CharacterId)"
+                                                                                  class="form-control"
+                                                                                  rows="3"
+                                                                                  disabled="@_isSubmitting"
+                                                                                  @bind:get="GetAppearanceDraft(character.CharacterId)"
+                                                                                  @bind:set="value => SetAppearanceDraft(character.CharacterId, value)"></textarea>
+                                                                    </div>
+                                                                }
+
+                                                                <div class="d-flex justify-content-end gap-2">
+                                                                    <button type="button"
+                                                                            class="btn btn-outline-secondary btn-sm"
+                                                                            disabled="@_isSubmitting"
+                                                                            @onclick="CancelAppearanceEdit">
+                                                                        <i class="fa-regular fa-xmark" aria-hidden="true"></i>
+                                                                    </button>
+                                                                    <BusyButton Class="btn btn-primary btn-sm"
+                                                                                OnClick="() => SaveAppearanceEditAsync(processAppearanceEntry)"
+                                                                                IsBusy="@_isSubmitting"
+                                                                                BusyText="Saving..."
+                                                                                ShowBusyText="false"
+                                                                                Disabled="@_isSubmitting">
+                                                                        <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
+                                                                    </BusyButton>
+                                                                </div>
+                                                            }
+                                                            else
+                                                            {
+                                                                <div class="d-flex flex-column gap-3">
+                                                                    @foreach (var character in processAppearanceCharacters)
+                                                                    {
+                                                                        <div>
+                                                                            <div class="fw-semibold">@character.CharacterName</div>
+                                                                            @if (string.IsNullOrWhiteSpace(character.CurrentAppearance))
+                                                                            {
+                                                                                <div class="small text-body-secondary">No current appearance has been captured yet.</div>
+                                                                            }
+                                                                            else
+                                                                            {
+                                                                                <div class="small">@character.CurrentAppearance</div>
+                                                                            }
+                                                                        </div>
+                                                                    }
+                                                                </div>
+
+                                                                @if (processAppearanceEntry.CanEdit)
+                                                                {
+                                                                    <div class="d-flex justify-content-end">
+                                                                        <button type="button"
+                                                                                class="btn btn-outline-secondary btn-sm"
+                                                                                disabled="@_isSubmitting"
+                                                                                @onclick="() => BeginAppearanceEdit(processAppearanceEntry)">
+                                                                            <i class="fa-regular fa-pen" aria-hidden="true"></i>
+                                                                        </button>
+                                                                    </div>
+                                                                }
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            <div class="small text-body-secondary">@GetProcessAppearancePendingText(process)</div>
                                                         }
                                                     </div>
                                                 </div>
-                                            </button>
+                                            }
+                                        </section>
 
-                                            <div class="d-flex align-items-center gap-2 flex-shrink-0">
-                                                @if (process.Status == ProcessRunStatus.Running)
-                                                {
-                                                    <StopOperationButton Class="btn btn-outline-danger btn-sm"
-                                                                         IsStopping="@IsStoppingRun(process.RunId)"
-                                                                         Disabled="@IsStoppingRun(process.RunId)"
-                                                                         Title="Stop this scene generation"
-                                                                         OnClick="() => StopSceneRunAsync(process.RunId)" />
-                                                }
+                                        <section class="border-top">
+                                            <div class="d-flex align-items-start justify-content-between gap-3 p-3">
                                                 <button type="button"
-                                                        class="btn btn-link d-flex align-items-center gap-2 p-0 text-decoration-none text-reset"
-                                                        aria-expanded="@isExpanded"
-                                                        @onclick="() => ToggleProcessRun(process.RunId)">
+                                                        class="btn btn-link flex-grow-1 p-0 text-start text-decoration-none text-reset"
+                                                        aria-expanded="@isProcessTraceExpanded"
+                                                        @onclick="() => ToggleProcessTrace(process.RunId)">
+                                                    <div class="d-flex align-items-start gap-3">
+                                                        <div class="pt-1">
+                                                            <i class="fa-regular fa-gears text-body-secondary" aria-hidden="true"></i>
+                                                        </div>
+                                                        <div>
+                                                            <div class="fw-semibold">Process</div>
+                                                            <div class="small text-body-secondary">@GetProcessTraceSectionSubtitle(process)</div>
+                                                            @if (!string.IsNullOrWhiteSpace(process.ActiveStage))
+                                                            {
+                                                                <div class="small text-body-secondary">Active stage: @process.ActiveStage</div>
+                                                            }
+                                                        </div>
+                                                    </div>
+                                                </button>
+
+                                                <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                                                    @if (process.Status == ProcessRunStatus.Running)
+                                                    {
+                                                        <StopOperationButton Class="btn btn-outline-danger btn-sm"
+                                                                             IsStopping="@IsStoppingRun(process.RunId)"
+                                                                             Disabled="@IsStoppingRun(process.RunId)"
+                                                                             Title="Stop this scene generation"
+                                                                             OnClick="() => StopSceneRunAsync(process.RunId)" />
+                                                    }
                                                     <span class="badge text-bg-light border text-body-secondary">@process.DisplayStatusText</span>
                                                     <span class="badge text-bg-light border text-body-secondary">@processDurationText</span>
-                                                    <i class="fa-regular @(isExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
-                                                </button>
+                                                    <button type="button"
+                                                            class="btn btn-link d-flex align-items-center gap-2 p-0 text-decoration-none text-reset"
+                                                            aria-expanded="@isProcessTraceExpanded"
+                                                            @onclick="() => ToggleProcessTrace(process.RunId)">
+                                                        <i class="fa-regular @(isProcessTraceExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                    </button>
+                                                </div>
                                             </div>
-                                        </div>
 
-                                        @if (isExpanded)
-                                        {
-                                            <div class="border-top px-3 py-3">
-                                                <div class="d-flex flex-column">
-                                                    @for (var stepIndex = 0; stepIndex < process.Steps.Count; stepIndex++)
-                                                    {
-                                                        var step = process.Steps[stepIndex];
-                                                        var isStepExpanded = expandedStepId == step.StepId;
-                                                        var stepDurationText = DescribeStepDuration(step);
-                                                        var stepSubtitle = GetProcessStepSubtitle(process, step);
-                                                        var stepBlocks = GetProcessStepBlocks(step);
-                                                        var stepDividerClass = stepIndex > 0 ? "border-top mt-2 pt-2" : string.Empty;
-                                                        var headerClass = step.IsActive ? "bg-primary-subtle" : string.Empty;
-                                                        var isAppearanceStep = IsAppearanceProcessStep(step);
-                                                        var processAppearanceEntry = isAppearanceStep ? GetProcessAppearanceEntry(process) : null;
-                                                        var processAppearanceCharacters = isAppearanceStep ? GetProcessAppearanceCharacters(process) : [];
-                                                        var isEditingProcessAppearance = processAppearanceEntry is not null && _editingAppearanceEntryId == processAppearanceEntry.AppearanceEntryId;
-                                                        var appearanceContextBlock = isAppearanceStep ? GetProcessStepBlock(step, "Appearance Context") : null;
-                                                        var isAppearanceContextExpanded = isAppearanceStep && IsAppearanceContextExpanded(process.RunId);
+                                            @if (isProcessTraceExpanded)
+                                            {
+                                                <div class="border-top px-3 py-3">
+                                                    <div class="d-flex flex-column">
+                                                        @for (var stepIndex = 0; stepIndex < process.Steps.Count; stepIndex++)
+                                                        {
+                                                            var step = process.Steps[stepIndex];
+                                                            var isStepExpanded = expandedStepId == step.StepId;
+                                                            var stepDurationText = DescribeStepDuration(step);
+                                                            var stepSubtitle = GetProcessStepSubtitle(process, step);
+                                                            var stepBlocks = GetProcessStepBlocks(step);
+                                                            var stepDividerClass = stepIndex > 0 ? "border-top mt-2 pt-2" : string.Empty;
+                                                            var headerClass = step.IsActive ? "bg-primary-subtle" : string.Empty;
 
-                                                        <section class="@stepDividerClass">
-                                                            <button type="button"
-                                                                    class="btn btn-link w-100 px-0 py-2 text-start text-decoration-none text-reset @headerClass"
-                                                                    @onclick="() => ToggleProcessStep(process.RunId, step.StepId)">
-                                                                <div class="d-flex align-items-start gap-3">
-                                                                    <div class="pt-1">
-                                                                        <i class="@($"{step.IconCssClass} fa-fw text-body-secondary")" aria-hidden="true"></i>
-                                                                    </div>
-                                                                    <div class="flex-grow-1 w-100">
-                                                                        <div class="d-flex align-items-start justify-content-between gap-3">
-                                                                            <div class="w-100">
-                                                                                <div class="fw-semibold">@step.Title</div>
-                                                                                <div class="small text-body-secondary">@stepSubtitle</div>
-                                                                            </div>
-                                                                            <div class="d-flex align-items-center gap-3 ms-auto">
-                                                                                @if (!string.IsNullOrWhiteSpace(stepDurationText))
-                                                                                {
-                                                                                    <div class="small text-body-secondary text-nowrap">
-                                                                                        <i class="fa-regular fa-clock me-1" aria-hidden="true"></i>@stepDurationText
-                                                                                    </div>
-                                                                                }
-                                                                                <i class="fa-regular @(isStepExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                            <section class="@stepDividerClass">
+                                                                <button type="button"
+                                                                        class="btn btn-link w-100 px-0 py-2 text-start text-decoration-none text-reset @headerClass"
+                                                                        @onclick="() => ToggleProcessStep(process.RunId, step.StepId)">
+                                                                    <div class="d-flex align-items-start gap-3">
+                                                                        <div class="pt-1">
+                                                                            <i class="@($"{step.IconCssClass} fa-fw text-body-secondary")" aria-hidden="true"></i>
+                                                                        </div>
+                                                                        <div class="flex-grow-1 w-100">
+                                                                            <div class="d-flex align-items-start justify-content-between gap-3">
+                                                                                <div class="w-100">
+                                                                                    <div class="fw-semibold">@step.Title</div>
+                                                                                    <div class="small text-body-secondary">@stepSubtitle</div>
+                                                                                </div>
+                                                                                <div class="d-flex align-items-center gap-3 ms-auto">
+                                                                                    @if (!string.IsNullOrWhiteSpace(stepDurationText))
+                                                                                    {
+                                                                                        <div class="small text-body-secondary text-nowrap">
+                                                                                            <i class="fa-regular fa-clock me-1" aria-hidden="true"></i>@stepDurationText
+                                                                                        </div>
+                                                                                    }
+                                                                                    <i class="fa-regular @(isStepExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                                                </div>
                                                                             </div>
                                                                         </div>
                                                                     </div>
-                                                                </div>
-                                                            </button>
+                                                                </button>
 
-                                                            @if (isStepExpanded)
-                                                            {
-                                                                <div class="pt-2 pb-1 d-flex flex-column gap-3">
-                                                                    @if (isAppearanceStep)
-                                                                    {
-                                                                        <div class="d-flex flex-wrap gap-3 small text-body-secondary">
-                                                                            @if (processAppearanceEntry is not null)
-                                                                            {
-                                                                                <span>Recorded @processAppearanceEntry.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
-                                                                            }
-                                                                            <span>@(processAppearanceCharacters.Count == 1 ? "1 character" : $"{processAppearanceCharacters.Count} characters")</span>
-                                                                        </div>
-
-                                                                        @if (isEditingProcessAppearance && processAppearanceEntry is not null)
-                                                                        {
-                                                                            @foreach (var character in processAppearanceEntry.Characters)
-                                                                            {
-                                                                                <div>
-                                                                                    <label class="form-label" for="@GetAppearanceEditorId(processAppearanceEntry.AppearanceEntryId, character.CharacterId)">@character.CharacterName</label>
-                                                                                    <textarea id="@GetAppearanceEditorId(processAppearanceEntry.AppearanceEntryId, character.CharacterId)"
-                                                                                              class="form-control"
-                                                                                              rows="3"
-                                                                                              disabled="@_isSubmitting"
-                                                                                              @bind:get="GetAppearanceDraft(character.CharacterId)"
-                                                                                              @bind:set="value => SetAppearanceDraft(character.CharacterId, value)"></textarea>
-                                                                                </div>
-                                                                            }
-
-                                                                            <div class="d-flex justify-content-end gap-2">
-                                                                                <button type="button"
-                                                                                        class="btn btn-outline-secondary btn-sm"
-                                                                                        disabled="@_isSubmitting"
-                                                                                        @onclick="CancelAppearanceEdit">
-                                                                                    <i class="fa-regular fa-xmark" aria-hidden="true"></i>
-                                                                                </button>
-                                                                                <BusyButton Class="btn btn-primary btn-sm"
-                                                                                            OnClick="() => SaveAppearanceEditAsync(processAppearanceEntry)"
-                                                                                            IsBusy="@_isSubmitting"
-                                                                                            BusyText="Saving..."
-                                                                                            ShowBusyText="false"
-                                                                                            Disabled="@_isSubmitting">
-                                                                                    <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
-                                                                                </BusyButton>
-                                                                            </div>
-                                                                        }
-                                                                        else if (processAppearanceCharacters.Count > 0)
-                                                                        {
-                                                                            <div class="d-flex flex-column gap-3">
-                                                                                @foreach (var character in processAppearanceCharacters)
-                                                                                {
-                                                                                    <div>
-                                                                                        <div class="fw-semibold">@character.CharacterName</div>
-                                                                                        @if (string.IsNullOrWhiteSpace(character.CurrentAppearance))
-                                                                                        {
-                                                                                            <div class="small text-body-secondary">No current appearance has been captured yet.</div>
-                                                                                        }
-                                                                                        else
-                                                                                        {
-                                                                                            <div class="small">@character.CurrentAppearance</div>
-                                                                                        }
-                                                                                    </div>
-                                                                                }
-                                                                            </div>
-
-                                                                            @if (processAppearanceEntry?.CanEdit == true)
-                                                                            {
-                                                                                <div class="d-flex justify-content-end">
-                                                                                    <button type="button"
-                                                                                            class="btn btn-outline-secondary btn-sm"
-                                                                                            disabled="@_isSubmitting"
-                                                                                            @onclick="() => BeginAppearanceEdit(processAppearanceEntry)">
-                                                                                        <i class="fa-regular fa-pen" aria-hidden="true"></i>
-                                                                                    </button>
-                                                                                </div>
-                                                                            }
-                                                                        }
-                                                                        else
+                                                                @if (isStepExpanded)
+                                                                {
+                                                                    <div class="pt-2 pb-1 d-flex flex-column gap-3">
+                                                                        @if (stepBlocks.Count == 0)
                                                                         {
                                                                             <div class="small">
                                                                                 <MarkdownContent Markdown="@step.Detail" CopyLabel="@($"{step.Title} detail")" />
                                                                             </div>
                                                                         }
-
-                                                                        @if (appearanceContextBlock is not null)
+                                                                        else
                                                                         {
-                                                                            <div class="pt-2">
-                                                                                <button type="button"
-                                                                                        class="btn btn-link px-0 py-0 text-start text-decoration-none text-reset"
-                                                                                        @onclick="() => ToggleAppearanceContext(process.RunId)">
-                                                                                    <span class="fw-semibold">Context</span>
-                                                                                    <i class="fa-regular @(isAppearanceContextExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary ms-2" aria-hidden="true"></i>
-                                                                                </button>
+                                                                            @for (var blockIndex = 0; blockIndex < stepBlocks.Count; blockIndex++)
+                                                                            {
+                                                                                var block = stepBlocks[blockIndex];
 
-                                                                                @if (isAppearanceContextExpanded)
-                                                                                {
-                                                                                    <div class="pt-3">
-                                                                                        <MarkdownContent Markdown="@appearanceContextBlock.Content" CopyLabel="@appearanceContextBlock.Title" />
-                                                                                    </div>
-                                                                                }
-                                                                            </div>
+                                                                                <div class="@(blockIndex > 0 ? "pt-3" : string.Empty)">
+                                                                                    <div class="fw-semibold mb-2">@block.Title</div>
+                                                                                    <MarkdownContent Markdown="@block.Content" CopyLabel="@block.Title" />
+                                                                                </div>
+                                                                            }
                                                                         }
-                                                                    }
-                                                                    else if (stepBlocks.Count == 0)
-                                                                    {
-                                                                        <div class="small">
-                                                                            <MarkdownContent Markdown="@step.Detail" CopyLabel="@($"{step.Title} detail")" />
-                                                                        </div>
-                                                                    }
-                                                                    else
-                                                                    {
-                                                                        @for (var blockIndex = 0; blockIndex < stepBlocks.Count; blockIndex++)
-                                                                        {
-                                                                            var block = stepBlocks[blockIndex];
-
-                                                                            <div class="@(blockIndex > 0 ? "pt-3" : string.Empty)">
-                                                                                <div class="fw-semibold mb-2">@block.Title</div>
-                                                                                <MarkdownContent Markdown="@block.Content" CopyLabel="@block.Title" />
-                                                                            </div>
-                                                                        }
-                                                                    }
-                                                                </div>
-                                                            }
-                                                        </section>
-                                                    }
+                                                                    </div>
+                                                                }
+                                                            </section>
+                                                        }
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        }
+                                            }
+                                        </section>
+                                        </div>
                                     </div>
-                                </div>
                             }
 
                             @if (message is not null)
@@ -811,8 +824,9 @@ else
     private StorySceneChatState? _chat;
     private DateTime _processDurationNowUtc = DateTime.UtcNow;
     private readonly Dictionary<Guid, bool> _expandedProcessRunStates = [];
+    private readonly Dictionary<Guid, bool> _expandedProcessAppearanceStates = [];
+    private readonly Dictionary<Guid, bool> _expandedProcessTraceStates = [];
     private readonly Dictionary<Guid, Guid?> _expandedProcessStepIds = [];
-    private readonly Dictionary<Guid, bool> _expandedAppearanceContextStates = [];
     private readonly Dictionary<Guid, bool> _expandedSnapshotStates = [];
     private readonly Dictionary<Guid, string> _streamedMessageContent = [];
     private readonly HashSet<Guid> _stoppingRunIds = [];
@@ -882,8 +896,9 @@ else
             foreach (var process in _chat.Transcript.Select(x => x.Message).Where(x => x?.Process is not null).Select(x => x!.Process!))
             {
                 _expandedProcessRunStates.TryAdd(process.RunId, false);
+                _expandedProcessAppearanceStates.TryAdd(process.RunId, false);
+                _expandedProcessTraceStates.TryAdd(process.RunId, false);
                 _expandedProcessStepIds.TryAdd(process.RunId, process.Steps.FirstOrDefault(x => x.IsActive)?.StepId ?? process.Steps.FirstOrDefault()?.StepId);
-                _expandedAppearanceContextStates.TryAdd(process.RunId, false);
             }
 
             foreach (var snapshot in _chat.Transcript.Select(x => x.Snapshot).Where(x => x is not null).Select(x => x!))
@@ -1527,24 +1542,49 @@ else
         return process.Context?.Appearance?.EffectiveCharacters ?? [];
     }
 
-    private static StoryMessageProcessTextBlock? GetProcessStepBlock(StorySceneProcessStepView step, string title)
+    private static string GetProcessAppearanceSectionSubtitle(StorySceneMessageProcessView process)
     {
-        if (step.Artifact is null)
-            return null;
+        var appearanceEntry = GetProcessAppearanceEntry(process);
+        if (!string.IsNullOrWhiteSpace(appearanceEntry?.Summary))
+            return appearanceEntry.Summary;
 
-        return step.Artifact.Inputs
-            .Concat(step.Artifact.Outputs)
-            .FirstOrDefault(block => string.Equals(block.Title, title, StringComparison.OrdinalIgnoreCase));
+        return process.Context?.Appearance is not null
+            ? "Current scene appearance is ready to review."
+            : "Current appearance is still being resolved.";
     }
 
-    private void ToggleAppearanceContext(Guid runId)
+    private static string GetProcessAppearancePendingText(StorySceneMessageProcessView process) =>
+        process.Context?.Appearance is null
+            ? "The appearance stage is still resolving the current scene cast. Editing becomes available after the first appearance block is recorded."
+            : "No editable appearance block is available for this process.";
+
+    private static string GetProcessTraceSectionSubtitle(StorySceneMessageProcessView process)
     {
-        var isExpanded = IsAppearanceContextExpanded(runId);
-        _expandedAppearanceContextStates[runId] = !isExpanded;
+        if (!string.IsNullOrWhiteSpace(process.Summary))
+            return process.Summary;
+
+        return !string.IsNullOrWhiteSpace(process.ActiveStage)
+            ? $"Active stage: {process.ActiveStage}"
+            : "Review the saved machine trace for this message.";
     }
 
-    private bool IsAppearanceContextExpanded(Guid runId) =>
-        _expandedAppearanceContextStates.TryGetValue(runId, out var isExpanded) && isExpanded;
+    private void ToggleProcessAppearance(Guid runId)
+    {
+        var isExpanded = IsProcessAppearanceExpanded(runId);
+        _expandedProcessAppearanceStates[runId] = !isExpanded;
+    }
+
+    private bool IsProcessAppearanceExpanded(Guid runId) =>
+        _expandedProcessAppearanceStates.TryGetValue(runId, out var isExpanded) && isExpanded;
+
+    private void ToggleProcessTrace(Guid runId)
+    {
+        var isExpanded = IsProcessTraceExpanded(runId);
+        _expandedProcessTraceStates[runId] = !isExpanded;
+    }
+
+    private bool IsProcessTraceExpanded(Guid runId) =>
+        _expandedProcessTraceStates.TryGetValue(runId, out var isExpanded) && isExpanded;
 
     private void ToggleSnapshot(Guid snapshotId)
     {

@@ -6,7 +6,9 @@ namespace AgentRp.Services;
 public sealed class ChatStoryService(
     IDbContextFactory<AgentRp.Data.AppContext> dbContextFactory,
     IActivityNotifier activityNotifier,
-    IAgentCatalog agentCatalog) : IChatStoryService
+    IAgentCatalog agentCatalog,
+    IAgentEndpointManagementService agentEndpointManagementService,
+    ILogger<ChatStoryService> logger) : IChatStoryService
 {
     public async Task<ChatStorySidebarView?> GetSidebarAsync(Guid threadId, CancellationToken cancellationToken)
     {
@@ -21,7 +23,25 @@ public sealed class ChatStoryService(
         if (story is null)
             return null;
 
-        return MapSidebarView(story, thread.SelectedSpeakerCharacterId, agentCatalog.NormalizeSelectedAgentName(thread.SelectedAgentName), agentCatalog.GetEnabledAgents());
+        IReadOnlyList<AgentEndpointStatusView> managedAgentEndpoints = [];
+        string? managedAgentEndpointsErrorMessage = null;
+        try
+        {
+            managedAgentEndpoints = await agentEndpointManagementService.GetStatusesAsync(cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Loading Hugging Face endpoint status failed for chat {ThreadId}.", threadId);
+            managedAgentEndpointsErrorMessage = "Hugging Face endpoint status is temporarily unavailable.";
+        }
+
+        return MapSidebarView(
+            story,
+            thread.SelectedSpeakerCharacterId,
+            agentCatalog.NormalizeSelectedAgentName(thread.SelectedAgentName),
+            agentCatalog.GetEnabledAgents(),
+            managedAgentEndpoints,
+            managedAgentEndpointsErrorMessage);
     }
 
     public async Task<IReadOnlyList<StoryCharacterEditorView>> GetCharactersAsync(Guid threadId, CancellationToken cancellationToken)
@@ -426,7 +446,9 @@ public sealed class ChatStoryService(
         ChatStory story,
         Guid? selectedSpeakerCharacterId,
         string? selectedAgentName,
-        IReadOnlyList<AgentProviderOptionView> availableAgents)
+        IReadOnlyList<AgentProviderOptionView> availableAgents,
+        IReadOnlyList<AgentEndpointStatusView> managedAgentEndpoints,
+        string? managedAgentEndpointsErrorMessage)
     {
         var locations = story.Locations.Entries
             .Where(x => !x.IsArchived)
@@ -469,7 +491,9 @@ public sealed class ChatStoryService(
             story.History.TimelineEntries.Count,
             selectedAgentName,
             availableAgents,
-            availableAgents.Count > 0);
+            availableAgents.Count > 0,
+            managedAgentEndpoints,
+            managedAgentEndpointsErrorMessage);
     }
 
     private static IReadOnlyList<StorySidebarSpeakerView> BuildSidebarSpeakers(

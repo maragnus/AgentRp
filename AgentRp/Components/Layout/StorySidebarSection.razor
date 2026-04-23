@@ -1,6 +1,7 @@
 @implements IDisposable
 @inject IChatWorkspaceService ChatWorkspaceService
 @inject IChatStoryService ChatStoryService
+@inject IAgentEndpointManagementService AgentEndpointManagementService
 @inject IStorySceneChatService StorySceneChatService
 @inject IThreadAgentService ThreadAgentService
 @inject IStoryGenerationSettingsService StoryGenerationSettingsService
@@ -72,6 +73,94 @@
                         }
                     </div>
 
+                    @if (SelectedManagedEndpoint is not null || ShouldShowManagedEndpointError)
+                    {
+                        <div class="border-top pt-2 mt-2">
+                            @if (ShouldShowManagedEndpointError)
+                            {
+                                <div class="small text-body-secondary">@_story.ManagedAgentEndpointsErrorMessage</div>
+                            }
+                            else
+                            {
+                                var endpoint = SelectedManagedEndpoint!;
+                                var isManagingEndpoint = IsManagingEndpoint(endpoint.AgentName);
+
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <div class="d-flex align-items-center gap-2 overflow-hidden">
+                                        <span class="@BuildManagedEndpointStatusIconClass(endpoint.State)"
+                                              title="@FormatManagedEndpointState(endpoint.State)"
+                                              aria-label="@FormatManagedEndpointState(endpoint.State)">
+                                            <i class="@BuildManagedEndpointStatusIcon(endpoint.State)" aria-hidden="true"></i>
+                                        </span>
+
+                                        @if (endpoint.IsLinked)
+                                        {
+                                            @if (endpoint.StatusUpdatedUtc.HasValue)
+                                            {
+                                                <span class="small text-body-secondary text-truncate">@FormatManagedEndpointAge(endpoint)</span>
+                                            }
+                                            else if (!string.IsNullOrWhiteSpace(endpoint.StatusMessage))
+                                            {
+                                                <span class="small text-body-secondary text-truncate">@endpoint.StatusMessage</span>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <span class="small text-body-secondary text-truncate">@GetManagedEndpointUnlinkedText(endpoint)</span>
+                                        }
+                                    </div>
+
+                                    @if (endpoint.IsLinked)
+                                    {
+                                        <div class="d-flex align-items-center gap-1 flex-shrink-0">
+                                            @if (endpoint.CanStart)
+                                            {
+                                                <BusyButton Class="btn btn-outline-success btn-sm"
+                                                            IsBusy="@IsManagingEndpointAction(endpoint.AgentName, ManagedAgentAction.Start)"
+                                                            Disabled="@isManagingEndpoint"
+                                                            BusyText=""
+                                                            ShowBusyText="false"
+                                                            title="@($"Start {endpoint.AgentName}")"
+                                                            aria-label="@($"Start {endpoint.AgentName}")"
+                                                            OnClick="() => ManageEndpointAsync(endpoint, ManagedAgentAction.Start)">
+                                                    <i class="fa-regular fa-play" aria-hidden="true"></i>
+                                                </BusyButton>
+                                            }
+
+                                            @if (endpoint.CanPause)
+                                            {
+                                                <BusyButton Class="btn btn-outline-secondary btn-sm"
+                                                            IsBusy="@IsManagingEndpointAction(endpoint.AgentName, ManagedAgentAction.Pause)"
+                                                            Disabled="@isManagingEndpoint"
+                                                            BusyText=""
+                                                            ShowBusyText="false"
+                                                            title="@($"Pause {endpoint.AgentName}")"
+                                                            aria-label="@($"Pause {endpoint.AgentName}")"
+                                                            OnClick="() => ManageEndpointAsync(endpoint, ManagedAgentAction.Pause)">
+                                                    <i class="fa-regular fa-pause" aria-hidden="true"></i>
+                                                </BusyButton>
+                                            }
+
+                                            @if (endpoint.CanScaleToZero)
+                                            {
+                                                <BusyButton Class="btn btn-outline-danger btn-sm"
+                                                            IsBusy="@IsManagingEndpointAction(endpoint.AgentName, ManagedAgentAction.ScaleToZero)"
+                                                            Disabled="@isManagingEndpoint"
+                                                            BusyText=""
+                                                            ShowBusyText="false"
+                                                            title="@($"Scale {endpoint.AgentName} to zero")"
+                                                            aria-label="@($"Scale {endpoint.AgentName} to zero")"
+                                                            OnClick="() => ManageEndpointAsync(endpoint, ManagedAgentAction.ScaleToZero)">
+                                                    <i class="fa-regular fa-power-off" aria-hidden="true"></i>
+                                                </BusyButton>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+
                     @if (_generationSettings is not null)
                     {
                         <div class="border-top pt-2 mt-2">
@@ -97,7 +186,7 @@
                 }
             </div>
 
-            <div>
+            <div class="border-top pt-2 mt-2">
                 <div class="d-flex align-items-center justify-content-between gap-2 mb-1">
                     <div class="small text-uppercase text-body-secondary">Current Location</div>
                     <button type="button"
@@ -349,6 +438,10 @@
     private HashSet<Guid> _togglingItemIds = [];
     private HashSet<string> _switchingSpeakerKeys = [];
     private HashSet<string> _switchingAgentNames = [];
+    private HashSet<string> _managingEndpointAgentNames = [];
+    private HashSet<string> _managingEndpointActionKeys = [];
+    private CancellationTokenSource? _managedEndpointPollingCancellationTokenSource;
+    private Task? _managedEndpointPollingTask;
 
     protected override async Task OnInitializedAsync()
     {
@@ -363,6 +456,7 @@
         _storySubscription?.Dispose();
         _chatSubscription?.Dispose();
         NavigationManager.LocationChanged -= HandleLocationChanged;
+        StopManagedEndpointPolling();
     }
 
     private async void HandleLocationChanged(object? sender, LocationChangedEventArgs args) => await InvokeAsync(LoadAsync);
@@ -381,12 +475,14 @@
 
                 _story = storyTask.Result;
                 ApplyGenerationSettings(generationSettingsTask.Result);
+                EnsureManagedEndpointPolling();
             }
             else
             {
                 _story = null;
                 _generationSettings = null;
                 _isGenerationSettingsModalOpen = false;
+                StopManagedEndpointPolling();
             }
         }
         finally
@@ -497,6 +593,37 @@
     }
 
     private Task HandleStoryChangedAsync() => LoadAsync();
+
+    private async Task ManageEndpointAsync(AgentEndpointStatusView endpoint, ManagedAgentAction action)
+    {
+        if (!_managingEndpointAgentNames.Add(endpoint.AgentName))
+            return;
+
+        var actionKey = BuildManagedEndpointActionKey(endpoint.AgentName, action);
+        _managingEndpointActionKeys.Add(actionKey);
+        _errorMessage = null;
+
+        try
+        {
+            await AgentEndpointManagementService.ExecuteActionAsync(endpoint.AgentName, action, CancellationToken.None);
+            await LoadAsync();
+            UserFeedbackService.ShowBackgroundSuccess(
+                $"{DescribeManagedEndpointAction(action)} the Hugging Face endpoint for '{endpoint.AgentName}' completed.",
+                "Endpoint Updated");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Running endpoint action {Action} failed for agent {AgentName}.", action, endpoint.AgentName);
+            _errorMessage = $"{DescribeManagedEndpointAction(action)} the Hugging Face endpoint for '{endpoint.AgentName}' failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Endpoint Update Failed");
+        }
+        finally
+        {
+            _managingEndpointActionKeys.Remove(actionKey);
+            _managingEndpointAgentNames.Remove(endpoint.AgentName);
+            StateHasChanged();
+        }
+    }
 
     private async Task SelectSpeakerAsync(StorySidebarSpeakerView speaker)
     {
@@ -674,6 +801,123 @@
     }
 
     private static string GetSpeakerKey(Guid? characterId) => characterId?.ToString("N") ?? "narrator";
+
+    private AgentEndpointStatusView? SelectedManagedEndpoint =>
+        _story is null || string.IsNullOrWhiteSpace(_story.SelectedAgentName)
+            ? null
+            : _story.ManagedAgentEndpoints.FirstOrDefault(x => string.Equals(x.AgentName, _story.SelectedAgentName, StringComparison.Ordinal));
+
+    private bool ShouldShowManagedEndpointError =>
+        _story is not null
+        && !string.IsNullOrWhiteSpace(_story.ManagedAgentEndpointsErrorMessage)
+        && _story.AvailableAgents.Any(x =>
+            x.ProviderKind == AgentProviderKind.HuggingFaceInferenceEndpoint
+            && string.Equals(x.Name, _story.SelectedAgentName, StringComparison.Ordinal));
+
+    private bool IsManagingEndpoint(string agentName) => _managingEndpointAgentNames.Contains(agentName);
+
+    private bool IsManagingEndpointAction(string agentName, ManagedAgentAction action) =>
+        _managingEndpointActionKeys.Contains(BuildManagedEndpointActionKey(agentName, action));
+
+    private void EnsureManagedEndpointPolling()
+    {
+        if (SelectedManagedEndpoint is null && !ShouldShowManagedEndpointError)
+        {
+            StopManagedEndpointPolling();
+            return;
+        }
+
+        if (_managedEndpointPollingCancellationTokenSource is not null)
+            return;
+
+        _managedEndpointPollingCancellationTokenSource = new CancellationTokenSource();
+        _managedEndpointPollingTask = PollManagedEndpointsAsync(_managedEndpointPollingCancellationTokenSource.Token);
+    }
+
+    private void StopManagedEndpointPolling()
+    {
+        _managedEndpointPollingCancellationTokenSource?.Cancel();
+        _managedEndpointPollingCancellationTokenSource?.Dispose();
+        _managedEndpointPollingCancellationTokenSource = null;
+        _managedEndpointPollingTask = null;
+    }
+
+    private async Task PollManagedEndpointsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                try
+                {
+                    await InvokeAsync(LoadAsync);
+                }
+                catch (Exception exception)
+                {
+                    Logger.LogError(exception, "Refreshing Hugging Face endpoint status from the sidebar poller failed.");
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private static string BuildManagedEndpointActionKey(string agentName, ManagedAgentAction action) => $"{agentName}|{action}";
+
+    private static string FormatManagedEndpointAge(AgentEndpointStatusView endpoint) =>
+        endpoint.StatusUpdatedUtc.HasValue
+            ? $"Updated {endpoint.StatusUpdatedUtc.Value.ToDurationText(null, DateTime.UtcNow)} ago"
+            : string.Empty;
+
+    private static string BuildManagedEndpointStatusIconClass(string? state) =>
+        state?.Trim().ToLowerInvariant() switch
+        {
+            "running" => "text-success",
+            "paused" => "text-body-secondary",
+            "scaledtozero" => "text-warning",
+            "failed" => "text-danger",
+            "updatefailed" => "text-danger",
+            _ => "text-primary"
+        };
+
+    private static string BuildManagedEndpointStatusIcon(string? state) =>
+        state?.Trim().ToLowerInvariant() switch
+        {
+            "running" => "fa-solid fa-circle-play",
+            "paused" => "fa-regular fa-circle-pause",
+            "scaledtozero" => "fa-regular fa-power-off",
+            "failed" => "fa-regular fa-circle-exclamation",
+            "updatefailed" => "fa-regular fa-circle-exclamation",
+            "pending" => "fa-regular fa-loader",
+            "initializing" => "fa-regular fa-loader",
+            "updating" => "fa-regular fa-loader",
+            _ => "fa-regular fa-circle-question"
+        };
+
+    private static string FormatManagedEndpointState(string? state) =>
+        state?.Trim().ToLowerInvariant() switch
+        {
+            null or "" => "Unknown",
+            "scaledtozero" => "Scaled To Zero",
+            "updatefailed" => "Update Failed",
+            var value => System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(value)
+        };
+
+    private static string DescribeManagedEndpointAction(ManagedAgentAction action) =>
+        action switch
+        {
+            ManagedAgentAction.Start => "Starting",
+            ManagedAgentAction.Pause => "Pausing",
+            ManagedAgentAction.ScaleToZero => "Scaling to zero",
+            _ => "Updating"
+        };
+
+    private static string GetManagedEndpointUnlinkedText(AgentEndpointStatusView endpoint) =>
+        string.IsNullOrWhiteSpace(endpoint.UnlinkedReason)
+            ? "Not linked"
+            : $"Not linked: {endpoint.UnlinkedReason}";
 
     private void ApplyGenerationSettings(StoryGenerationSettingsView settings)
     {
