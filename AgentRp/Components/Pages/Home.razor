@@ -30,6 +30,9 @@ else if (_chat is null)
 }
 else
 {
+    var selectedSpeakerAiPostAction = GetAdaptiveAiPostAction(respond: false);
+    var respondAiPostAction = GetAdaptiveAiPostAction(respond: true);
+
     <div class="d-flex h-100 flex-column bg-body shadow-sm">
         <div class="flex-shrink-0 border-bottom bg-body px-3 py-3 px-lg-4">
             <div class="d-flex flex-wrap align-items-start gap-3">
@@ -56,7 +59,7 @@ else
                                 </div>
                                 <h2 class="h4 mb-2">Start the scene</h2>
                                 <p class="text-body-secondary mb-0">
-                                    Pick a speaker in the sidebar, then type to enable Direct or guided AI, or leave the textbox empty to let automatic AI continue the scene. AI posts run through planning and prose stages with live process details.
+                                    Pick a speaker in the sidebar, then use Guided or Automatic for that character, or use Respond Guided or Respond Automatic to have another present character answer next. AI posts show live process details while they run.
                                 </p>
                             </div>
                         </div>
@@ -83,6 +86,7 @@ else
                         var isSnapshotExpanded = snapshot is not null && IsSnapshotExpanded(snapshot.SnapshotId);
                         var canRetryMessage = message is not null && CanRetryMessage(message);
                         var canRegenerateProse = message is not null && CanRegenerateProse(message);
+                        var canEditSavedPlan = message is not null && CanEditSavedPlan(message);
                         var displayContent = message is null ? string.Empty : GetDisplayContent(message);
 
                         <div class="d-flex flex-column gap-3">
@@ -453,6 +457,18 @@ else
                                                             </BusyButton>
                                                         }
 
+                                                        @if (canEditSavedPlan)
+                                                        {
+                                                            <button type="button"
+                                                                    class="btn btn-outline-primary btn-sm"
+                                                                    title="Edit saved plan"
+                                                                    aria-label="Edit saved plan"
+                                                                    disabled="@IsSceneInteractionLocked"
+                                                                    @onclick="() => OpenPlanModal(message)">
+                                                                <i class="fa-regular fa-list-check" aria-hidden="true"></i>
+                                                            </button>
+                                                        }
+
                                                         @if (message.IsSnapshotCandidate)
                                                         {
                                                             <button type="button"
@@ -655,7 +671,7 @@ else
                     <textarea id="scene-message-input" style="field-sizing: content; height: auto;"
                                 class="form-control mb-2"
                                 rows="4"
-                                placeholder="Write a direct message or describe guidance for the next beat..."
+                                placeholder="Write a direct message or add optional guidance for Guided or Respond Guided..."
                                 @bind="_draftText"
                                 @bind:event="oninput"
                                 disabled="@IsSceneInteractionLocked"></textarea>
@@ -668,15 +684,27 @@ else
 
                     <div class="d-flex flex-wrap justify-content-end gap-2">
                         <BusyButton Class="btn btn-primary"
-                                    OnClick="() => PostAsync(AiPostMode)"
-                                    IsBusy="@(_submittingMode == AiPostMode)"
+                                    OnClick="() => PostAsync(selectedSpeakerAiPostAction.Mode)"
+                                    IsBusy="@(_submittingMode == selectedSpeakerAiPostAction.Mode)"
                                     BusyText="Generating..."
-                                    Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && _submittingMode != AiPostMode))"
+                                    Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && _submittingMode != selectedSpeakerAiPostAction.Mode))"
                                     ShowBusyText="false"
-                                    title="@AiPostTitle"
-                                    aria-label="@AiPostTitle">
-                            <i class="fa-regular fa-wand-magic-sparkles me-2" aria-hidden="true"></i>
-                            @AiPostLabel
+                                    title="@selectedSpeakerAiPostAction.Title"
+                                    aria-label="@selectedSpeakerAiPostAction.Title">
+                            <i class="@selectedSpeakerAiPostAction.IconCssClass" aria-hidden="true"></i>
+                            @selectedSpeakerAiPostAction.Label
+                        </BusyButton>
+
+                        <BusyButton Class="btn btn-outline-primary"
+                                    OnClick="() => PostAsync(respondAiPostAction.Mode)"
+                                    IsBusy="@(_submittingMode == respondAiPostAction.Mode)"
+                                    BusyText="Generating..."
+                                    Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && _submittingMode != respondAiPostAction.Mode))"
+                                    ShowBusyText="false"
+                                    title="@respondAiPostAction.Title"
+                                    aria-label="@respondAiPostAction.Title">
+                            <i class="@respondAiPostAction.IconCssClass" aria-hidden="true"></i>
+                            @respondAiPostAction.Label
                         </BusyButton>
 
                         <BusyButton Class="btn btn-outline-primary"
@@ -716,6 +744,111 @@ else
                             OnStop="StopSnapshotDraftAsync"
                             OnClose="CloseSnapshotDraftAsync"
                             OnCommit="CommitSnapshotDraftAsync" />
+
+    <AppModal IsOpen="@_isPlanModalOpen"
+              Title="@PlanModalTitle"
+              DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down"
+              CloseDisabled="@_isSubmitting"
+              OnClose="ClosePlanModalAsync">
+        <ChildContent>
+            @if (EditingPlanMessage is not null)
+            {
+                <div class="d-flex flex-column gap-3">
+                    <InlineAlert Message="@_planEditErrorMessage" />
+
+                    <div class="small text-body-secondary">
+                        @_editingPlanSpeakerName on @EditingPlanMessage.CreatedUtc.ToShorthandDateWithRelativeDays()
+                    </div>
+
+                    <div class="row g-3">
+                        <div class="col-12 col-lg-4">
+                            <label class="form-label" for="story-plan-turn-shape">Turn shape</label>
+                            <select id="story-plan-turn-shape"
+                                    class="form-select"
+                                    @bind="_planDraftTurnShape"
+                                    disabled="@_isSubmitting">
+                                @foreach (var turnShape in Enum.GetValues<StoryTurnShape>())
+                                {
+                                    <option value="@turnShape">@FormatTurnShapeOption(turnShape)</option>
+                                }
+                            </select>
+                        </div>
+
+                        <div class="col-12 col-lg-8">
+                            <label class="form-label" for="story-plan-beat">Beat</label>
+                            <textarea id="story-plan-beat"
+                                      class="form-control"
+                                      rows="2"
+                                      @bind="_planDraftBeat"
+                                      disabled="@_isSubmitting"></textarea>
+                        </div>
+
+                        <div class="col-12 col-lg-6">
+                            <label class="form-label" for="story-plan-intent">Intent</label>
+                            <textarea id="story-plan-intent"
+                                      class="form-control"
+                                      rows="3"
+                                      @bind="_planDraftIntent"
+                                      disabled="@_isSubmitting"></textarea>
+                        </div>
+
+                        <div class="col-12 col-lg-6">
+                            <label class="form-label" for="story-plan-goal">Immediate goal</label>
+                            <textarea id="story-plan-goal"
+                                      class="form-control"
+                                      rows="3"
+                                      @bind="_planDraftImmediateGoal"
+                                      disabled="@_isSubmitting"></textarea>
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label" for="story-plan-why-now">Why now</label>
+                            <textarea id="story-plan-why-now"
+                                      class="form-control"
+                                      rows="3"
+                                      @bind="_planDraftWhyNow"
+                                      disabled="@_isSubmitting"></textarea>
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label" for="story-plan-change">Change introduced</label>
+                            <textarea id="story-plan-change"
+                                      class="form-control"
+                                      rows="3"
+                                      @bind="_planDraftChangeIntroduced"
+                                      disabled="@_isSubmitting"></textarea>
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label" for="story-plan-guardrails">Guardrails</label>
+                            <textarea id="story-plan-guardrails"
+                                      class="form-control"
+                                      rows="5"
+                                      @bind="_planDraftGuardrails"
+                                      disabled="@_isSubmitting"></textarea>
+                            <div class="form-text">Optional. Use one guardrail per line.</div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </ChildContent>
+        <FooterContent>
+            <button type="button"
+                    class="btn btn-outline-secondary"
+                    disabled="@_isSubmitting"
+                    @onclick="ClosePlanModalAsync">
+                Cancel
+            </button>
+
+            <BusyButton Class="btn btn-primary"
+                        OnClick="SavePlanEditAsync"
+                        IsBusy="@_isSubmitting"
+                        BusyText="Saving..."
+                        Disabled="@(!CanSavePlanEdit || !_isPlanModalOpen)">
+                Save
+            </BusyButton>
+        </FooterContent>
+    </AppModal>
 
     <AppModal IsOpen="@_isDeleteModalOpen"
               Title="@DeleteModalTitle"
@@ -817,6 +950,17 @@ else
     private bool _isSnapshotDraftLoading;
     private bool _isCommittingSnapshot;
     private StoryChatSnapshotDraftView? _snapshotDraft;
+    private bool _isPlanModalOpen;
+    private Guid? _editingPlanMessageId;
+    private string? _editingPlanSpeakerName;
+    private StoryTurnShape _planDraftTurnShape = StoryTurnShape.Compact;
+    private string _planDraftBeat = string.Empty;
+    private string _planDraftIntent = string.Empty;
+    private string _planDraftImmediateGoal = string.Empty;
+    private string _planDraftWhyNow = string.Empty;
+    private string _planDraftChangeIntroduced = string.Empty;
+    private string _planDraftGuardrails = string.Empty;
+    private string? _planEditErrorMessage;
     private bool _isDeleteModalOpen;
     private StorySceneMessageView? _deleteTargetMessage;
     private StorySceneDeleteMode? _deleteMode;
@@ -835,11 +979,6 @@ else
     private bool _isStoppingSnapshotDraft;
     private string? _snapshotDraftStatusMessage;
     private bool HasDraftText => !string.IsNullOrWhiteSpace(_draftText);
-    private StoryScenePostMode AiPostMode => HasDraftText ? StoryScenePostMode.GuidedAi : StoryScenePostMode.AutomaticAi;
-    private string AiPostLabel => HasDraftText ? "Guided" : "Automatic";
-    private string AiPostTitle => HasDraftText
-        ? "Guided uses your text as planning guidance"
-        : "Automatic writes the next message without using the textbox";
     private StorySceneMessageProcessView? ActiveRunningProcess =>
         _chat?.Transcript
             .Select(x => x.Message?.Process)
@@ -907,6 +1046,14 @@ else
             if (_editingAppearanceEntryId.HasValue
                 && !_chat.Transcript.Any(x => x.Appearance?.AppearanceEntryId == _editingAppearanceEntryId.Value))
                 CancelAppearanceEdit();
+            if (_editingPlanMessageId.HasValue)
+            {
+                var editingPlanMessage = _chat.Transcript
+                    .Select(x => x.Message)
+                    .FirstOrDefault(x => x?.MessageId == _editingPlanMessageId.Value);
+                if (editingPlanMessage is null || !CanEditSavedPlan(editingPlanMessage))
+                    ResetPlanEditState();
+            }
 
             ClearStaleRetryState();
             ShellState?.SetMobileContentHeader(_chat.Title, MessageCountText);
@@ -980,13 +1127,13 @@ else
 
         _errorMessage = null;
 
-        if ((mode == StoryScenePostMode.GuidedAi || mode == StoryScenePostMode.AutomaticAi) && !_chat.IsAiAvailable)
+        if (mode != StoryScenePostMode.Manual && !_chat.IsAiAvailable)
         {
             _errorMessage = "This chat does not currently have an AI provider configured.";
             return;
         }
 
-        if (mode != StoryScenePostMode.AutomaticAi && !HasDraftText)
+        if (RequiresGuidance(mode) && !HasDraftText)
         {
             _errorMessage = mode == StoryScenePostMode.Manual
                 ? "Enter a message before posting."
@@ -1012,12 +1159,13 @@ else
                     _chat.SelectedSpeaker.CharacterId,
                     mode,
                     mode == StoryScenePostMode.Manual ? _draftText : null,
-                    mode == StoryScenePostMode.GuidedAi ? _draftText : null,
+                    UsesGuidance(mode) ? _draftText : null,
                     retrySourceMessageId),
                 mode == StoryScenePostMode.Manual ? null : HandleMessageStreamUpdateAsync,
                 CancellationToken.None);
 
-            _draftText = string.Empty;
+            if (!IgnoresDraft(mode))
+                _draftText = string.Empty;
             ClearRetryState(clearDraft: false);
             await LoadChatAsync(_chat.ThreadId);
             ClearStreamedMessageContent();
@@ -1117,6 +1265,12 @@ else
         message.Process?.Status != ProcessRunStatus.Running;
 
     private bool CanRegenerateProse(StorySceneMessageView message) =>
+        HasReusableSavedPlan(message);
+
+    private bool CanEditSavedPlan(StorySceneMessageView message) =>
+        HasReusableSavedPlan(message);
+
+    private static bool HasReusableSavedPlan(StorySceneMessageView message) =>
         message.GenerationMode != StoryScenePostMode.Manual
         && message.Process?.Status != ProcessRunStatus.Running
         && message.Process?.Context is { GenerationContext: not null, Appearance: not null, Planner: not null };
@@ -1170,10 +1324,104 @@ else
         return message.GenerationMode switch
         {
             StoryScenePostMode.Manual => message.Content,
-            StoryScenePostMode.GuidedAi => message.Process?.Context?.GuidancePrompt?.Trim() ?? string.Empty,
-            StoryScenePostMode.AutomaticAi => string.Empty,
+            StoryScenePostMode.GuidedAi or StoryScenePostMode.RespondGuidedAi => message.Process?.Context?.GuidancePrompt?.Trim() ?? string.Empty,
+            StoryScenePostMode.AutomaticAi or StoryScenePostMode.RespondAutomaticAi => string.Empty,
             _ => string.Empty
         };
+    }
+
+    private void OpenPlanModal(StorySceneMessageView message)
+    {
+        if (!CanEditSavedPlan(message) || message.Process?.Context?.Planner is not { } planner)
+            return;
+
+        CancelInlineEdit();
+        CancelAppearanceEdit();
+        ClearRetryState(clearDraft: false);
+        _editingPlanMessageId = message.MessageId;
+        _editingPlanSpeakerName = message.CanonicalSpeakerName;
+        _planDraftTurnShape = planner.TurnShape;
+        _planDraftBeat = planner.Beat;
+        _planDraftIntent = planner.Intent;
+        _planDraftImmediateGoal = planner.ImmediateGoal;
+        _planDraftWhyNow = planner.WhyNow;
+        _planDraftChangeIntroduced = planner.ChangeIntroduced;
+        _planDraftGuardrails = string.Join(Environment.NewLine, planner.Guardrails);
+        _planEditErrorMessage = null;
+        _isPlanModalOpen = true;
+    }
+
+    private Task ClosePlanModalAsync()
+    {
+        if (_isSubmitting)
+            return Task.CompletedTask;
+
+        ResetPlanEditState();
+        return Task.CompletedTask;
+    }
+
+    private void ResetPlanEditState()
+    {
+        _isPlanModalOpen = false;
+        _editingPlanMessageId = null;
+        _editingPlanSpeakerName = null;
+        _planDraftTurnShape = StoryTurnShape.Compact;
+        _planDraftBeat = string.Empty;
+        _planDraftIntent = string.Empty;
+        _planDraftImmediateGoal = string.Empty;
+        _planDraftWhyNow = string.Empty;
+        _planDraftChangeIntroduced = string.Empty;
+        _planDraftGuardrails = string.Empty;
+        _planEditErrorMessage = null;
+    }
+
+    private async Task SavePlanEditAsync()
+    {
+        if (_chat is null || !CanSavePlanEdit || !_editingPlanMessageId.HasValue)
+            return;
+
+        var message = EditingPlanMessage;
+        if (message is null || !CanEditSavedPlan(message))
+        {
+            _planEditErrorMessage = "The saved plan could not be updated for the selected message.";
+            return;
+        }
+
+        _isSubmitting = true;
+        _planEditErrorMessage = null;
+        _errorMessage = null;
+
+        try
+        {
+            await StorySceneChatService.UpdatePlanAsync(
+                new UpdateStoryScenePlan(
+                    _chat.ThreadId,
+                    message.MessageId,
+                    new StoryMessagePlannerResult(
+                        _planDraftTurnShape,
+                        _planDraftBeat,
+                        _planDraftIntent,
+                        _planDraftImmediateGoal,
+                        _planDraftWhyNow,
+                        _planDraftChangeIntroduced,
+                        NormalizePlanDraftGuardrails())),
+                CancellationToken.None);
+
+            var speakerName = message.CanonicalSpeakerName;
+            ResetPlanEditState();
+            await LoadChatAsync(_chat.ThreadId);
+            UserFeedbackService.ShowBackgroundSuccess($"The saved plan was updated for {speakerName}.", "Plan Updated");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Updating the saved plan for message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
+            _planEditErrorMessage = "The saved plan could not be updated for the selected message.";
+            UserFeedbackService.ShowBackgroundError(_planEditErrorMessage, "Plan Update Failed");
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
     }
 
     private void BeginInlineEdit(StorySceneMessageView message)
@@ -1447,6 +1695,8 @@ else
         StoryScenePostMode.Manual => "Direct",
         StoryScenePostMode.GuidedAi => "Guided AI",
         StoryScenePostMode.AutomaticAi => "Automatic AI",
+        StoryScenePostMode.RespondGuidedAi => "Respond Guided AI",
+        StoryScenePostMode.RespondAutomaticAi => "Respond Automatic AI",
         _ => mode.ToString()
     };
 
@@ -1455,8 +1705,49 @@ else
         StoryScenePostMode.Manual => "The scene message was posted.",
         StoryScenePostMode.GuidedAi => "The guided scene message was generated.",
         StoryScenePostMode.AutomaticAi => "The automatic scene message was generated.",
+        StoryScenePostMode.RespondGuidedAi => "The guided response was generated.",
+        StoryScenePostMode.RespondAutomaticAi => "The automatic response was generated.",
         _ => "The scene was updated."
     };
+
+    private static bool UsesGuidance(StoryScenePostMode mode) =>
+        mode is StoryScenePostMode.GuidedAi or StoryScenePostMode.RespondGuidedAi;
+
+    private static bool RequiresGuidance(StoryScenePostMode mode) =>
+        mode is StoryScenePostMode.Manual or StoryScenePostMode.GuidedAi or StoryScenePostMode.RespondGuidedAi;
+
+    private static bool IgnoresDraft(StoryScenePostMode mode) =>
+        mode is StoryScenePostMode.AutomaticAi or StoryScenePostMode.RespondAutomaticAi;
+
+    private AdaptiveAiPostAction GetAdaptiveAiPostAction(bool respond)
+    {
+        if (respond)
+        {
+            return HasDraftText
+                ? new AdaptiveAiPostAction(
+                    StoryScenePostMode.RespondGuidedAi,
+                    "Respond Guided",
+                    "Respond Guided chooses another present character and uses your guidance",
+                    "fa-regular fa-reply me-2")
+                : new AdaptiveAiPostAction(
+                    StoryScenePostMode.RespondAutomaticAi,
+                    "Respond Automatic",
+                    "Respond Automatic chooses another present character and ignores the textbox",
+                    "fa-regular fa-reply-all me-2");
+        }
+
+        return HasDraftText
+            ? new AdaptiveAiPostAction(
+                StoryScenePostMode.GuidedAi,
+                "Guided",
+                "Guided uses your guidance for the selected speaker",
+                "fa-regular fa-wand-magic-sparkles me-2")
+            : new AdaptiveAiPostAction(
+                StoryScenePostMode.AutomaticAi,
+                "Automatic",
+                "Automatic writes the next message for the selected speaker and ignores the textbox",
+                "fa-regular fa-stars me-2");
+    }
 
     private string BuildMessageCardClass(StorySceneMessageView message)
     {
@@ -1506,6 +1797,10 @@ else
             && !string.IsNullOrWhiteSpace(process.Context?.Appearance?.LatestEntry?.Summary))
             return process.Context.Appearance.LatestEntry.Summary;
 
+        if (IsResponderProcessStep(step)
+            && process.Context?.ResponderSelection is not null)
+            return $"{process.Context.ResponderSelection.CharacterName}: {process.Context.ResponderSelection.WhyThisCharacter}";
+
         if (string.Equals(step.Title, "Writing", StringComparison.OrdinalIgnoreCase)
             && process.Context?.Planner is not null)
             return $"{process.Context.Planner.Beat}: {process.Context.Planner.ImmediateGoal}";
@@ -1526,6 +1821,9 @@ else
 
     private static bool IsAppearanceProcessStep(StorySceneProcessStepView step) =>
         string.Equals(step.Title, "Appearance", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsResponderProcessStep(StorySceneProcessStepView step) =>
+        string.Equals(step.Title, "Responder", StringComparison.OrdinalIgnoreCase);
 
     private static StorySceneAppearanceEntryView? GetProcessAppearanceEntry(StorySceneMessageProcessView process) =>
         process.Context?.Appearance?.LatestEntry;
@@ -1622,6 +1920,42 @@ else
         message.IsNarrator ? "narration message" : "message";
 
     private bool IsStoppingRun(Guid runId) => _stoppingRunIds.Contains(runId);
+
+    private StorySceneMessageView? EditingPlanMessage =>
+        _chat?.Transcript
+            .Select(x => x.Message)
+            .FirstOrDefault(x => x?.MessageId == _editingPlanMessageId);
+
+    private string PlanModalTitle => "Edit Saved Plan";
+
+    private bool CanSavePlanEdit =>
+        !string.IsNullOrWhiteSpace(_planDraftBeat)
+        && !string.IsNullOrWhiteSpace(_planDraftIntent)
+        && !string.IsNullOrWhiteSpace(_planDraftImmediateGoal)
+        && !string.IsNullOrWhiteSpace(_planDraftWhyNow)
+        && !string.IsNullOrWhiteSpace(_planDraftChangeIntroduced);
+
+    private static string FormatTurnShapeOption(StoryTurnShape turnShape) => turnShape switch
+    {
+        StoryTurnShape.Compact => "Compact",
+        StoryTurnShape.Brief => "Brief",
+        StoryTurnShape.Monologue => "Monologue",
+        StoryTurnShape.Silent => "Silent",
+        _ => turnShape.ToString()
+    };
+
+    private IReadOnlyList<string> NormalizePlanDraftGuardrails() =>
+        _planDraftGuardrails
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    private sealed record AdaptiveAiPostAction(
+        StoryScenePostMode Mode,
+        string Label,
+        string Title,
+        string IconCssClass);
 
     private Task StopSceneRunAsync(Guid runId)
     {

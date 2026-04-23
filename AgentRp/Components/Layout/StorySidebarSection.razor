@@ -7,6 +7,7 @@
 @inject IStoryGenerationSettingsService StoryGenerationSettingsService
 @inject IActivityNotifier ActivityNotifier
 @inject IUserFeedbackService UserFeedbackService
+@inject IJSRuntime JSRuntime
 @inject NavigationManager NavigationManager
 @inject ILogger<StorySidebarSection> Logger
 
@@ -166,17 +167,15 @@
                         <div class="border-top pt-2 mt-2">
                             <div class="d-flex align-items-center justify-content-between gap-2">
                                 <div>
-                                    <div class="small text-uppercase text-body-secondary">Temperature</div>
-                                    <div class="small text-body-secondary">
-                                        Planning @FormatTemperature(_generationSettings.PlannerTemperature)
-                                        <span aria-hidden="true">/</span>
-                                        Writing @FormatTemperature(_generationSettings.ProseTemperature)
+                                    <div class="small text-uppercase text-body-secondary">Model Settings</div>
+                                    <div class="small text-body-secondary text-truncate" title="@BuildGenerationSettingsSummary(_generationSettings)">
+                                        @BuildGenerationSettingsSummary(_generationSettings)
                                     </div>
                                 </div>
                                 <button type="button"
                                         class="btn btn-outline-secondary btn-sm"
-                                        title="Edit temperature"
-                                        aria-label="Edit AI temperature settings"
+                                        title="Edit model settings"
+                                        aria-label="Edit model settings"
                                         @onclick="OpenGenerationSettingsModal">
                                     <i class="fa-regular fa-sliders" aria-hidden="true"></i>
                                 </button>
@@ -352,52 +351,180 @@
 }
 
 <AppModal IsOpen="@_isGenerationSettingsModalOpen"
-          Title="AI Temperature"
-          DialogClass="modal-dialog modal-dialog-centered modal-fullscreen-sm-down"
+          Title="Model Settings"
+          DialogClass="modal-lg modal-dialog-scrollable modal-fullscreen-sm-down"
           OnClose="CloseGenerationSettingsModal">
     <ChildContent>
         <div class="d-flex flex-column gap-3">
             <InlineAlert Message="@_generationSettingsErrorMessage" />
 
-            <div class="small text-body-secondary">Lower is steadier. Higher is more varied.</div>
-
-            <div>
-                <label for="@_plannerTemperatureInputId" class="form-label d-flex align-items-center justify-content-between">
-                    <span>Planning</span>
-                    <span class="text-body-secondary">@FormatTemperature(_plannerTemperature)</span>
-                </label>
-                <input id="@_plannerTemperatureInputId"
-                       class="form-range"
-                       type="range"
-                       min="0"
-                       max="2"
-                       step="0.1"
-                       disabled="@_isSavingGenerationSettings"
-                       @bind="_plannerTemperature"
-                       @bind:event="oninput" />
+            <div class="small text-body-secondary">
+                Lower temperature is steadier. Leave optional fields blank to use the model defaults. Import and export act on the active tab only.
             </div>
 
-            <div>
-                <label for="@_proseTemperatureInputId" class="form-label d-flex align-items-center justify-content-between">
-                    <span>Writing</span>
-                    <span class="text-body-secondary">@FormatTemperature(_proseTemperature)</span>
+            <ul class="nav nav-tabs">
+                <li class="nav-item">
+                    <button type="button"
+                            class="@BuildGenerationSettingsTabClass(StoryGenerationStage.Planning)"
+                            disabled="@IsGenerationSettingsBusy"
+                            @onclick="() => SelectGenerationSettingsStage(StoryGenerationStage.Planning)">
+                        Planning
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button type="button"
+                            class="@BuildGenerationSettingsTabClass(StoryGenerationStage.Writing)"
+                            disabled="@IsGenerationSettingsBusy"
+                            @onclick="() => SelectGenerationSettingsStage(StoryGenerationStage.Writing)">
+                        Writing
+                    </button>
+                </li>
+            </ul>
+
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        disabled="@IsGenerationSettingsBusy"
+                        @onclick="SyncActiveGenerationSettingsDraft">
+                    <i class="fa-regular fa-arrows-rotate me-2" aria-hidden="true"></i>
+                    @BuildSyncButtonText()
+                </button>
+
+                <BusyButton Class="btn btn-outline-secondary btn-sm"
+                            IsBusy="@_isExportingGenerationSettings"
+                            Disabled="@(_generationSettings is null || _isSavingGenerationSettings || _isImportingGenerationSettings)"
+                            BusyText="Exporting..."
+                            OnClick="ExportGenerationSettingsAsync">
+                    <i class="fa-regular fa-arrow-up-from-bracket me-2" aria-hidden="true"></i>
+                    Export JSON
+                </BusyButton>
+
+                <label class="btn btn-outline-secondary btn-sm mb-0 @(IsGenerationSettingsBusy ? "disabled" : string.Empty)"
+                       for="@_generationSettingsImportInputId"
+                       aria-disabled="@IsGenerationSettingsBusy">
+                    <i class="fa-regular fa-arrow-down-to-bracket me-2" aria-hidden="true"></i>
+                    Import JSON
                 </label>
-                <input id="@_proseTemperatureInputId"
-                       class="form-range"
-                       type="range"
-                       min="0"
-                       max="2"
-                       step="0.1"
-                       disabled="@_isSavingGenerationSettings"
-                       @bind="_proseTemperature"
-                       @bind:event="oninput" />
+                <InputFile @key="_generationSettingsImportInputKey"
+                           id="@_generationSettingsImportInputId"
+                           class="d-none"
+                           accept=".json"
+                           disabled="@IsGenerationSettingsBusy"
+                           OnChange="HandleGenerationSettingsImportAsync" />
+            </div>
+
+            @if (_isImportingGenerationSettings)
+            {
+                <div class="d-flex align-items-center gap-2 small text-body-secondary">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <span>Reading @DescribeGenerationStage(_activeGenerationSettingsStage) settings...</span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(_generationSettingsImportFileName))
+            {
+                <div class="small text-body-secondary">
+                    Import file: @_generationSettingsImportFileName
+                </div>
+            }
+
+            <div class="row g-3">
+                <div class="col-12">
+                    <label for="@_activeTemperatureInputId" class="form-label d-flex align-items-center justify-content-between">
+                        <span>Temperature</span>
+                        <span class="text-body-secondary">@FormatTemperature(ActiveTemperature)</span>
+                    </label>
+                    <input id="@_activeTemperatureInputId"
+                           class="form-range"
+                           type="range"
+                           min="0"
+                           max="2"
+                           step="0.1"
+                           disabled="@IsGenerationSettingsBusy"
+                           @bind="ActiveTemperature"
+                           @bind:event="oninput" />
+                </div>
+
+                <div class="col-md-6">
+                    <label for="@_activeTopPInputId" class="form-label">Top P</label>
+                    <input id="@_activeTopPInputId"
+                           class="form-control"
+                           type="number"
+                           min="0"
+                           max="1"
+                           step="0.01"
+                           disabled="@IsGenerationSettingsBusy"
+                           @bind="ActiveTopP"
+                           @bind:event="oninput" />
+                </div>
+
+                <div class="col-md-6">
+                    <label for="@_activeMaxOutputTokensInputId" class="form-label">Max Output Tokens</label>
+                    <input id="@_activeMaxOutputTokensInputId"
+                           class="form-control"
+                           type="number"
+                           min="1"
+                           step="1"
+                           disabled="@IsGenerationSettingsBusy"
+                           @bind="ActiveMaxOutputTokens"
+                           @bind:event="oninput" />
+                </div>
+
+                <div class="col-md-6">
+                    <label for="@_activeSeedInputId" class="form-label">Seed</label>
+                    <input id="@_activeSeedInputId"
+                           class="form-control"
+                           type="number"
+                           min="0"
+                           step="1"
+                           disabled="@IsGenerationSettingsBusy"
+                           @bind="ActiveSeed"
+                           @bind:event="oninput" />
+                </div>
+
+                <div class="col-md-6">
+                    <label for="@_activeFrequencyPenaltyInputId" class="form-label">Frequency Penalty</label>
+                    <input id="@_activeFrequencyPenaltyInputId"
+                           class="form-control"
+                           type="number"
+                           min="-2"
+                           max="2"
+                           step="0.01"
+                           disabled="@IsGenerationSettingsBusy"
+                           @bind="ActiveFrequencyPenalty"
+                           @bind:event="oninput" />
+                </div>
+
+                <div class="col-md-6">
+                    <label for="@_activePresencePenaltyInputId" class="form-label">Presence Penalty</label>
+                    <input id="@_activePresencePenaltyInputId"
+                           class="form-control"
+                           type="number"
+                           min="-2"
+                           max="2"
+                           step="0.01"
+                           disabled="@IsGenerationSettingsBusy"
+                           @bind="ActivePresencePenalty"
+                           @bind:event="oninput" />
+                </div>
+
+                <div class="col-12">
+                    <label for="@_activeStopSequencesInputId" class="form-label">Stop Sequences</label>
+                    <textarea id="@_activeStopSequencesInputId"
+                              class="form-control"
+                              rows="4"
+                              disabled="@IsGenerationSettingsBusy"
+                              @bind="ActiveStopSequencesText"
+                              @bind:event="oninput"></textarea>
+                    <div class="small text-body-secondary mt-2">Enter one stop sequence per line.</div>
+                </div>
             </div>
         </div>
     </ChildContent>
     <FooterContent>
         <button type="button"
                 class="btn btn-outline-secondary"
-                disabled="@_isSavingGenerationSettings"
+                disabled="@IsGenerationSettingsBusy"
                 @onclick="CloseGenerationSettingsModal">
             Cancel
         </button>
@@ -415,8 +542,14 @@
 @code {
     private IDisposable? _storySubscription;
     private IDisposable? _chatSubscription;
-    private readonly string _plannerTemperatureInputId = $"story-planner-temperature-{Guid.NewGuid():N}";
-    private readonly string _proseTemperatureInputId = $"story-prose-temperature-{Guid.NewGuid():N}";
+    private readonly string _generationSettingsImportInputId = $"story-generation-settings-import-{Guid.NewGuid():N}";
+    private readonly string _activeTemperatureInputId = $"story-model-temperature-{Guid.NewGuid():N}";
+    private readonly string _activeTopPInputId = $"story-model-top-p-{Guid.NewGuid():N}";
+    private readonly string _activeMaxOutputTokensInputId = $"story-model-max-output-{Guid.NewGuid():N}";
+    private readonly string _activeSeedInputId = $"story-model-seed-{Guid.NewGuid():N}";
+    private readonly string _activeFrequencyPenaltyInputId = $"story-model-frequency-penalty-{Guid.NewGuid():N}";
+    private readonly string _activePresencePenaltyInputId = $"story-model-presence-penalty-{Guid.NewGuid():N}";
+    private readonly string _activeStopSequencesInputId = $"story-model-stop-sequences-{Guid.NewGuid():N}";
     private bool _isLoading;
     private Guid? _threadId;
     private ChatStorySidebarView? _story;
@@ -427,8 +560,13 @@
     private bool _isHistoryModalOpen;
     private bool _isGenerationSettingsModalOpen;
     private bool _isSavingGenerationSettings;
-    private double _plannerTemperature;
-    private double _proseTemperature;
+    private bool _isExportingGenerationSettings;
+    private bool _isImportingGenerationSettings;
+    private int _generationSettingsImportInputKey;
+    private string? _generationSettingsImportFileName;
+    private StoryGenerationStage _activeGenerationSettingsStage = StoryGenerationStage.Planning;
+    private StoryModelStageSettingsDraft _planningGenerationSettingsDraft = new();
+    private StoryModelStageSettingsDraft _writingGenerationSettingsDraft = new();
     private Guid? _selectedCharacterIdForModal;
     private Guid? _selectedItemIdForModal;
     private bool _startCharacterModalInCreateMode;
@@ -492,11 +630,16 @@
         }
     }
 
+    private bool IsGenerationSettingsBusy =>
+        _isSavingGenerationSettings
+        || _isExportingGenerationSettings
+        || _isImportingGenerationSettings;
+
     private bool CanSaveGenerationSettings =>
-        !_isSavingGenerationSettings
+        !IsGenerationSettingsBusy
         && _generationSettings is not null
-        && (!AreTemperaturesEqual(_plannerTemperature, _generationSettings.PlannerTemperature)
-            || !AreTemperaturesEqual(_proseTemperature, _generationSettings.ProseTemperature));
+        && TryBuildDraftGenerationSettingsView(out var draftSettings)
+        && !AreGenerationSettingsEqual(draftSettings, _generationSettings);
 
     private async Task<Guid?> ResolveCurrentThreadIdAsync()
     {
@@ -549,6 +692,7 @@
 
         ApplyGenerationSettingsDraft(_generationSettings);
         _generationSettingsErrorMessage = null;
+        _generationSettingsImportFileName = null;
         _isGenerationSettingsModalOpen = true;
     }
 
@@ -581,11 +725,13 @@
 
     private Task CloseGenerationSettingsModal()
     {
-        if (_isSavingGenerationSettings)
+        if (IsGenerationSettingsBusy)
             return Task.CompletedTask;
 
         _isGenerationSettingsModalOpen = false;
         _generationSettingsErrorMessage = null;
+        _generationSettingsImportFileName = null;
+        _generationSettingsImportInputKey++;
         if (_generationSettings is not null)
             ApplyGenerationSettingsDraft(_generationSettings);
 
@@ -680,7 +826,7 @@
 
     private async Task SaveGenerationSettingsAsync()
     {
-        if (_generationSettings is null || _isSavingGenerationSettings)
+        if (_generationSettings is null || IsGenerationSettingsBusy)
             return;
 
         _isSavingGenerationSettings = true;
@@ -689,24 +835,111 @@
 
         try
         {
-            var update = new UpdateStoryGenerationSettings(
-                NormalizeTemperature(_plannerTemperature),
-                NormalizeTemperature(_proseTemperature));
+            var update = BuildDraftGenerationSettingsUpdate();
             var savedSettings = await StoryGenerationSettingsService.UpdateSettingsAsync(update, CancellationToken.None);
             ApplyGenerationSettings(savedSettings);
             _isGenerationSettingsModalOpen = false;
             _generationSettingsErrorMessage = null;
-            UserFeedbackService.ShowBackgroundSuccess("AI temperature settings were saved.", "AI Settings Saved");
+            _generationSettingsImportFileName = null;
+            _generationSettingsImportInputKey++;
+            UserFeedbackService.ShowBackgroundSuccess("Story model settings were saved.", "Model Settings Saved");
         }
         catch (Exception exception)
         {
-            Logger.LogError(exception, "Saving AI generation settings failed.");
-            _generationSettingsErrorMessage = "Saving AI temperature settings failed.";
-            UserFeedbackService.ShowBackgroundError(_generationSettingsErrorMessage, "AI Settings Failed");
+            Logger.LogError(exception, "Saving story model settings failed.");
+            _generationSettingsErrorMessage = DescribeGenerationSettingsFailure(exception, "Saving story model settings failed.");
+            UserFeedbackService.ShowBackgroundError(_generationSettingsErrorMessage, "Model Settings Failed");
         }
         finally
         {
             _isSavingGenerationSettings = false;
+            StateHasChanged();
+        }
+    }
+
+    private void SelectGenerationSettingsStage(StoryGenerationStage stage) => _activeGenerationSettingsStage = stage;
+
+    private void SyncActiveGenerationSettingsDraft()
+    {
+        if (IsGenerationSettingsBusy)
+            return;
+
+        if (_activeGenerationSettingsStage == StoryGenerationStage.Planning)
+        {
+            _writingGenerationSettingsDraft = _planningGenerationSettingsDraft.Clone();
+            return;
+        }
+
+        _planningGenerationSettingsDraft = _writingGenerationSettingsDraft.Clone();
+    }
+
+    private async Task ExportGenerationSettingsAsync()
+    {
+        if (_generationSettings is null || IsGenerationSettingsBusy)
+            return;
+
+        _isExportingGenerationSettings = true;
+        _generationSettingsErrorMessage = null;
+
+        try
+        {
+            var stage = _activeGenerationSettingsStage;
+            var packageJson = StoryGenerationSettingsService.SerializeStageTransferPackage(stage, BuildDraftStageSettingsView(stage));
+            var fileName = StoryGenerationSettingsService.BuildStageExportFileName(stage, DateTime.UtcNow);
+            await JSRuntime.InvokeVoidAsync("chatTransfer.downloadJson", fileName, packageJson);
+            UserFeedbackService.ShowBackgroundSuccess(
+                $"Exported {DescribeGenerationStage(stage)} model settings.",
+                "Model Settings Exported");
+        }
+        catch (Exception exception)
+        {
+            var stage = _activeGenerationSettingsStage;
+            Logger.LogError(exception, "Exporting {Stage} model settings failed.", stage);
+            _generationSettingsErrorMessage = DescribeGenerationSettingsFailure(
+                exception,
+                $"Exporting {DescribeGenerationStage(stage)} model settings failed.");
+            UserFeedbackService.ShowBackgroundError(_generationSettingsErrorMessage, "Model Settings Export Failed");
+        }
+        finally
+        {
+            _isExportingGenerationSettings = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task HandleGenerationSettingsImportAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null || IsGenerationSettingsBusy)
+            return;
+
+        _isImportingGenerationSettings = true;
+        _generationSettingsErrorMessage = null;
+        _generationSettingsImportFileName = file.Name;
+
+        try
+        {
+            using var stream = file.OpenReadStream(1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var packageJson = await reader.ReadToEndAsync();
+            var importedSettings = StoryGenerationSettingsService.DeserializeStageTransferPackage(packageJson, _activeGenerationSettingsStage);
+            ApplyDraftStageSettings(_activeGenerationSettingsStage, importedSettings);
+            UserFeedbackService.ShowBackgroundSuccess(
+                $"Imported {DescribeGenerationStage(_activeGenerationSettingsStage)} model settings into the editor.",
+                "Model Settings Imported");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Importing {Stage} model settings from {FileName} failed.", _activeGenerationSettingsStage, file.Name);
+            _generationSettingsErrorMessage = DescribeGenerationSettingsFailure(
+                exception,
+                $"Importing {DescribeGenerationStage(_activeGenerationSettingsStage)} model settings from \"{file.Name}\" failed.");
+            UserFeedbackService.ShowBackgroundError(_generationSettingsErrorMessage, "Model Settings Import Failed");
+        }
+        finally
+        {
+            _isImportingGenerationSettings = false;
+            _generationSettingsImportInputKey++;
             StateHasChanged();
         }
     }
@@ -922,22 +1155,215 @@
     private void ApplyGenerationSettings(StoryGenerationSettingsView settings)
     {
         _generationSettings = settings;
-        if (!_isGenerationSettingsModalOpen || _isSavingGenerationSettings)
+        if (!_isGenerationSettingsModalOpen || IsGenerationSettingsBusy)
             ApplyGenerationSettingsDraft(settings);
     }
 
     private void ApplyGenerationSettingsDraft(StoryGenerationSettingsView settings)
     {
-        _plannerTemperature = settings.PlannerTemperature;
-        _proseTemperature = settings.ProseTemperature;
+        _planningGenerationSettingsDraft = StoryModelStageSettingsDraft.FromView(settings.Planning);
+        _writingGenerationSettingsDraft = StoryModelStageSettingsDraft.FromView(settings.Writing);
     }
 
+    private void ApplyDraftStageSettings(StoryGenerationStage stage, StoryModelStageSettingsView settings)
+    {
+        if (stage == StoryGenerationStage.Planning)
+        {
+            _planningGenerationSettingsDraft = StoryModelStageSettingsDraft.FromView(settings);
+            return;
+        }
+
+        _writingGenerationSettingsDraft = StoryModelStageSettingsDraft.FromView(settings);
+    }
+
+    private UpdateStoryGenerationSettings BuildDraftGenerationSettingsUpdate() => new(
+        BuildDraftStageSettingsView(StoryGenerationStage.Planning),
+        BuildDraftStageSettingsView(StoryGenerationStage.Writing));
+
+    private StoryGenerationSettingsView BuildDraftGenerationSettingsView() => new(
+        BuildDraftStageSettingsView(StoryGenerationStage.Planning),
+        BuildDraftStageSettingsView(StoryGenerationStage.Writing));
+
+    private bool TryBuildDraftGenerationSettingsView(out StoryGenerationSettingsView settings)
+    {
+        try
+        {
+            settings = BuildDraftGenerationSettingsView();
+            return true;
+        }
+        catch
+        {
+            settings = _generationSettings ?? new StoryGenerationSettingsView(
+                BuildDraftStageSettingsViewWithoutNormalization(StoryGenerationStage.Planning),
+                BuildDraftStageSettingsViewWithoutNormalization(StoryGenerationStage.Writing));
+            return false;
+        }
+    }
+
+    private StoryModelStageSettingsView BuildDraftStageSettingsView(StoryGenerationStage stage)
+    {
+        var draft = BuildDraftStageSettingsViewWithoutNormalization(stage);
+        return StoryGenerationSettingsService.NormalizeStageSettings(stage, draft);
+    }
+
+    private StoryModelStageSettingsView BuildDraftStageSettingsViewWithoutNormalization(StoryGenerationStage stage)
+    {
+        var draft = GetGenerationSettingsDraft(stage);
+        return new StoryModelStageSettingsView(
+            draft.Temperature,
+            draft.TopP,
+            draft.MaxOutputTokens,
+            draft.Seed,
+            draft.FrequencyPenalty,
+            draft.PresencePenalty,
+            SplitStopSequences(draft.StopSequencesText));
+    }
+
+    private StoryModelStageSettingsDraft GetGenerationSettingsDraft(StoryGenerationStage stage) =>
+        stage == StoryGenerationStage.Planning
+            ? _planningGenerationSettingsDraft
+            : _writingGenerationSettingsDraft;
+
+    private double ActiveTemperature
+    {
+        get => GetGenerationSettingsDraft(_activeGenerationSettingsStage).Temperature;
+        set => GetGenerationSettingsDraft(_activeGenerationSettingsStage).Temperature = value;
+    }
+
+    private double? ActiveTopP
+    {
+        get => GetGenerationSettingsDraft(_activeGenerationSettingsStage).TopP;
+        set => GetGenerationSettingsDraft(_activeGenerationSettingsStage).TopP = value;
+    }
+
+    private int? ActiveMaxOutputTokens
+    {
+        get => GetGenerationSettingsDraft(_activeGenerationSettingsStage).MaxOutputTokens;
+        set => GetGenerationSettingsDraft(_activeGenerationSettingsStage).MaxOutputTokens = value;
+    }
+
+    private long? ActiveSeed
+    {
+        get => GetGenerationSettingsDraft(_activeGenerationSettingsStage).Seed;
+        set => GetGenerationSettingsDraft(_activeGenerationSettingsStage).Seed = value;
+    }
+
+    private double? ActiveFrequencyPenalty
+    {
+        get => GetGenerationSettingsDraft(_activeGenerationSettingsStage).FrequencyPenalty;
+        set => GetGenerationSettingsDraft(_activeGenerationSettingsStage).FrequencyPenalty = value;
+    }
+
+    private double? ActivePresencePenalty
+    {
+        get => GetGenerationSettingsDraft(_activeGenerationSettingsStage).PresencePenalty;
+        set => GetGenerationSettingsDraft(_activeGenerationSettingsStage).PresencePenalty = value;
+    }
+
+    private string ActiveStopSequencesText
+    {
+        get => GetGenerationSettingsDraft(_activeGenerationSettingsStage).StopSequencesText;
+        set => GetGenerationSettingsDraft(_activeGenerationSettingsStage).StopSequencesText = value ?? string.Empty;
+    }
+
+    private static IReadOnlyList<string> SplitStopSequences(string? text) =>
+        string.IsNullOrWhiteSpace(text)
+            ? []
+            : text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static bool AreGenerationSettingsEqual(StoryGenerationSettingsView left, StoryGenerationSettingsView right) =>
+        AreStageSettingsEqual(left.Planning, right.Planning)
+        && AreStageSettingsEqual(left.Writing, right.Writing);
+
+    private static bool AreStageSettingsEqual(StoryModelStageSettingsView left, StoryModelStageSettingsView right) =>
+        AreDoublesEqual(left.Temperature, right.Temperature)
+        && AreNullableDoublesEqual(left.TopP, right.TopP)
+        && left.MaxOutputTokens == right.MaxOutputTokens
+        && left.Seed == right.Seed
+        && AreNullableDoublesEqual(left.FrequencyPenalty, right.FrequencyPenalty)
+        && AreNullableDoublesEqual(left.PresencePenalty, right.PresencePenalty)
+        && left.StopSequences.SequenceEqual(right.StopSequences, StringComparer.Ordinal);
+
+    private static bool AreDoublesEqual(double left, double right) => Math.Abs(left - right) < 0.001;
+
+    private static bool AreNullableDoublesEqual(double? left, double? right) =>
+        (!left.HasValue && !right.HasValue)
+        || (left.HasValue && right.HasValue && AreDoublesEqual(left.Value, right.Value));
+
+    private static string BuildGenerationSettingsSummary(StoryGenerationSettingsView settings) =>
+        $"{BuildStageSummary("Pln", settings.Planning)} / {BuildStageSummary("Wrt", settings.Writing)}";
+
+    private static string BuildStageSummary(string label, StoryModelStageSettingsView settings)
+    {
+        var tokens = new List<string> { $"{label} T{FormatTemperature(settings.Temperature)}" };
+        if (settings.TopP.HasValue)
+            tokens.Add($"Tp{FormatOptional(settings.TopP.Value)}");
+
+        if (settings.MaxOutputTokens.HasValue)
+            tokens.Add($"Max{settings.MaxOutputTokens.Value}");
+
+        if (settings.Seed.HasValue)
+            tokens.Add($"Sd{settings.Seed.Value}");
+
+        return string.Join(' ', tokens);
+    }
+
+    private string BuildGenerationSettingsTabClass(StoryGenerationStage stage) =>
+        stage == _activeGenerationSettingsStage ? "nav-link active" : "nav-link";
+
+    private string BuildSyncButtonText() =>
+        _activeGenerationSettingsStage == StoryGenerationStage.Planning
+            ? "Sync to Writing"
+            : "Sync to Planning";
+
+    private static string DescribeGenerationStage(StoryGenerationStage stage) =>
+        stage == StoryGenerationStage.Planning ? "Planning" : "Writing";
+
+    private static string DescribeGenerationSettingsFailure(Exception exception, string fallbackMessage) =>
+        string.IsNullOrWhiteSpace(exception.Message) ? fallbackMessage : exception.Message;
+
     private static string FormatTemperature(double temperature) =>
-        NormalizeTemperature(temperature).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        temperature.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
 
-    private static double NormalizeTemperature(double temperature) =>
-        Math.Round(Math.Clamp(temperature, 0, 2), 1, MidpointRounding.AwayFromZero);
+    private static string FormatOptional(double value) =>
+        value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
-    private static bool AreTemperaturesEqual(double left, double right) =>
-        Math.Abs(NormalizeTemperature(left) - NormalizeTemperature(right)) < 0.001;
+    private sealed class StoryModelStageSettingsDraft
+    {
+        public double Temperature { get; set; }
+
+        public double? TopP { get; set; }
+
+        public int? MaxOutputTokens { get; set; }
+
+        public long? Seed { get; set; }
+
+        public double? FrequencyPenalty { get; set; }
+
+        public double? PresencePenalty { get; set; }
+
+        public string StopSequencesText { get; set; } = string.Empty;
+
+        public StoryModelStageSettingsDraft Clone() => new()
+        {
+            Temperature = Temperature,
+            TopP = TopP,
+            MaxOutputTokens = MaxOutputTokens,
+            Seed = Seed,
+            FrequencyPenalty = FrequencyPenalty,
+            PresencePenalty = PresencePenalty,
+            StopSequencesText = StopSequencesText
+        };
+
+        public static StoryModelStageSettingsDraft FromView(StoryModelStageSettingsView settings) => new()
+        {
+            Temperature = settings.Temperature,
+            TopP = settings.TopP,
+            MaxOutputTokens = settings.MaxOutputTokens,
+            Seed = settings.Seed,
+            FrequencyPenalty = settings.FrequencyPenalty,
+            PresencePenalty = settings.PresencePenalty,
+            StopSequencesText = string.Join(Environment.NewLine, settings.StopSequences)
+        };
+    }
 }

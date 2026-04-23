@@ -858,7 +858,7 @@ public sealed class StoryEntityAiAssistService(
             var facts = History.Facts.Take(3).Select(x => $"{x.Title}: {x.Summary}");
             var timeline = History.TimelineEntries.Take(3).Select(x => $"{x.Title}: {x.Summary}");
             var combined = facts.Concat(timeline).ToList();
-            return combined.Count == 0 ? "No history yet." : string.Join(" | ", combined);
+            return combined.Count == 0 ? "" : string.Join(" | ", combined);
         }
 
         private string BuildEntityDetails(StoryEntityKind entityKind, Guid entityId) => entityKind switch

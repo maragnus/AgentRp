@@ -327,6 +327,11 @@ public sealed record UpdateStorySceneAppearanceEntry(
     Guid AppearanceEntryId,
     IReadOnlyList<StorySceneCharacterAppearanceView> Characters);
 
+public sealed record UpdateStoryScenePlan(
+    Guid ThreadId,
+    Guid SourceMessageId,
+    StoryMessagePlannerResult Planner);
+
 public sealed record DeleteCharacter(
     Guid ThreadId,
     Guid CharacterId);
@@ -789,6 +794,13 @@ public sealed record StorySceneAppearanceResolution(
     IReadOnlyList<StorySceneCharacterAppearanceView> EffectiveCharacters,
     IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceLatestEntry);
 
+public sealed record StorySceneResponderSelectionResult(
+    Guid? ActiveSpeakerCharacterId,
+    string ActiveSpeakerName,
+    Guid CharacterId,
+    string CharacterName,
+    string WhyThisCharacter);
+
 public sealed record StorySceneGenerationContext(
     StorySceneActorContext Actor,
     StorySceneLocationContext? CurrentLocation,
@@ -827,6 +839,7 @@ public sealed record StoryMessageProcessContext(
     string? GuidancePrompt,
     StorySceneGenerationContext? GenerationContext,
     StorySceneAppearanceResolution? Appearance,
+    StorySceneResponderSelectionResult? ResponderSelection,
     StoryMessagePlannerResult? Planner,
     StoryMessageProseRequest? ProseRequest,
     string? FinalMessage,
@@ -877,6 +890,8 @@ public interface IStorySceneChatService
     Task DeleteMessageAsync(DeleteStorySceneMessage request, CancellationToken cancellationToken);
 
     Task UpdateAppearanceEntryAsync(UpdateStorySceneAppearanceEntry request, CancellationToken cancellationToken);
+
+    Task UpdatePlanAsync(UpdateStoryScenePlan request, CancellationToken cancellationToken);
 }
 
 public interface IStoryChatSnapshotService

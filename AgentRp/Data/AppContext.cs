@@ -328,7 +328,9 @@ public enum StoryScenePostMode
 {
     Manual,
     GuidedAi,
-    AutomaticAi
+    AutomaticAi,
+    RespondGuidedAi,
+    RespondAutomaticAi
 }
 
 public enum ProcessRunStatus
