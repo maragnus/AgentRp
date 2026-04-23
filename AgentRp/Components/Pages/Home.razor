@@ -77,6 +77,7 @@ else
                         var isEditing = message is not null && _editingMessageId == message.MessageId;
                         var isSnapshotExpanded = snapshot is not null && IsSnapshotExpanded(snapshot.SnapshotId);
                         var canRetryMessage = message is not null && CanRetryMessage(message);
+                        var displayContent = message is null ? string.Empty : GetDisplayContent(message);
 
                         <div class="d-flex flex-column gap-3">
                             @if (process is not null)
@@ -323,7 +324,7 @@ else
                                                               disabled="@_isSubmitting"></textarea>
                                                 </div>
                                             }
-                                            else if (string.IsNullOrWhiteSpace(message.Content) && process is not null && process.Status == ProcessRunStatus.Running)
+                                            else if (string.IsNullOrWhiteSpace(displayContent) && process is not null && process.Status == ProcessRunStatus.Running)
                                             {
                                                 <div class="d-flex align-items-center gap-2 text-body-secondary">
                                                     <div class="spinner-border spinner-border-sm" role="status"></div>
@@ -333,12 +334,12 @@ else
                                             else if (message.IsNarrator)
                                             {
                                                 <div class="fst-italic">
-                                                    <MarkdownContent Markdown="@message.Content" />
+                                                    <MarkdownContent Markdown="@displayContent" />
                                                 </div>
                                             }
                                             else
                                             {
-                                                <MarkdownContent Markdown="@message.Content" />
+                                                <MarkdownContent Markdown="@displayContent" />
                                             }
                                         </div>
 
@@ -615,16 +616,6 @@ else
                 <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
                     <div class="d-flex flex-column">
                         <div class="small text-body-secondary">Speaking as <strong>@_chat.SelectedSpeaker.Name</strong></div>
-                        <div class="small text-body-secondary">
-                            @if (_chat.IsAiAvailable && !string.IsNullOrWhiteSpace(_chat.SelectedAgentName))
-                            {
-                                <span>AI provider: @_chat.SelectedAgentName</span>
-                            }
-                            else
-                            {
-                                <span>AI provider unavailable</span>
-                            }
-                        </div>
                     </div>
 
                     <div class="d-flex flex-wrap justify-content-end gap-2">
@@ -772,6 +763,7 @@ else
     private readonly Dictionary<Guid, Guid?> _expandedProcessStepIds = [];
     private readonly Dictionary<Guid, bool> _expandedAppearanceContextStates = [];
     private readonly Dictionary<Guid, bool> _expandedSnapshotStates = [];
+    private readonly Dictionary<Guid, string> _streamedMessageContent = [];
     private System.Threading.Timer? _processDurationRefreshTimer;
     private bool HasDraftText => !string.IsNullOrWhiteSpace(_draftText);
     private StoryScenePostMode AiPostMode => HasDraftText ? StoryScenePostMode.GuidedAi : StoryScenePostMode.AutomaticAi;
@@ -848,6 +840,42 @@ else
         StateHasChanged();
     }
 
+    private async Task HandleMessageStreamUpdateAsync(StorySceneMessageStreamUpdate update, CancellationToken cancellationToken)
+    {
+        if (_chat is null || _chat.ThreadId != update.ThreadId)
+            return;
+
+        await InvokeAsync(async () =>
+        {
+            if (_chat is null || _chat.ThreadId != update.ThreadId)
+                return;
+
+            if (!_chat.Transcript.Any(x => x.Message?.MessageId == update.MessageId))
+                await LoadChatAsync(update.ThreadId);
+
+            if (string.IsNullOrWhiteSpace(update.Content))
+                _streamedMessageContent.Remove(update.MessageId);
+            else
+                _streamedMessageContent[update.MessageId] = update.Content;
+
+            StateHasChanged();
+        });
+    }
+
+    private string GetDisplayContent(StorySceneMessageView message) =>
+        _streamedMessageContent.TryGetValue(message.MessageId, out var streamedContent)
+            ? streamedContent
+            : message.Content;
+
+    private void ClearStreamedMessageContent()
+    {
+        if (_streamedMessageContent.Count == 0)
+            return;
+
+        _streamedMessageContent.Clear();
+        StateHasChanged();
+    }
+
     private void SyncProcessDurationRefreshTimer()
     {
         var hasRunningProcesses = _chat?.Transcript.Any(x => x.Message?.Process?.Status == ProcessRunStatus.Running) == true;
@@ -903,17 +931,25 @@ else
                     mode == StoryScenePostMode.Manual ? _draftText : null,
                     mode == StoryScenePostMode.GuidedAi ? _draftText : null,
                     retrySourceMessageId),
+                mode == StoryScenePostMode.Manual ? null : HandleMessageStreamUpdateAsync,
                 CancellationToken.None);
 
             _draftText = string.Empty;
             ClearRetryState(clearDraft: false);
             await LoadChatAsync(_chat.ThreadId);
+            ClearStreamedMessageContent();
             if (mode != StoryScenePostMode.Manual)
                 UserFeedbackService.ShowBackgroundSuccess(BuildPostSuccessMessage(mode), "Scene Updated");
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Posting scene message failed for chat {ThreadId}.", _chat.ThreadId);
+            if (mode != StoryScenePostMode.Manual)
+            {
+                await LoadChatAsync(_chat.ThreadId);
+                ClearStreamedMessageContent();
+            }
+
             _errorMessage = exception.Message;
             if (mode != StoryScenePostMode.Manual)
                 UserFeedbackService.ShowBackgroundError(_errorMessage, "Scene Message Failed");

@@ -111,7 +111,10 @@ public sealed class StorySceneChatService(
         PublishWorkspaceRefresh(threadId);
     }
 
-    public async Task PostMessageAsync(PostStorySceneMessage request, CancellationToken cancellationToken)
+    public async Task PostMessageAsync(
+        PostStorySceneMessage request,
+        StorySceneMessageStreamHandler? streamHandler,
+        CancellationToken cancellationToken)
     {
         if (request.Mode == StoryScenePostMode.Manual)
         {
@@ -119,7 +122,7 @@ public sealed class StorySceneChatService(
             return;
         }
 
-        await PostGeneratedMessageAsync(request, cancellationToken);
+        await PostGeneratedMessageAsync(request, streamHandler, cancellationToken);
     }
 
     public async Task UpdateMessageAsync(ChatMessageUpdate request, CancellationToken cancellationToken)
@@ -316,7 +319,10 @@ public sealed class StorySceneChatService(
         PublishWorkspaceRefresh(thread.Id);
     }
 
-    private async Task PostGeneratedMessageAsync(PostStorySceneMessage request, CancellationToken cancellationToken)
+    private async Task PostGeneratedMessageAsync(
+        PostStorySceneMessage request,
+        StorySceneMessageStreamHandler? streamHandler,
+        CancellationToken cancellationToken)
     {
         var trimmedGuidancePrompt = request.GuidancePrompt?.Trim();
 
@@ -328,6 +334,10 @@ public sealed class StorySceneChatService(
         ConfiguredAgent agent;
         Guid messageId;
         Guid runId;
+        Guid? contextLeafMessageId;
+        StoryMessageProseRequest? proseRequest = null;
+        StorySceneAppearanceResolution? failedAppearanceResolution = null;
+        string failedPartialProseText = string.Empty;
 
         await using (var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken))
         {
@@ -344,6 +354,7 @@ public sealed class StorySceneChatService(
                 request,
                 "Generating the retried scene message",
                 cancellationToken);
+            contextLeafMessageId = postTarget.ParentMessageId;
             var actor = BuildActorContext(
                 request.SpeakerCharacterId,
                 story.Characters.Entries
@@ -448,7 +459,7 @@ public sealed class StorySceneChatService(
 
         try
         {
-            var generationBuild = await BuildGenerationContextAsync(request.ThreadId, request.SpeakerCharacterId, cancellationToken);
+            var generationBuild = await BuildGenerationContextAsync(request.ThreadId, request.SpeakerCharacterId, contextLeafMessageId, cancellationToken);
             generationContext = generationBuild.Context;
             appearanceResolution = generationBuild.Appearance;
             await UpdateAppearanceCompletionAsync(request.ThreadId, runId, request.Mode, trimmedGuidancePrompt, generationContext, appearanceResolution, cancellationToken);
@@ -459,16 +470,34 @@ public sealed class StorySceneChatService(
             await UpdatePlannerCompletionAsync(request.ThreadId, runId, planner, generationContext, appearanceResolution, trimmedGuidancePrompt, request.Mode, cancellationToken);
             PublishWorkspaceRefresh(request.ThreadId);
 
-            var proseRequest = new StoryMessageProseRequest(request.Mode, trimmedGuidancePrompt, generationContext, planner);
-            var proseText = await RunProseStageAsync(agent, proseRequest, generationSettings, cancellationToken);
-            await StreamMessageAsync(request.ThreadId, messageId, proseText, cancellationToken);
-            await CompleteRunAsync(request.ThreadId, runId, proseRequest, appearanceResolution, proseText, cancellationToken);
+            proseRequest = new StoryMessageProseRequest(request.Mode, trimmedGuidancePrompt, generationContext, planner);
+            failedAppearanceResolution = appearanceResolution;
+            var proseText = await StreamProseStageAsync(
+                agent,
+                request.ThreadId,
+                messageId,
+                proseRequest,
+                generationSettings,
+                streamHandler,
+                partialProseText => failedPartialProseText = partialProseText,
+                cancellationToken);
+            await CompleteRunAsync(request.ThreadId, runId, messageId, proseRequest, appearanceResolution, proseText, cancellationToken);
+            if (streamHandler is not null)
+                await streamHandler(new StorySceneMessageStreamUpdate(request.ThreadId, messageId, proseText, true), cancellationToken);
+
             PublishWorkspaceRefresh(request.ThreadId);
         }
         catch (Exception exception)
         {
             logger.LogError(exception, "Generating the story scene message failed for thread {ThreadId} and speaker {SpeakerCharacterId}.", request.ThreadId, request.SpeakerCharacterId);
-            await FailRunAsync(request.ThreadId, runId, exception, cancellationToken);
+            await FailRunAsync(
+                request.ThreadId,
+                runId,
+                proseRequest,
+                failedAppearanceResolution,
+                failedPartialProseText,
+                exception,
+                cancellationToken);
             PublishWorkspaceRefresh(request.ThreadId);
             throw;
         }
@@ -533,26 +562,40 @@ public sealed class StorySceneChatService(
             RequireValue(planner.PlanningSummary, "planner summary"));
     }
 
-    private async Task<string> RunProseStageAsync(
+    private async Task<string> StreamProseStageAsync(
         ConfiguredAgent agent,
+        Guid threadId,
+        Guid messageId,
         StoryMessageProseRequest request,
         StoryGenerationSettingsView generationSettings,
+        StorySceneMessageStreamHandler? streamHandler,
+        Action<string> partialProseTextChanged,
         CancellationToken cancellationToken)
-    {        
+    {
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
         [
             new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildProseSystemPrompt(request.Context.Actor.IsNarrator)),
             new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildProseUserPrompt(request))
         ];
 
-        var response = await agent.ChatClient.GetResponseAsync(
+        var rawProseBuilder = new StringBuilder();
+        await foreach (var update in agent.ChatClient.GetStreamingResponseAsync(
             messages,
             options: new ChatOptions { Temperature = (float)generationSettings.ProseTemperature },
-            cancellationToken: cancellationToken);
-        var prose = response.Text?.Trim();
-        var normalizedProse = string.IsNullOrWhiteSpace(prose)
-            ? string.Empty
-            : StripLeadingActorLabel(prose, request.Context.Actor);
+            cancellationToken: cancellationToken))
+        {
+            if (string.IsNullOrEmpty(update.Text))
+                continue;
+
+            rawProseBuilder.Append(update.Text);
+            var partialProseText = NormalizeProseForDisplay(rawProseBuilder.ToString(), request.Context.Actor, isFinal: false);
+            partialProseTextChanged(partialProseText);
+            if (streamHandler is not null)
+                await streamHandler(new StorySceneMessageStreamUpdate(threadId, messageId, partialProseText, false), cancellationToken);
+        }
+
+        var normalizedProse = NormalizeProseForDisplay(rawProseBuilder.ToString(), request.Context.Actor, isFinal: true);
+        partialProseTextChanged(normalizedProse);
 
         if (!string.IsNullOrWhiteSpace(normalizedProse))
             return normalizedProse;
@@ -663,30 +706,10 @@ public sealed class StorySceneChatService(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    private async Task StreamMessageAsync(Guid threadId, Guid messageId, string proseText, CancellationToken cancellationToken)
-    {
-        var chunks = ChunkMessage(proseText).ToList();
-        var builder = new StringBuilder();
-
-        foreach (var chunk in chunks)
-        {
-            builder.Append(chunk);
-            await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
-            var message = await dbContext.ChatMessages
-                .FirstAsync(x => x.Id == messageId && x.ThreadId == threadId, cancellationToken);
-            var thread = await dbContext.ChatThreads
-                .FirstAsync(x => x.Id == threadId, cancellationToken);
-
-            message.Content = builder.ToString();
-            thread.UpdatedUtc = DateTime.UtcNow;
-            await dbContext.SaveChangesAsync(cancellationToken);
-            PublishWorkspaceRefresh(threadId);
-        }
-    }
-
     private async Task CompleteRunAsync(
         Guid threadId,
         Guid runId,
+        Guid messageId,
         StoryMessageProseRequest proseRequest,
         StorySceneAppearanceResolution appearance,
         string finalMessage,
@@ -696,8 +719,14 @@ public sealed class StorySceneChatService(
         var run = await dbContext.ProcessRuns
             .Include(x => x.Steps)
             .FirstAsync(x => x.Id == runId && x.ThreadId == threadId, cancellationToken);
+        var message = await dbContext.ChatMessages
+            .FirstAsync(x => x.Id == messageId && x.ThreadId == threadId, cancellationToken);
+        var thread = await dbContext.ChatThreads
+            .FirstAsync(x => x.Id == threadId, cancellationToken);
         var now = DateTime.UtcNow;
 
+        message.Content = finalMessage;
+        thread.UpdatedUtc = now;
         run.Stage = null;
         run.Status = ProcessRunStatus.Completed;
         run.ProseCompletedUtc = now;
@@ -722,7 +751,14 @@ public sealed class StorySceneChatService(
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 
-    private async Task FailRunAsync(Guid threadId, Guid runId, Exception exception, CancellationToken cancellationToken)
+    private async Task FailRunAsync(
+        Guid threadId,
+        Guid runId,
+        StoryMessageProseRequest? proseRequest,
+        StorySceneAppearanceResolution? appearance,
+        string partialMessage,
+        Exception exception,
+        CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         var run = await dbContext.ProcessRuns
@@ -735,6 +771,32 @@ public sealed class StorySceneChatService(
         run.Status = ProcessRunStatus.Failed;
         run.CompletedUtc = now;
         run.Summary = $"The {run.Stage?.ToLowerInvariant() ?? "message generation"} stage failed.";
+
+        if (!string.IsNullOrWhiteSpace(partialMessage) && run.TargetMessageId.HasValue)
+        {
+            var message = await dbContext.ChatMessages
+                .FirstOrDefaultAsync(x => x.Id == run.TargetMessageId.Value && x.ThreadId == threadId, cancellationToken);
+            var thread = await dbContext.ChatThreads
+                .FirstAsync(x => x.Id == threadId, cancellationToken);
+
+            if (message is not null)
+                message.Content = partialMessage;
+
+            thread.UpdatedUtc = now;
+
+            if (proseRequest is not null && appearance is not null)
+            {
+                run.ContextJson = SerializeContext(new StoryMessageProcessContext(
+                    proseRequest.Mode,
+                    proseRequest.GuidancePrompt,
+                    proseRequest.Context,
+                    appearance,
+                    proseRequest.Planner,
+                    proseRequest,
+                    partialMessage,
+                    BuildCompletedStepArtifacts(proseRequest, appearance, partialMessage, "Partial Message")));
+            }
+        }
 
         var activeStep = run.Steps
             .OrderBy(x => x.SortOrder)
@@ -750,6 +812,7 @@ public sealed class StorySceneChatService(
     private async Task<GenerationBuildResult> BuildGenerationContextAsync(
         Guid threadId,
         Guid? speakerCharacterId,
+        Guid? contextLeafMessageId,
         CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -763,7 +826,9 @@ public sealed class StorySceneChatService(
             .Where(x => x.ThreadId == thread.Id)
             .OrderBy(x => x.CreatedUtc)
             .ToListAsync(cancellationToken);
-        var selectedLeafMessageId = ResolveSelectedLeafMessageId(allMessages, thread.ActiveLeafMessageId);
+        var selectedLeafMessageId = contextLeafMessageId.HasValue && allMessages.Any(x => x.Id == contextLeafMessageId.Value)
+            ? contextLeafMessageId
+            : null;
         var selectedPath = selectedLeafMessageId.HasValue
             ? BuildSelectedPath(allMessages, selectedLeafMessageId.Value)
             : [];
@@ -825,8 +890,7 @@ public sealed class StorySceneChatService(
                     ResolveSpeakerName(message, characters),
                     message.MessageKind == ChatMessageKind.Narration,
                     message.Content))
-                .ToList(),
-            appearance.TranscriptSinceLatestEntry);
+                .ToList());
 
         return new GenerationBuildResult(context, appearance);
     }
@@ -840,6 +904,11 @@ public sealed class StorySceneChatService(
                 "Narrator",
                 true,
                 "An always-present narrator who injects reliable scene facts and framing details.",
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
                 "Speak in concise descriptive prose. Introduce or clarify facts without inventing contradictions.",
                 BuildNarratorHiddenKnowledge(characters));
         }
@@ -847,21 +916,17 @@ public sealed class StorySceneChatService(
         var character = characters.FirstOrDefault(x => x.Id == speakerCharacterId.Value)
             ?? throw new InvalidOperationException("Building the scene context failed because the selected speaker could not be found.");
 
-        var details = new StringBuilder();
-        details.AppendLine($"Summary: {character.Summary}");
-        details.AppendLine($"General appearance: {character.GeneralAppearance}");
-        details.AppendLine($"Core personality: {character.CorePersonality}");
-        details.AppendLine($"Relationships: {character.Relationships}");
-        details.AppendLine($"Preferences / beliefs: {character.PreferencesBeliefs}");
-        if (!string.IsNullOrWhiteSpace(character.PrivateMotivations))
-            details.AppendLine($"Private motivations: {character.PrivateMotivations}");
-
         return new StorySceneActorContext(
             character.Id,
             character.Name,
             false,
             character.Summary,
-            details.ToString().TrimEnd(),
+            character.GeneralAppearance,
+            character.CorePersonality,
+            character.Relationships,
+            character.PreferencesBeliefs,
+            character.PrivateMotivations,
+            string.Empty,
             string.Empty);
     }
 
@@ -1102,7 +1167,7 @@ public sealed class StorySceneChatService(
         builder.AppendLine("Decide the intent and goals of the next message before any prose is written.");
         builder.AppendLine("Return a concise structured plan only.");
         builder.AppendLine("Keep the plan grounded in the provided story context, snapshot summary, and transcript.");
-        builder.AppendLine("Plan one turn only.");
+        builder.AppendLine("Plan one turn only. Stop early.");
         builder.AppendLine("Choose one immediate beat, not a sequence.");
         builder.AppendLine("A direct reaction from another character is allowed only if it happens immediately.");
         builder.AppendLine("Do not plan follow-up beats.");
@@ -1116,12 +1181,9 @@ public sealed class StorySceneChatService(
         var builder = new StringBuilder();
         builder.AppendLine(BuildContextSummary(context));
         builder.AppendLine();
-        builder.AppendLine($"Posting mode: {DescribeMode(request.Mode)}");
 
         if (request.Mode == StoryScenePostMode.GuidedAi)
-            builder.AppendLine($"Guidance prompt: {request.GuidancePrompt?.Trim()}");
-        else
-            builder.AppendLine("Guidance prompt: None. Infer the most natural next beat from the scene.");
+            builder.AppendLine($"Use this guidance to compose the next message: {request.GuidancePrompt?.Trim()}");
 
         builder.AppendLine();
         AppendTurnScopeRules(builder);
@@ -1152,8 +1214,12 @@ public sealed class StorySceneChatService(
             builder.AppendLine(
                 """
                 Write as that character speaking or acting in-scene.
-                Use actions, body language, hidden emotional state, and internal monologue selectively. Include only the details that add value to the moment by clarifying intent, strengthening subtext, or sharpening the emotional beat. Prefer the most revealing detail over multiple similar ones.
+                Use actions, body language, hidden emotional state selectively to provide subtext. Include only the details that add value to the moment by clarifying intent, strengthening subtext, or sharpening the emotional beat. Prefer the most revealing detail over multiple similar ones.
                 Keep the turn focused on its clearest emotional and narrative movement.
+                Wrap physical actions and internal non-spoken beats in asterisks: *opens the door slowly*
+                Wrap all spoken dialogue in double quotation marks: "I was waiting for you."
+                Never output unwrapped narration.
+                You may combine both in one line: *speaks politely* "Good to see you." *smiles*
                 """);
         }
         return builder.ToString().TrimEnd();
@@ -1164,6 +1230,13 @@ public sealed class StorySceneChatService(
         var builder = new StringBuilder();
         builder.AppendLine(BuildContextSummary(request.Context));
         builder.AppendLine();
+        if (!string.IsNullOrWhiteSpace(request.GuidancePrompt))
+        {
+            builder.AppendLine("Guidance to follow strictly:");
+            builder.AppendLine(request.GuidancePrompt.Trim());
+            builder.AppendLine();
+        }
+
         builder.AppendLine("Planner result:");
         builder.AppendLine(BuildPlannerDetail(request.Planner));
         builder.AppendLine();
@@ -1173,63 +1246,108 @@ public sealed class StorySceneChatService(
 
     private static void AppendTurnScopeRules(StringBuilder builder)
     {
-        builder.AppendLine("""
+        builder.AppendLine(
+        """
         Turn scope rules:
+        - Reply only as the selected actor. Do not write from any other character's perspective.
         - One turn only.
         - Keep spoken words concise like natural speech. Focus more on subtext to convey meaning instead of explicit statements.
         - Advance the scene one beat.
         - Direct reaction is okay if it happens immediately.
         - Do not fast-forward into follow-up beats.
         - Avoid duplicate sentiments; do not repeat the same emotion, hesitation, refusal, or desire in different words.
-        - Stop at the next natural pause.
+        - Stop at the first natural pause when another character may want to act.
+        Format reminder: actions use *asterisks*, speech uses "quotes". Never output unwrapped narration.
         """);
     }
 
     private static string BuildContextSummary(StorySceneGenerationContext context)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"Actor: {context.Actor.Name}");
-        builder.AppendLine($"Narrator actor: {context.Actor.IsNarrator}");
-        builder.AppendLine($"Actor summary: {context.Actor.Summary}");
-        builder.AppendLine($"Actor details: {context.Actor.Details}");
+        builder.AppendLine($"**Actor:** {context.Actor.Name}");
+        builder.AppendLine($"- Summary: {PromptInlineText(context.Actor.Summary)}");
+        if (context.Actor.IsNarrator)
+            builder.AppendLine($"- Narrator guidance: {PromptInlineText(context.Actor.NarratorGuidance, "None")}");
+        else
+        {
+            builder.AppendLine($"- General appearance: {PromptInlineText(context.Actor.GeneralAppearance, "None")}");
+            builder.AppendLine($"- Core personality: {PromptInlineText(context.Actor.CorePersonality, "None")}");
+            builder.AppendLine($"- Relationships: {PromptInlineText(context.Actor.Relationships, "None")}");
+            builder.AppendLine($"- Preferences / beliefs: {PromptInlineText(context.Actor.PreferencesBeliefs, "None")}");
+            builder.AppendLine($"- Private motivations: {PromptInlineText(context.Actor.PrivateMotivations, "None")}");
+        }
+
         if (!string.IsNullOrWhiteSpace(context.Actor.HiddenKnowledge))
-            builder.AppendLine($"Hidden knowledge: {context.Actor.HiddenKnowledge}");
-        builder.AppendLine($"Current location: {context.CurrentLocation?.Name ?? "None"}");
+            builder.AppendLine($"- Hidden knowledge: {PromptInlineText(context.Actor.HiddenKnowledge)}");
+
+        builder.AppendLine();
 
         if (context.CurrentLocation is not null)
         {
-            builder.AppendLine($"Location summary: {context.CurrentLocation.Summary}");
-            builder.AppendLine($"Location details: {context.CurrentLocation.Details}");
+            builder.AppendLine($"**Location:** {PromptInlineText(context.CurrentLocation.Name)}");
+            if (!string.IsNullOrWhiteSpace(context.CurrentLocation.Summary))
+                builder.AppendLine($"- Summary: {PromptInlineText(context.CurrentLocation.Summary)}");
+            if (!string.IsNullOrWhiteSpace(context.CurrentLocation.Details))
+                builder.AppendLine($"- Details: {PromptInlineText(context.CurrentLocation.Details)}");
+            builder.AppendLine();
         }
 
-        builder.AppendLine("Characters in the story:");
-        foreach (var character in context.Characters)
-            builder.AppendLine($"- {character.Name} | {(character.IsPresentInScene ? "In current scene" : "Not present")} | {character.Summary} | General appearance: {character.GeneralAppearance} | Current appearance: {FallbackText(character.CurrentAppearance)}");
+        var nonActorCharacters = context.Actor.CharacterId.HasValue
+            ? context.Characters.Where(x => x.CharacterId != context.Actor.CharacterId.Value).ToList()
+            : context.Characters.ToList();
+        var sceneCharacters = nonActorCharacters.Where(x => x.IsPresentInScene).ToList();
+        if (sceneCharacters.Count > 0)
+        {
+            builder.AppendLine("**Characters in the scene:**")
+                .AppendLine($"- {context.Actor.Name}");
+            foreach (var character in sceneCharacters)
+                builder.AppendLine($"- {character.Name} | {PromptInlineText(character.Summary)} | General appearance: {PromptInlineText(character.GeneralAppearance, "None")}");
+            builder.AppendLine();
+        }
+
+        var otherCharacters = nonActorCharacters.Where(x => !x.IsPresentInScene).ToList();
+        if (otherCharacters.Count > 0)
+        {
+            builder.AppendLine("**Other characters:**");
+            foreach (var character in otherCharacters)
+                builder.AppendLine($"- {character.Name} | {PromptInlineText(character.Summary)}");
+            builder.AppendLine();
+        }
 
         if (context.SceneObjects.Count > 0)
         {
-            builder.AppendLine("Objects in the scene:");
+            builder.AppendLine("**Objects in the scene:**");
             foreach (var item in context.SceneObjects)
-                builder.AppendLine($"- {item.Name} | {item.Summary}");
+                builder.AppendLine($"- {item.Name} | {PromptInlineText(item.Summary)} | Details: {PromptInlineText(item.Details, "None")}");
+            builder.AppendLine();
         }
 
-        builder.AppendLine($"History summary: {context.HistorySummary}");
-        
-        if (!string.IsNullOrEmpty(context.LatestSnapshot?.Summary))
-            builder.AppendLine($"Latest snapshot summary: {context.LatestSnapshot.Summary}");
+        if (!string.IsNullOrEmpty(context.HistorySummary))
+            builder.AppendLine($"**History summary:** {PromptInlineText(context.HistorySummary)}");
 
+        if (!string.IsNullOrEmpty(context.LatestSnapshot?.Summary))
+            builder.AppendLine($"**Snapshot:** {PromptInlineText(context.LatestSnapshot.Summary)}");
+
+        builder.AppendLine("**Transcript:**");
         if (context.TranscriptSinceSnapshot.Count > 0)
         {
-            builder.AppendLine("Transcript since latest snapshot:");
             foreach (var message in context.TranscriptSinceSnapshot)
-                builder.AppendLine($"- {message.SpeakerName}: {message.Content}");
+                builder.AppendLine($"- {message.SpeakerName}: {PromptInlineText(message.Content, "None")}");
         }
-
-        if (context.TranscriptSinceLatestAppearance.Count > 0)
+        else
         {
-            builder.AppendLine("Transcript since latest appearance entry:");
-            foreach (var message in context.TranscriptSinceLatestAppearance)
-                builder.AppendLine($"- {message.SpeakerName}: {message.Content}");
+            builder.AppendLine("- None");
+        }
+        builder.AppendLine();
+
+        var currentAppearanceCharacters = context.Characters
+            .Where(x => x.IsPresentInScene && !string.IsNullOrWhiteSpace(x.CurrentAppearance))
+            .ToList();
+        if (currentAppearanceCharacters.Count > 0)
+        {
+            builder.AppendLine("**Character appearances:**");
+            foreach (var character in currentAppearanceCharacters)
+                builder.AppendLine($"- {character.Name}: {PromptInlineText(character.CurrentAppearance, "None")}");
         }
 
         return builder.ToString().TrimEnd();
@@ -1238,26 +1356,25 @@ public sealed class StorySceneChatService(
     private static string BuildPlannerDetail(StoryMessagePlannerResult planner)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"Intent: {planner.Intent}");
-        builder.AppendLine($"Immediate goal: {planner.ImmediateGoal}");
-        builder.AppendLine($"Emotional stance: {planner.EmotionalStance}");
-        builder.AppendLine($"Target addressees: {FormatList(planner.TargetAddressees)}");
-        builder.AppendLine($"Required factual beats: {FormatList(planner.RequiredFactualBeats)}");
-        builder.AppendLine($"Guardrails: {FormatList(planner.Guardrails)}");
-        builder.AppendLine($"Planning summary: {planner.PlanningSummary}");
+        builder.AppendLine($"**Intent:** {planner.Intent}");
+        builder.AppendLine($"**Immediate goal:** {planner.ImmediateGoal}");
+        builder.AppendLine($"**Emotional stance:** {planner.EmotionalStance}");
+        builder.AppendLine($"**Target addressees:** {FormatList(planner.TargetAddressees)}");
+        builder.AppendLine($"**Required factual beats:** {FormatList(planner.RequiredFactualBeats)}");
+        builder.AppendLine($"**Guardrails:** {FormatList(planner.Guardrails)}");
+        builder.AppendLine($"**Planning summary:** {planner.PlanningSummary}");
         return builder.ToString().TrimEnd();
     }
 
     private static string BuildProseDetail(StoryMessageProseRequest request, string finalMessage)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"Mode: {DescribeMode(request.Mode)}");
         if (!string.IsNullOrWhiteSpace(request.GuidancePrompt))
-            builder.AppendLine($"Guidance prompt: {request.GuidancePrompt}");
+            builder.AppendLine($"**Guidance prompt:** {request.GuidancePrompt}");
 
-        builder.AppendLine($"Actor: {request.Context.Actor.Name}");
-        builder.AppendLine($"Planner summary: {request.Planner.PlanningSummary}");
-        builder.AppendLine("Final message:");
+        builder.AppendLine($"**Actor:** {request.Context.Actor.Name}");
+        builder.AppendLine($"**Planner summary:** {request.Planner.PlanningSummary}");
+        builder.AppendLine("**Final message:**");
         builder.AppendLine(finalMessage);
         return builder.ToString().TrimEnd();
     }
@@ -1271,8 +1388,8 @@ public sealed class StorySceneChatService(
         }
         else
         {
-            builder.AppendLine($"Latest appearance block: {appearance.LatestEntry?.Summary ?? "None"}");
-            builder.AppendLine("Effective current appearance:");
+            builder.AppendLine($"**Latest appearance block:** {appearance.LatestEntry?.Summary ?? "None"}");
+            builder.AppendLine("**Current appearances:**");
             foreach (var character in appearance.EffectiveCharacters)
                 builder.AppendLine($"- {character.CharacterName}: {FallbackText(character.CurrentAppearance)}");
         }
@@ -1280,36 +1397,26 @@ public sealed class StorySceneChatService(
         return builder.ToString().TrimEnd();
     }
 
-    private static IEnumerable<string> ChunkMessage(string text)
+    private static string NormalizeProseForDisplay(string text, StorySceneActorContext actor, bool isFinal)
     {
         if (string.IsNullOrWhiteSpace(text))
-        {
-            yield return string.Empty;
-            yield break;
-        }
+            return string.Empty;
 
-        var index = 0;
-        while (index < text.Length)
-        {
-            var length = Math.Min(180, text.Length - index);
-            yield return text.Substring(index, length);
-            index += length;
-        }
-    }
-
-    private static string StripLeadingActorLabel(string text, StorySceneActorContext actor)
-    {
+        var normalizedText = isFinal ? text.Trim() : text.TrimStart();
         if (actor.IsNarrator)
-            return text;
+            return normalizedText;
 
-        if (!text.StartsWith(actor.Name, StringComparison.Ordinal))
-            return text;
+        if (!normalizedText.StartsWith(actor.Name, StringComparison.Ordinal))
+            return normalizedText;
 
         var labelEndIndex = actor.Name.Length;
-        if (text.Length == labelEndIndex || text[labelEndIndex] != ':')
-            return text;
+        if (normalizedText.Length == labelEndIndex)
+            return isFinal ? normalizedText : string.Empty;
 
-        return text[(labelEndIndex + 1)..].TrimStart();
+        if (normalizedText[labelEndIndex] != ':')
+            return normalizedText;
+
+        return normalizedText[(labelEndIndex + 1)..].TrimStart();
     }
 
     private static string BuildHistorySummary(ChatStoryHistoryDocument history)
@@ -1659,7 +1766,8 @@ public sealed class StorySceneChatService(
     private static IReadOnlyList<StoryMessageProcessStepArtifact> BuildCompletedStepArtifacts(
         StoryMessageProseRequest proseRequest,
         StorySceneAppearanceResolution appearance,
-        string finalMessage)
+        string finalMessage,
+        string messageTitle = "Final Message")
     {
         return
         [
@@ -1681,7 +1789,7 @@ public sealed class StorySceneChatService(
                 "writing",
                 "Writing",
                 BuildWritingInputBlocks(proseRequest),
-                [new StoryMessageProcessTextBlock("Final Message", finalMessage)])
+                [new StoryMessageProcessTextBlock(messageTitle, finalMessage)])
         ];
     }
 
@@ -1736,14 +1844,21 @@ public sealed class StorySceneChatService(
 
     private static string FallbackText(string? value) => string.IsNullOrWhiteSpace(value) ? "Unknown" : value.Trim();
 
+    private static string PromptInlineText(string? value, string fallback = "Unknown") =>
+        string.IsNullOrWhiteSpace(value) ? fallback : CollapseWhitespace(value);
+
+    private static string CollapseWhitespace(string value) =>
+        string.Join(" ", value
+            .Split([' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
     private static string BuildAppearanceContextSummary(StorySceneGenerationContext context, StorySceneAppearanceResolution appearance)
     {
         var builder = new StringBuilder();
         builder.AppendLine("Characters currently in the scene:");
         foreach (var character in context.Characters.Where(x => x.IsPresentInScene))
-            builder.AppendLine($"- {character.Name} | General appearance: {character.GeneralAppearance} | Prior current appearance: {FallbackText(character.CurrentAppearance)}");
+            builder.AppendLine($"- {character.Name} | General appearance: {PromptInlineText(character.GeneralAppearance, "None")} | Prior current appearance: {PromptInlineText(character.CurrentAppearance, "None")}");
 
-        builder.AppendLine("Transcript since latest appearance entry:");
+        builder.AppendLine("Transcript:");
         if (appearance.TranscriptSinceLatestEntry.Count == 0)
         {
             builder.AppendLine("- None");
@@ -1751,7 +1866,7 @@ public sealed class StorySceneChatService(
         else
         {
             foreach (var message in appearance.TranscriptSinceLatestEntry)
-                builder.AppendLine($"- {message.SpeakerName}: {message.Content}");
+                builder.AppendLine($"- {message.SpeakerName}: {PromptInlineText(message.Content, "None")}");
         }
 
         return builder.ToString().TrimEnd();

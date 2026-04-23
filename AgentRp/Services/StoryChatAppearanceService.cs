@@ -80,7 +80,7 @@ public sealed class StoryChatAppearanceService(
         return new StorySceneAppearanceResolution(
             MapEntry(entry, story, true, resolvedCharacters),
             resolvedCharacters,
-            []);
+            transcriptSinceLatestEntry);
     }
 
     public async Task<IReadOnlyList<StorySceneAppearanceEntryView>> GetEntriesForPathAsync(

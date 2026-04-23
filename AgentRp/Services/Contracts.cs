@@ -561,7 +561,12 @@ public sealed record StorySceneActorContext(
     string Name,
     bool IsNarrator,
     string Summary,
-    string Details,
+    string GeneralAppearance,
+    string CorePersonality,
+    string Relationships,
+    string PreferencesBeliefs,
+    string PrivateMotivations,
+    string NarratorGuidance,
     string HiddenKnowledge);
 
 public sealed record StorySceneLocationContext(
@@ -599,8 +604,7 @@ public sealed record StorySceneGenerationContext(
     IReadOnlyList<StorySceneObjectContext> SceneObjects,
     string HistorySummary,
     StoryChatSnapshotSummaryView? LatestSnapshot,
-    IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceSnapshot,
-    IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceLatestAppearance);
+    IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceSnapshot);
 
 public sealed record StoryMessagePlannerResult(
     string Intent,
@@ -637,13 +641,26 @@ public sealed record StoryMessageProcessTextBlock(
     string Title,
     string Content);
 
+public sealed record StorySceneMessageStreamUpdate(
+    Guid ThreadId,
+    Guid MessageId,
+    string Content,
+    bool IsFinal);
+
+public delegate Task StorySceneMessageStreamHandler(
+    StorySceneMessageStreamUpdate update,
+    CancellationToken cancellationToken);
+
 public interface IStorySceneChatService
 {
     Task<StorySceneChatState?> GetChatStateAsync(Guid threadId, CancellationToken cancellationToken);
 
     Task SelectSpeakerAsync(Guid threadId, Guid? speakerCharacterId, CancellationToken cancellationToken);
 
-    Task PostMessageAsync(PostStorySceneMessage request, CancellationToken cancellationToken);
+    Task PostMessageAsync(
+        PostStorySceneMessage request,
+        StorySceneMessageStreamHandler? streamHandler,
+        CancellationToken cancellationToken);
 
     Task UpdateMessageAsync(ChatMessageUpdate request, CancellationToken cancellationToken);
 
