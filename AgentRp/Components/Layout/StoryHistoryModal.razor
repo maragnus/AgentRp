@@ -819,7 +819,6 @@
 
             _storyContext = (_storyContext ?? new StoryContextView(settings, [], [])) with { NarrativeSettings = settings };
             LoadNarrativeSettings();
-            UserFeedbackService.ShowBackgroundSuccess("Story context saved.", "Story Context");
             await NotifyChangedAsync();
         }
         catch (Exception exception)
@@ -853,7 +852,6 @@
                 CancellationToken.None);
 
             await LoadAsync(savedFact.FactId, _selectedTimelineEntryId);
-            UserFeedbackService.ShowBackgroundSuccess($"Fact '{BuildFactDisplayName()}' saved.", "Story Context");
             await NotifyChangedAsync();
         }
         catch (Exception exception)
@@ -880,7 +878,6 @@
         {
             await ChatStoryService.DeleteHistoryFactAsync(new DeleteHistoryFact(ThreadId, _selectedFactId.Value), CancellationToken.None);
             await LoadAsync(null, _selectedTimelineEntryId);
-            UserFeedbackService.ShowBackgroundSuccess($"Fact '{displayName}' deleted.", "Story Context");
             await NotifyChangedAsync();
         }
         catch (Exception exception)
@@ -916,7 +913,6 @@
                 CancellationToken.None);
 
             await LoadAsync(_selectedFactId, savedEntry.TimelineEntryId);
-            UserFeedbackService.ShowBackgroundSuccess($"Timeline entry '{BuildTimelineDisplayName()}' saved.", "Story Context");
             await NotifyChangedAsync();
         }
         catch (Exception exception)
@@ -943,7 +939,6 @@
         {
             await ChatStoryService.DeleteTimelineEntryAsync(new DeleteTimelineEntry(ThreadId, _selectedTimelineEntryId.Value), CancellationToken.None);
             await LoadAsync(_selectedFactId, null);
-            UserFeedbackService.ShowBackgroundSuccess($"Timeline entry '{displayName}' deleted.", "Story Context");
             await NotifyChangedAsync();
         }
         catch (Exception exception)

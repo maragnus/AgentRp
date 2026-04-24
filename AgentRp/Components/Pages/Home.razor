@@ -31,9 +31,8 @@ else if (_chat is null)
 }
 else
 {
-    var selectedSpeakerAiPostAction = GetAdaptiveAiPostAction(respond: false);
-    var respondAiPostAction = GetAdaptiveAiPostAction(respond: true);
-    var showRespondAiPostAction = !_retrySourceMessageId.HasValue;
+    var selectedSpeakerAiPostAction = GetAdaptiveAiPostAction();
+    var showRespondAsPicker = !_retrySourceMessageId.HasValue;
 
     <div class="d-flex h-100 flex-column bg-body shadow-sm">
         <div class="flex-shrink-0 border-bottom bg-body px-3 py-3 px-lg-4">
@@ -59,20 +58,20 @@ else
                                              OnClick="() => StopSceneRunAsync(ActiveRunningProcess.RunId)" />
                     }
 
-                    <BusyButton Class="btn btn-outline-secondary btn-sm"
+                    <BusyButton Class="btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button d-lg-none"
                                 OnClick="ToggleProcessPanelsAsync"
                                 IsBusy="@_isUpdatingDisplayPreferences"
                                 BusyText="Saving..."
+                                ShowBusyText="false"
                                 title="@ProcessPanelsToggleTitle"
                                 aria-label="@ProcessPanelsToggleTitle">
-                        <i class="fa-regular @ProcessPanelsToggleIconCss me-2" aria-hidden="true"></i>
-                        @ProcessPanelsToggleText
+                        <i class="fa-regular @ProcessPanelsToggleIconCss" aria-hidden="true"></i>
                     </BusyButton>
                 </div>
             </div>
         </div>
 
-        <div class="flex-grow-1 overflow-auto px-3 py-3 px-lg-4">
+        <div class="flex-grow-1 overflow-auto px-3 py-3 px-lg-4" @ref="_chatLogScrollContainer">
             @if (_chat.Transcript.Count == 0)
             {
                 <div class="d-flex h-100 align-items-center justify-content-center">
@@ -84,7 +83,7 @@ else
                                 </div>
                                 <h2 class="h4 mb-2">Start the scene</h2>
                                 <p class="text-body-secondary mb-0">
-                                    Pick a speaker in the sidebar, then use Guided or Automatic for that character, or use Respond Guided or Respond Automatic to have another present character answer next. AI posts show live process details while they run.
+                                    Pick a speaker in the sidebar, then use Guided or Automatic for that character, or use Respond As to choose exactly who answers next. AI posts show live process details while they run.
                                 </p>
                             </div>
                         </div>
@@ -110,7 +109,6 @@ else
                         var isEditing = message is not null && _editingMessageId == message.MessageId;
                         var isSnapshotExpanded = snapshot is not null && IsSnapshotExpanded(snapshot.SnapshotId);
                         var canRetryMessage = message is not null && CanRetryMessage(message);
-                        var canChangeMessageSpeaker = message is not null && CanChangeMessageSpeakerToSelectedSpeaker(message);
                         var canRegenerateProse = message is not null && CanRegenerateProse(message);
                         var canEditSavedPlan = message is not null && CanEditSavedPlan(message);
                         var displayContent = message is null ? string.Empty : GetDisplayContent(message);
@@ -506,19 +504,52 @@ else
                                                             </BusyButton>
                                                         }
 
-                                                        @if (canChangeMessageSpeaker)
-                                                        {
-                                                            <BusyButton Class="btn btn-outline-primary btn-sm"
-                                                                        OnClick="() => ChangeMessageSpeakerToSelectedSpeakerAsync(message)"
-                                                                        IsBusy="@(_reassigningMessageId == message.MessageId)"
-                                                                        BusyText=""
-                                                                        ShowBusyText="false"
-                                                                        Disabled="@(IsSceneInteractionLocked || _reassigningMessageId.HasValue)"
-                                                                        title="Change sender to you"
-                                                                        aria-label="Change sender to you">
+                                                        <div class="dropdown">
+                                                            <button type="button"
+                                                                    class="btn btn-outline-primary btn-sm dropdown-toggle"
+                                                                    data-bs-toggle="dropdown"
+                                                                    data-bs-auto-close="true"
+                                                                    aria-expanded="false"
+                                                                    title="Change author"
+                                                                    aria-label="Change author"
+                                                                    disabled="@(IsSceneInteractionLocked || _reassigningMessageId.HasValue)">
                                                                 <i class="fa-regular fa-user-pen" aria-hidden="true"></i>
-                                                            </BusyButton>
-                                                        }
+                                                            </button>
+                                                            <ul class="dropdown-menu dropdown-menu-end shadow">
+                                                                @foreach (var author in _chat.AvailableSpeakers)
+                                                                {
+                                                                    var isCurrentAuthor = IsCurrentMessageAuthor(message, author.CharacterId);
+                                                                    var authorKey = BuildAuthorKey(author.CharacterId);
+                                                                    var isBusyAuthor = _reassigningMessageId == message.MessageId && _reassigningAuthorKey == authorKey;
+                                                                    var authorItemClass = $"dropdown-item d-flex align-items-center justify-content-between gap-3{(isCurrentAuthor ? " active" : string.Empty)}";
+
+                                                                    <li>
+                                                                        <BusyButton Class="@authorItemClass"
+                                                                                    OnClick="() => ChangeMessageSpeakerAsync(message, author)"
+                                                                                    IsBusy="@isBusyAuthor"
+                                                                                    BusyText="Changing..."
+                                                                                    ShowBusyText="true"
+                                                                                    Disabled="@(IsSceneInteractionLocked || isCurrentAuthor)"
+                                                                                    aria-current="@(isCurrentAuthor ? "true" : null)">
+                                                                            <span class="d-flex align-items-center gap-2">
+                                                                                <i class="fa-regular @(author.IsNarrator ? "fa-feather" : "fa-user") fa-fw" aria-hidden="true"></i>
+                                                                                <span>@author.Name</span>
+                                                                            </span>
+                                                                            @if (author.IsNarrator)
+                                                                            {
+                                                                                <span class="badge text-bg-info">Narrator</span>
+                                                                            }
+                                                                            else
+                                                                            {
+                                                                                <span class="badge @(author.IsPresentInScene ? "text-bg-success" : "text-bg-light border text-body-secondary")">
+                                                                                    @(author.IsPresentInScene ? "In Scene" : "Out of Scene")
+                                                                                </span>
+                                                                            }
+                                                                        </BusyButton>
+                                                                    </li>
+                                                                }
+                                                            </ul>
+                                                        </div>
 
                                                         @if (canRegenerateProse)
                                                         {
@@ -748,7 +779,7 @@ else
                     <textarea id="scene-message-input" style="field-sizing: content; height: auto;"
                                 class="form-control mb-2"
                                 rows="4"
-                                placeholder="Write a direct message or add optional guidance for Guided or Respond Guided..."
+                                placeholder="Write a direct message or add optional guidance..."
                                 @bind="_draftText"
                                 @bind:event="oninput"
                                 disabled="@IsSceneInteractionLocked"></textarea>
@@ -762,9 +793,9 @@ else
                     <div class="d-flex flex-wrap justify-content-end gap-2">
                         <BusyButton Class="btn btn-primary"
                                     OnClick="() => PostAsync(selectedSpeakerAiPostAction.Mode)"
-                                    IsBusy="@(_submittingMode == selectedSpeakerAiPostAction.Mode)"
+                                    IsBusy="@(_submittingMode == selectedSpeakerAiPostAction.Mode && _submittingAuthorKey is null)"
                                     BusyText="Generating..."
-                                    Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && _submittingMode != selectedSpeakerAiPostAction.Mode))"
+                                    Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && !(_submittingMode == selectedSpeakerAiPostAction.Mode && _submittingAuthorKey is null)))"
                                     ShowBusyText="false"
                                     title="@selectedSpeakerAiPostAction.Title"
                                     aria-label="@selectedSpeakerAiPostAction.Title">
@@ -772,26 +803,75 @@ else
                             @selectedSpeakerAiPostAction.Label
                         </BusyButton>
 
-                        @if (showRespondAiPostAction)
+                        @if (showRespondAsPicker)
                         {
-                            <BusyButton Class="btn btn-outline-primary"
-                                        OnClick="() => PostAsync(respondAiPostAction.Mode)"
-                                        IsBusy="@(_submittingMode == respondAiPostAction.Mode)"
-                                        BusyText="Generating..."
-                                        Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && _submittingMode != respondAiPostAction.Mode))"
-                                        ShowBusyText="false"
-                                        title="@respondAiPostAction.Title"
-                                        aria-label="@respondAiPostAction.Title">
-                                <i class="@respondAiPostAction.IconCssClass" aria-hidden="true"></i>
-                                @respondAiPostAction.Label
-                            </BusyButton>
+                            <div class="dropdown">
+                                <button type="button"
+                                        class="btn btn-outline-primary dropdown-toggle"
+                                        data-bs-toggle="dropdown"
+                                        data-bs-auto-close="true"
+                                        aria-expanded="false"
+                                        title="Respond as"
+                                        aria-label="Respond as"
+                                        disabled="@(!_chat.IsAiAvailable || IsSceneInteractionLocked)">
+                                    <i class="fa-regular fa-reply me-2" aria-hidden="true"></i>
+                                    Respond As
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end shadow">
+                                    @foreach (var author in _chat.AvailableSpeakers)
+                                    {
+                                        var authorKey = BuildAuthorKey(author.CharacterId);
+                                        var isBusyAuthor = _submittingAuthorKey == authorKey;
+                                        var authorItemClass = "dropdown-item d-flex align-items-center justify-content-between gap-3";
+
+                                        <li>
+                                            <BusyButton Class="@authorItemClass"
+                                                        OnClick="() => PostRespondAsAsync(author)"
+                                                        IsBusy="@isBusyAuthor"
+                                                        BusyText="Generating..."
+                                                        ShowBusyText="true"
+                                                        Disabled="@(!_chat.IsAiAvailable || IsSceneInteractionLocked)">
+                                                <span class="d-flex align-items-center gap-2">
+                                                    <i class="fa-regular @(author.IsNarrator ? "fa-feather" : "fa-user") fa-fw" aria-hidden="true"></i>
+                                                    <span>@author.Name</span>
+                                                </span>
+                                                @if (author.IsNarrator)
+                                                {
+                                                    <span class="badge text-bg-info">Narrator</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="badge @(author.IsPresentInScene ? "text-bg-success" : "text-bg-light border text-body-secondary")">
+                                                        @(author.IsPresentInScene ? "In Scene" : "Out of Scene")
+                                                    </span>
+                                                }
+                                            </BusyButton>
+                                        </li>
+                                    }
+                                    <li><hr class="dropdown-divider" /></li>
+                                    <li>
+                                        <BusyButton Class="dropdown-item d-flex align-items-center justify-content-between gap-3"
+                                                    OnClick="PostRespondAutoselectAsync"
+                                                    IsBusy="@(_submittingAuthorKey == AutoselectAuthorKey)"
+                                                    BusyText="Generating..."
+                                                    ShowBusyText="true"
+                                                    Disabled="@(!_chat.IsAiAvailable || IsSceneInteractionLocked)">
+                                            <span class="d-flex align-items-center gap-2">
+                                                <i class="fa-regular fa-wand-magic-sparkles fa-fw" aria-hidden="true"></i>
+                                                <span>Autoselect</span>
+                                            </span>
+                                            <span class="badge text-bg-light border text-body-secondary">AI</span>
+                                        </BusyButton>
+                                    </li>
+                                </ul>
+                            </div>
                         }
 
                         <BusyButton Class="btn btn-outline-primary"
                                     OnClick="() => PostAsync(StoryScenePostMode.Manual)"
-                                    IsBusy="@(_submittingMode == StoryScenePostMode.Manual)"
+                                    IsBusy="@(_submittingMode == StoryScenePostMode.Manual && _submittingAuthorKey is null)"
                                     BusyText="Posting..."
-                                    Disabled="@(!HasDraftText || (IsSceneInteractionLocked && _submittingMode != StoryScenePostMode.Manual))"
+                                    Disabled="@(!HasDraftText || (IsSceneInteractionLocked && !(_submittingMode == StoryScenePostMode.Manual && _submittingAuthorKey is null)))"
                                     ShowBusyText="false"
                                     title="Direct posts your exact text"
                                     aria-label="Direct posts your exact text">
@@ -1010,16 +1090,20 @@ else
     [CascadingParameter]
     private AppShellState? ShellState { get; set; }
 
+    private RenderFragment? _desktopHeaderAction;
     private IDisposable? _workspaceSubscription;
+    private const string AutoselectAuthorKey = "autoselect";
     private Guid? _appliedThreadId;
     private bool _isLoading = true;
     private bool _isSubmitting;
     private StoryScenePostMode? _submittingMode;
+    private string? _submittingAuthorKey;
     private string _draftText = string.Empty;
     private Guid? _retrySourceMessageId;
     private string? _retrySpeakerName;
     private Guid? _startingRetryMessageId;
     private Guid? _reassigningMessageId;
+    private string? _reassigningAuthorKey;
     private Guid? _regeneratingProseMessageId;
     private Guid? _editingMessageId;
     private string _editingDraft = string.Empty;
@@ -1060,6 +1144,8 @@ else
     private readonly HashSet<Guid> _stoppingRunIds = [];
     private System.Threading.Timer? _processDurationRefreshTimer;
     private IModelOperationHandle? _snapshotDraftOperation;
+    private ElementReference _chatLogScrollContainer;
+    private bool _scrollChatLogToBottom;
     private bool _isStoppingSnapshotDraft;
     private string? _snapshotDraftStatusMessage;
     private bool HasDraftText => !string.IsNullOrWhiteSpace(_draftText);
@@ -1072,9 +1158,20 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        _desktopHeaderAction = RenderDesktopHeaderAction;
+        ShellState?.SetDesktopHeaderAction(_desktopHeaderAction);
         _workspaceSubscription = ActivityNotifier.Subscribe(ActivityStreams.StoryChatWorkspace, _ => InvokeAsync(HandleWorkspaceUpdatedAsync));
         await LoadDisplayPreferencesAsync();
         await base.OnInitializedAsync();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (_desktopHeaderAction is null)
+        {
+            _desktopHeaderAction = RenderDesktopHeaderAction;
+            ShellState?.SetDesktopHeaderAction(_desktopHeaderAction);
+        }
     }
 
     protected override async Task OnParametersSetAsync()
@@ -1100,8 +1197,28 @@ else
 
     public void Dispose()
     {
+        if (_desktopHeaderAction is not null)
+            ShellState?.SetDesktopHeaderAction(null);
+
         _workspaceSubscription?.Dispose();
         _processDurationRefreshTimer?.Dispose();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_scrollChatLogToBottom)
+            return;
+
+        _scrollChatLogToBottom = false;
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("agentRp.scrollToBottom", _chatLogScrollContainer);
+        }
+        catch (JSDisconnectedException exception)
+        {
+            Logger.LogDebug(exception, "Skipping chat log scroll because the browser circuit is disconnected.");
+        }
     }
 
     private async Task HandleWorkspaceUpdatedAsync()
@@ -1112,11 +1229,16 @@ else
 
     private async Task LoadChatAsync(Guid threadId)
     {
+        var previousThreadId = _chat?.ThreadId;
+        var previousMessageCount = GetTranscriptMessageCount(_chat);
         _chat = await StorySceneChatService.GetChatStateAsync(threadId, CancellationToken.None);
         _processDurationNowUtc = DateTime.UtcNow;
 
         if (_chat is not null)
         {
+            if (previousThreadId != _chat.ThreadId || GetTranscriptMessageCount(_chat) > previousMessageCount)
+                ScheduleChatLogScrollToBottom();
+
             foreach (var process in _chat.Transcript.Select(x => x.Message).Where(x => x?.Process is not null).Select(x => x!.Process!))
             {
                 _expandedProcessRunStates.TryAdd(process.RunId, false);
@@ -1181,6 +1303,7 @@ else
             else
                 _streamedMessageContent[update.MessageId] = update.Content;
 
+            ScheduleChatLogScrollToBottom();
             StateHasChanged();
         });
     }
@@ -1224,6 +1347,29 @@ else
         if (_chat is null)
             return;
 
+        await PostAsAsync(mode, _chat.SelectedSpeaker.CharacterId, null);
+    }
+
+    private Task PostRespondAsAsync(StorySceneSpeakerView author)
+    {
+        var mode = HasDraftText ? StoryScenePostMode.GuidedAi : StoryScenePostMode.AutomaticAi;
+        return PostAsAsync(mode, author.CharacterId, BuildAuthorKey(author.CharacterId));
+    }
+
+    private Task PostRespondAutoselectAsync()
+    {
+        if (_chat is null)
+            return Task.CompletedTask;
+
+        var mode = HasDraftText ? StoryScenePostMode.RespondGuidedAi : StoryScenePostMode.RespondAutomaticAi;
+        return PostAsAsync(mode, _chat.SelectedSpeaker.CharacterId, AutoselectAuthorKey);
+    }
+
+    private async Task PostAsAsync(StoryScenePostMode mode, Guid? speakerCharacterId, string? submittingAuthorKey)
+    {
+        if (_chat is null)
+            return;
+
         _errorMessage = null;
 
         if (mode != StoryScenePostMode.Manual && !_chat.IsAiAvailable)
@@ -1247,6 +1393,7 @@ else
         }
 
         _submittingMode = mode;
+        _submittingAuthorKey = submittingAuthorKey;
         _isSubmitting = true;
         var retrySourceMessageId = _retrySourceMessageId;
 
@@ -1255,7 +1402,7 @@ else
             await StorySceneChatService.PostMessageAsync(
                 new PostStorySceneMessage(
                     _chat.ThreadId,
-                    _chat.SelectedSpeaker.CharacterId,
+                    speakerCharacterId,
                     mode,
                     mode == StoryScenePostMode.Manual ? _draftText : null,
                     UsesGuidance(mode) ? _draftText : null,
@@ -1268,8 +1415,6 @@ else
             ClearRetryState(clearDraft: false);
             await LoadChatAsync(_chat.ThreadId);
             ClearStreamedMessageContent();
-            if (mode != StoryScenePostMode.Manual)
-                UserFeedbackService.ShowBackgroundSuccess(BuildPostSuccessMessage(mode), "Scene Updated");
         }
         catch (OperationCanceledException)
         {
@@ -1300,6 +1445,7 @@ else
         {
             _isSubmitting = false;
             _submittingMode = null;
+            _submittingAuthorKey = null;
         }
     }
 
@@ -1360,11 +1506,6 @@ else
         ClearRetryState(clearDraft: false);
     }
 
-    private bool CanChangeMessageSpeakerToSelectedSpeaker(StorySceneMessageView message) =>
-        _chat?.SelectedSpeaker.CharacterId is Guid selectedSpeakerCharacterId
-        && message.SpeakerCharacterId.HasValue
-        && message.SpeakerCharacterId.Value != selectedSpeakerCharacterId;
-
     private bool CanRetryMessage(StorySceneMessageView message) =>
         message.Process?.Status != ProcessRunStatus.Running;
 
@@ -1400,7 +1541,6 @@ else
 
             await LoadChatAsync(_chat.ThreadId);
             ClearStreamedMessageContent();
-            UserFeedbackService.ShowBackgroundSuccess($"The prose was regenerated for {message.CanonicalSpeakerName}.", "Scene Updated");
         }
         catch (OperationCanceledException)
         {
@@ -1423,13 +1563,14 @@ else
         }
     }
 
-    private async Task ChangeMessageSpeakerToSelectedSpeakerAsync(StorySceneMessageView message)
+    private async Task ChangeMessageSpeakerAsync(StorySceneMessageView message, StorySceneSpeakerView author)
     {
-        if (_chat?.SelectedSpeaker.CharacterId is not Guid selectedSpeakerCharacterId || IsSceneInteractionLocked || !CanChangeMessageSpeakerToSelectedSpeaker(message))
+        if (_chat is null || IsSceneInteractionLocked || IsCurrentMessageAuthor(message, author.CharacterId))
             return;
 
         _isSubmitting = true;
         _reassigningMessageId = message.MessageId;
+        _reassigningAuthorKey = BuildAuthorKey(author.CharacterId);
         _errorMessage = null;
 
         try
@@ -1437,30 +1578,32 @@ else
             CancelInlineEdit();
             ClearRetryState(clearDraft: false);
 
-            var result = await StorySceneChatService.ChangeMessageSpeakerAsync(
-                new ChangeStorySceneMessageSpeaker(_chat.ThreadId, message.MessageId, selectedSpeakerCharacterId),
+            await StorySceneChatService.ChangeMessageSpeakerAsync(
+                new ChangeStorySceneMessageSpeaker(_chat.ThreadId, message.MessageId, author.CharacterId),
                 CancellationToken.None);
 
-            var selectedSpeakerName = _chat.SelectedSpeaker.Name;
             await LoadChatAsync(_chat.ThreadId);
-            UserFeedbackService.ShowBackgroundSuccess(
-                result.CreatedBranch
-                    ? $"The message now speaks as {selectedSpeakerName} in a new branch because the original is already covered by a snapshot."
-                    : $"The message now speaks as {selectedSpeakerName}.",
-                "Sender Updated");
         }
         catch (Exception exception)
         {
-            Logger.LogError(exception, "Changing the speaker for story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
-            _errorMessage = "Changing the message speaker failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Sender Update Failed");
+            Logger.LogError(exception, "Changing the author for story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
+            _errorMessage = "Changing the author for this scene message failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Author Update Failed");
         }
         finally
         {
             _isSubmitting = false;
             _reassigningMessageId = null;
+            _reassigningAuthorKey = null;
         }
     }
+
+    private static bool IsCurrentMessageAuthor(StorySceneMessageView message, Guid? characterId) =>
+        characterId.HasValue
+            ? message.SpeakerCharacterId == characterId.Value && !message.IsNarrator
+            : message.IsNarrator && !message.SpeakerCharacterId.HasValue;
+
+    private static string BuildAuthorKey(Guid? characterId) => characterId?.ToString("N") ?? "narrator";
 
     private static string BuildRetryDraftText(StorySceneMessageView message)
     {
@@ -1551,10 +1694,8 @@ else
                         NormalizePlanDraftGuardrails(_planDraftContentGuardrails))),
                 CancellationToken.None);
 
-            var speakerName = message.CanonicalSpeakerName;
             ResetPlanEditState();
             await LoadChatAsync(_chat.ThreadId);
-            UserFeedbackService.ShowBackgroundSuccess($"The saved plan was updated for {speakerName}.", "Plan Updated");
         }
         catch (Exception exception)
         {
@@ -1788,9 +1929,7 @@ else
             return Task.CompletedTask;
 
         _isStoppingSnapshotDraft = true;
-        if (ModelOperationRegistry.TryCancel(_snapshotDraftOperation.OperationId))
-            UserFeedbackService.ShowBackgroundInfo("Stopping the snapshot draft generation.", "Stopping");
-        else
+        if (!ModelOperationRegistry.TryCancel(_snapshotDraftOperation.OperationId))
             _isStoppingSnapshotDraft = false;
 
         StateHasChanged();
@@ -1844,16 +1983,6 @@ else
         _ => mode.ToString()
     };
 
-    private static string BuildPostSuccessMessage(StoryScenePostMode mode) => mode switch
-    {
-        StoryScenePostMode.Manual => "The scene message was posted.",
-        StoryScenePostMode.GuidedAi => "The guided scene message was generated.",
-        StoryScenePostMode.AutomaticAi => "The automatic scene message was generated.",
-        StoryScenePostMode.RespondGuidedAi => "The guided response was generated.",
-        StoryScenePostMode.RespondAutomaticAi => "The automatic response was generated.",
-        _ => "The scene was updated."
-    };
-
     private static bool UsesGuidance(StoryScenePostMode mode) =>
         mode is StoryScenePostMode.GuidedAi or StoryScenePostMode.RespondGuidedAi;
 
@@ -1863,24 +1992,8 @@ else
     private static bool IgnoresDraft(StoryScenePostMode mode) =>
         mode is StoryScenePostMode.AutomaticAi or StoryScenePostMode.RespondAutomaticAi;
 
-    private AdaptiveAiPostAction GetAdaptiveAiPostAction(bool respond)
-    {
-        if (respond)
-        {
-            return HasDraftText
-                ? new AdaptiveAiPostAction(
-                    StoryScenePostMode.RespondGuidedAi,
-                    "Respond Guided",
-                    "Respond Guided chooses another present character and uses your guidance",
-                    "fa-regular fa-reply me-2")
-                : new AdaptiveAiPostAction(
-                    StoryScenePostMode.RespondAutomaticAi,
-                    "Respond Automatic",
-                    "Respond Automatic chooses another present character and ignores the textbox",
-                    "fa-regular fa-reply-all me-2");
-        }
-
-        return HasDraftText
+    private AdaptiveAiPostAction GetAdaptiveAiPostAction() =>
+        HasDraftText
             ? new AdaptiveAiPostAction(
                 StoryScenePostMode.GuidedAi,
                 "Guided",
@@ -1891,7 +2004,6 @@ else
                 "Automatic",
                 "Automatic writes the next message for the selected speaker and ignores the textbox",
                 "fa-regular fa-stars me-2");
-    }
 
     private string BuildMessageCardClass(StorySceneMessageView message)
     {
@@ -1920,11 +2032,7 @@ else
             if (!_showProcessPanels)
                 CancelAppearanceEdit();
 
-            UserFeedbackService.ShowBackgroundSuccess(
-                _showProcessPanels
-                    ? "Appearance and process panels are now visible."
-                    : "Appearance and process panels are now hidden.",
-                "Display Updated");
+            ShellState?.RefreshDesktopHeaderAction();
         }
         catch (Exception exception)
         {
@@ -1935,6 +2043,7 @@ else
         finally
         {
             _isUpdatingDisplayPreferences = false;
+            ShellState?.RefreshDesktopHeaderAction();
         }
     }
 
@@ -1954,13 +2063,30 @@ else
     }
 
     private string ProcessPanelsToggleTitle =>
-        _showProcessPanels ? "Hide appearance and process blocks" : "Show appearance and process blocks";
-
-    private string ProcessPanelsToggleText =>
-        _showProcessPanels ? "Hide AI Details" : "Show AI Details";
+        _showProcessPanels ? "Hide AI details" : "Show AI details";
 
     private string ProcessPanelsToggleIconCss =>
-        _showProcessPanels ? "fa-eye-slash" : "fa-eye";
+        "fa-gears";
+
+    private void RenderDesktopHeaderAction(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
+    {
+        builder.OpenComponent<BusyButton>(0);
+        builder.AddAttribute(1, nameof(BusyButton.Class), "btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button");
+        builder.AddAttribute(2, nameof(BusyButton.OnClick), EventCallback.Factory.Create(this, ToggleProcessPanelsAsync));
+        builder.AddAttribute(3, nameof(BusyButton.IsBusy), _isUpdatingDisplayPreferences);
+        builder.AddAttribute(4, nameof(BusyButton.BusyText), "Saving...");
+        builder.AddAttribute(5, nameof(BusyButton.ShowBusyText), false);
+        builder.AddAttribute(6, "title", ProcessPanelsToggleTitle);
+        builder.AddAttribute(7, "aria-label", ProcessPanelsToggleTitle);
+        builder.AddAttribute(8, nameof(BusyButton.ChildContent), (RenderFragment)(childBuilder =>
+        {
+            childBuilder.OpenElement(0, "i");
+            childBuilder.AddAttribute(1, "class", $"fa-regular {ProcessPanelsToggleIconCss}");
+            childBuilder.AddAttribute(2, "aria-hidden", "true");
+            childBuilder.CloseElement();
+        }));
+        builder.CloseComponent();
+    }
 
     private void ToggleProcessRun(Guid runId)
     {
@@ -2176,7 +2302,6 @@ else
 
         if (ModelOperationRegistry.TryCancel(runId))
         {
-            UserFeedbackService.ShowBackgroundInfo("Stopping the active scene generation.", "Stopping");
             StateHasChanged();
             return Task.CompletedTask;
         }
@@ -2203,6 +2328,12 @@ else
     private string MessageCountText => _chat is null
         ? "0 messages"
         : _chat.Transcript.Count(x => x.Message is not null) == 1 ? "1 message" : $"{_chat.Transcript.Count(x => x.Message is not null)} messages";
+
+    private static int GetTranscriptMessageCount(StorySceneChatState? chat) =>
+        chat?.Transcript.Count(x => x.Message is not null) ?? 0;
+
+    private void ScheduleChatLogScrollToBottom() =>
+        _scrollChatLogToBottom = true;
 
     private static string GetInlineEditorId(Guid messageId) => $"story-scene-inline-edit-{messageId:N}";
 
@@ -2250,7 +2381,6 @@ else
                 CancellationToken.None);
 
             CancelAppearanceEdit();
-            UserFeedbackService.ShowBackgroundSuccess("The selected appearance block was updated.", "Appearance Updated");
             await LoadChatAsync(_chat.ThreadId);
         }
         catch (Exception exception)

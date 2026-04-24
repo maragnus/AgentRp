@@ -753,9 +753,6 @@
         {
             await AgentEndpointManagementService.ExecuteActionAsync(endpoint.AgentName, action, CancellationToken.None);
             await LoadAsync();
-            UserFeedbackService.ShowBackgroundSuccess(
-                $"{DescribeManagedEndpointAction(action)} the Hugging Face endpoint for '{endpoint.AgentName}' completed.",
-                "Endpoint Updated");
         }
         catch (Exception exception)
         {
@@ -842,7 +839,6 @@
             _generationSettingsErrorMessage = null;
             _generationSettingsImportFileName = null;
             _generationSettingsImportInputKey++;
-            UserFeedbackService.ShowBackgroundSuccess("Story model settings were saved.", "Model Settings Saved");
         }
         catch (Exception exception)
         {
@@ -887,9 +883,6 @@
             var packageJson = StoryGenerationSettingsService.SerializeStageTransferPackage(stage, BuildDraftStageSettingsView(stage));
             var fileName = StoryGenerationSettingsService.BuildStageExportFileName(stage, DateTime.UtcNow);
             await JSRuntime.InvokeVoidAsync("chatTransfer.downloadJson", fileName, packageJson);
-            UserFeedbackService.ShowBackgroundSuccess(
-                $"Exported {DescribeGenerationStage(stage)} model settings.",
-                "Model Settings Exported");
         }
         catch (Exception exception)
         {
@@ -924,9 +917,6 @@
             var packageJson = await reader.ReadToEndAsync();
             var importedSettings = StoryGenerationSettingsService.DeserializeStageTransferPackage(packageJson, _activeGenerationSettingsStage);
             ApplyDraftStageSettings(_activeGenerationSettingsStage, importedSettings);
-            UserFeedbackService.ShowBackgroundSuccess(
-                $"Imported {DescribeGenerationStage(_activeGenerationSettingsStage)} model settings into the editor.",
-                "Model Settings Imported");
         }
         catch (Exception exception)
         {

@@ -24,70 +24,30 @@ public sealed class ChatTransferService(
     public ChatTransferSelection NormalizeSelection(ChatTransferSelection selection, ChatTransferSelection availableSections)
     {
         var normalized = Intersect(selection, availableSections);
-        var includesChatLog = normalized.Messages || normalized.Snapshots || normalized.CurrentAppearanceBlocks;
 
-        if (!includesChatLog)
+        if (!normalized.Messages)
             return normalized with
             {
                 Snapshots = false,
                 CurrentAppearanceBlocks = false
             };
 
-        if (!CanIncludeChatLog(availableSections))
-            return normalized with
-            {
-                Messages = false,
-                Snapshots = false,
-                CurrentAppearanceBlocks = false
-            };
-
-        return new ChatTransferSelection(
-            availableSections.Messages,
-            availableSections.Snapshots,
-            availableSections.CurrentAppearanceBlocks,
-            availableSections.Characters,
-            availableSections.Locations,
-            availableSections.Items,
-            availableSections.StoryContext,
-            availableSections.SceneState);
+        return normalized;
     }
 
     public ChatTransferSelection GetLockedSections(ChatTransferSelection selection, ChatTransferSelection availableSections)
     {
-        if (!CanIncludeChatLog(availableSections))
-        {
-            return new ChatTransferSelection(
-                availableSections.Messages,
-                availableSections.Snapshots,
-                availableSections.CurrentAppearanceBlocks,
-                false,
-                false,
-                false,
-                false,
-                false);
-        }
-
         var normalized = NormalizeSelection(selection, availableSections);
 
-        return normalized.Messages
-            ? new ChatTransferSelection(
-                false,
-                availableSections.Snapshots,
-                availableSections.CurrentAppearanceBlocks,
-                availableSections.Characters,
-                availableSections.Locations,
-                availableSections.Items,
-                availableSections.StoryContext,
-                availableSections.SceneState)
-            : new ChatTransferSelection(
-                false,
-                availableSections.Snapshots,
-                availableSections.CurrentAppearanceBlocks,
-                false,
-                false,
-                false,
-                false,
-                false);
+        return new ChatTransferSelection(
+            false,
+            availableSections.Snapshots && !normalized.Messages,
+            availableSections.CurrentAppearanceBlocks && !normalized.Messages,
+            false,
+            false,
+            false,
+            false,
+            false);
     }
 
     public async Task<ChatTransferPackage> BuildPackageAsync(Guid threadId, ChatTransferSelection selection, CancellationToken cancellationToken)
@@ -120,13 +80,19 @@ public sealed class ChatTransferService(
                 .Where(x => x.ThreadId == threadId)
                 .OrderBy(x => x.CreatedUtc)
                 .ToListAsync(cancellationToken);
+        }
 
+        if (normalizedSelection.Snapshots)
+        {
             snapshots = await dbContext.StoryChatSnapshots
                 .AsNoTracking()
                 .Where(x => x.ThreadId == threadId)
                 .OrderBy(x => x.CreatedUtc)
                 .ToListAsync(cancellationToken);
+        }
 
+        if (normalizedSelection.CurrentAppearanceBlocks)
+        {
             currentAppearanceBlocks = await dbContext.StoryChatAppearanceEntries
                 .AsNoTracking()
                 .Where(x => x.ThreadId == threadId)
@@ -160,7 +126,7 @@ public sealed class ChatTransferService(
                             message.EditedFromMessageId))
                         .ToList()
                     : null,
-                normalizedSelection.Messages
+                normalizedSelection.Snapshots
                     ? snapshots?.Select(snapshot => new ChatTransferSnapshotRecord(
                             snapshot.Id,
                             snapshot.SelectedLeafMessageId,
@@ -172,7 +138,7 @@ public sealed class ChatTransferService(
                             snapshot.CreatedUtc))
                         .ToList()
                     : null,
-                normalizedSelection.Messages
+                normalizedSelection.CurrentAppearanceBlocks
                     ? currentAppearanceBlocks?.Select(entry => new ChatTransferAppearanceRecord(
                             entry.Id,
                             entry.SelectedLeafMessageId,
@@ -301,10 +267,10 @@ public sealed class ChatTransferService(
             messageMap = [];
         }
 
-        var snapshotClone = normalizedSelection.Messages && package.Payload.Snapshots is not null
+        var snapshotClone = normalizedSelection.Snapshots && package.Payload.Snapshots is not null
             ? CloneSnapshots(package.Payload.Snapshots, messageMap, characterMap, locationMap, itemMap)
             : [];
-        var appearanceClone = normalizedSelection.Messages && package.Payload.CurrentAppearanceBlocks is not null
+        var appearanceClone = normalizedSelection.CurrentAppearanceBlocks && package.Payload.CurrentAppearanceBlocks is not null
             ? CloneCurrentAppearanceBlocks(package.Payload.CurrentAppearanceBlocks, messageMap, characterMap)
             : [];
         var title = mode == ChatTransferApplyMode.Duplicate
@@ -408,16 +374,6 @@ public sealed class ChatTransferService(
         payload.Items is not null,
         payload.StoryContext is not null && payload.History is not null,
         payload.SceneState is not null);
-
-    private static bool CanIncludeChatLog(ChatTransferSelection availableSections) =>
-        availableSections.Messages
-        && availableSections.Snapshots
-        && availableSections.CurrentAppearanceBlocks
-        && availableSections.Characters
-        && availableSections.Locations
-        && availableSections.Items
-        && availableSections.StoryContext
-        && availableSections.SceneState;
 
     private static (ChatStoryCharactersDocument Document, Dictionary<Guid, Guid> Map) CloneCharacters(ChatStoryCharactersDocument document)
     {

@@ -256,15 +256,9 @@
 
             if (result.Options.Count == 0)
             {
-                UserFeedbackService.ShowBackgroundInfo(
+                UserFeedbackService.ShowBackgroundWarning(
                     $"No new distinct private motivation ideas were found for '{BuildDisplayName()}'.",
                     "No New Ideas");
-            }
-            else
-            {
-                UserFeedbackService.ShowBackgroundSuccess(
-                    $"Generated {result.Options.Count} private motivation ideas for '{BuildDisplayName()}'.",
-                    "Ideas Ready");
             }
         }
         catch (OperationCanceledException)
@@ -313,9 +307,6 @@
 
             _previewReviewSummary = preview.ReviewSummary;
             _previewNarrative = preview.Narrative;
-            UserFeedbackService.ShowBackgroundSuccess(
-                $"Generated a private motivations preview for '{BuildDisplayName()}'.",
-                "Preview Ready");
         }
         catch (OperationCanceledException)
         {
@@ -406,9 +397,7 @@
             return Task.CompletedTask;
 
         _isStoppingOperation = true;
-        if (ModelOperationRegistry.TryCancel(_operation.OperationId))
-            UserFeedbackService.ShowBackgroundInfo("Stopping the private motivations operation.", "Stopping");
-        else
+        if (!ModelOperationRegistry.TryCancel(_operation.OperationId))
             _isStoppingOperation = false;
 
         return Task.CompletedTask;

@@ -377,9 +377,7 @@
             return Task.CompletedTask;
 
         _isStoppingOperation = true;
-        if (ModelOperationRegistry.TryCancel(_operation.OperationId))
-            UserFeedbackService.ShowBackgroundInfo($"Stopping the {BuildEntityLabel()} draft operation.", "Stopping");
-        else
+        if (!ModelOperationRegistry.TryCancel(_operation.OperationId))
             _isStoppingOperation = false;
 
         return Task.CompletedTask;

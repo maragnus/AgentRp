@@ -3,7 +3,7 @@
 @if (EffectiveSelection.Messages)
 {
     <div class="alert alert-info py-2 mb-3">
-        Including the chat log also includes snapshots, current appearance blocks, and all story data.
+        Messages keep the branch graph. Choose the story data and chat-log metadata to carry with it.
     </div>
 }
 
@@ -19,7 +19,7 @@
             <label class="form-check-label fw-semibold" for="@MessagesId">Messages</label>
         </div>
         <div class="small text-body-secondary ms-4">
-            Includes the full branch graph and automatically includes all story data, including story context.
+            Includes the full branch graph. Related snapshot and appearance records can be included separately.
         </div>
     </div>
 
@@ -34,7 +34,7 @@
             <label class="form-check-label fw-semibold" for="@SnapshotsId">Snapshots</label>
         </div>
         <div class="small text-body-secondary ms-4">
-            Included automatically when the chat log is selected.
+            Available only when messages are included.
         </div>
     </div>
 
@@ -49,7 +49,7 @@
             <label class="form-check-label fw-semibold" for="@CurrentAppearanceBlocksId">Current appearance blocks</label>
         </div>
         <div class="small text-body-secondary ms-4">
-            Included automatically when the chat log is selected.
+            Available only when messages are included.
         </div>
     </div>
 

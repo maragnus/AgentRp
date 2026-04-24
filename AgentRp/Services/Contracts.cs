@@ -83,7 +83,7 @@ public sealed record ChatMessageUpdate(
 public sealed record ChangeStorySceneMessageSpeaker(
     Guid ThreadId,
     Guid MessageId,
-    Guid SpeakerCharacterId);
+    Guid? SpeakerCharacterId);
 
 public sealed record ChangeStorySceneMessageSpeakerResult(
     Guid MessageId,
@@ -464,9 +464,8 @@ public sealed record ToastMessage(
 
 public enum ToastIntent
 {
-    Success,
     Error,
-    Info
+    Warning
 }
 
 public interface IActivityNotifier
@@ -482,11 +481,9 @@ public interface IUserFeedbackService
 
     IReadOnlyList<ToastMessage> Messages { get; }
 
-    void ShowBackgroundSuccess(string message, string title);
-
     void ShowBackgroundError(string message, string title);
 
-    void ShowBackgroundInfo(string message, string title);
+    void ShowBackgroundWarning(string message, string title);
 
     void Dismiss(Guid id);
 }

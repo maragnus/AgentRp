@@ -329,7 +329,6 @@ else
         try
         {
             var package = await ChatTransferService.BuildPackageAsync(_transferThread.Id, _transferSelection, CancellationToken.None);
-            var sourceTitle = _transferThread.Title;
 
             if (_transferMode == ChatTransferDialogMode.Duplicate)
             {
@@ -340,9 +339,6 @@ else
                     CancellationToken.None);
                 ResetTransferModal();
                 NavigationManager.NavigateTo($"/chat/{result.ThreadId}");
-                UserFeedbackService.ShowBackgroundSuccess(
-                    $"Duplicated \"{sourceTitle}\" into \"{result.Title}\".",
-                    "Chat Duplicated");
 
                 if (OnNavigate.HasDelegate)
                     await OnNavigate.InvokeAsync();
@@ -353,9 +349,6 @@ else
             var packageJson = ChatTransferService.SerializePackage(package);
             await JSRuntime.InvokeVoidAsync("chatTransfer.downloadJson", ChatTransferService.BuildExportFileName(package), packageJson);
             ResetTransferModal();
-            UserFeedbackService.ShowBackgroundSuccess(
-                $"Exported \"{sourceTitle}\".",
-                "Chat Exported");
         }
         catch (Exception exception)
         {

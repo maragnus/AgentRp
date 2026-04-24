@@ -179,10 +179,7 @@ public sealed class StorySceneChatService(
         if (!IsMessageOnSelectedPath(thread.Messages, selectedLeafMessageId, sourceMessage.Id))
             throw new InvalidOperationException("Changing the message speaker failed because only messages in the current chat log can be reassigned.");
 
-        if (!sourceMessage.SpeakerCharacterId.HasValue)
-            throw new InvalidOperationException("Changing the message speaker failed because narration and system messages do not have a character sender to reassign.");
-
-        if (sourceMessage.SpeakerCharacterId.Value == request.SpeakerCharacterId)
+        if (HasMessageSpeaker(sourceMessage, request.SpeakerCharacterId))
             return new ChangeStorySceneMessageSpeakerResult(sourceMessage.Id, false);
 
         ProcessRun? sourceRun = null;
@@ -562,7 +559,7 @@ public sealed class StorySceneChatService(
         dbContext.ChatMessages.RemoveRange(messagesToDelete);
 
         var survivingMessages = messages.Where(x => !deletedIdSet.Contains(x.Id)).ToList();
-        thread.ActiveLeafMessageId = ResolveActiveLeafAfterDeletion(thread.ActiveLeafMessageId, targetMessage, deletedIdSet, survivingMessages);
+        thread.ActiveLeafMessageId = ResolveActiveLeafAfterDeletion(thread.ActiveLeafMessageId, deletedIdSet, messages, survivingMessages);
         thread.SelectedSpeakerCharacterId = ResolveSelectedSpeakerAfterDeletion(thread.SelectedSpeakerCharacterId, survivingMessages, thread.ActiveLeafMessageId);
         thread.UpdatedUtc = DateTime.UtcNow;
 
@@ -2196,7 +2193,12 @@ public sealed class StorySceneChatService(
         return snapshotCandidateMessageIds.Contains(messageId);
     }
 
-    private static void AssignMessageSpeaker(DbChatMessage message, Guid speakerCharacterId)
+    private static bool HasMessageSpeaker(DbChatMessage message, Guid? speakerCharacterId) =>
+        speakerCharacterId.HasValue
+            ? message.MessageKind == ChatMessageKind.CharacterSpeech && message.SpeakerCharacterId == speakerCharacterId.Value
+            : message.MessageKind == ChatMessageKind.Narration && !message.SpeakerCharacterId.HasValue;
+
+    private static void AssignMessageSpeaker(DbChatMessage message, Guid? speakerCharacterId)
     {
         message.SpeakerCharacterId = speakerCharacterId;
         message.MessageKind = ResolveMessageKind(speakerCharacterId);
@@ -2206,7 +2208,7 @@ public sealed class StorySceneChatService(
         ProcessRun sourceRun,
         ChatThread thread,
         Guid targetMessageId,
-        Guid speakerCharacterId,
+        Guid? speakerCharacterId,
         StorySceneActorContext updatedActor)
     {
         var clonedRun = new ProcessRun
@@ -2259,7 +2261,7 @@ public sealed class StorySceneChatService(
     private static void RewriteProcessRunForSpeakerChange(
         ProcessRun run,
         Guid targetMessageId,
-        Guid speakerCharacterId,
+        Guid? speakerCharacterId,
         StorySceneActorContext updatedActor)
     {
         run.UserMessageId = targetMessageId;
@@ -2274,11 +2276,12 @@ public sealed class StorySceneChatService(
         var updatedGenerationContext = processContext.GenerationContext is null
             ? null
             : processContext.GenerationContext with { Actor = updatedActor };
-        var updatedResponderSelection = processContext.ResponderSelection is null
+        var updatedResponderSelection = processContext.ResponderSelection is null || updatedActor.IsNarrator
             ? null
             : processContext.ResponderSelection with
             {
-                CharacterId = speakerCharacterId,
+                CharacterId = speakerCharacterId
+                    ?? throw new InvalidOperationException("Changing the message speaker failed because the responder character could not be resolved."),
                 CharacterName = updatedActor.Name,
                 WhyThisCharacter = "The sender was reassigned after generation."
             };
@@ -2554,8 +2557,8 @@ public sealed class StorySceneChatService(
 
     private static Guid? ResolveActiveLeafAfterDeletion(
         Guid? currentActiveLeafMessageId,
-        DbChatMessage targetMessage,
         IReadOnlySet<Guid> deletedIds,
+        IReadOnlyList<DbChatMessage> allMessages,
         IReadOnlyList<DbChatMessage> survivingMessages)
     {
         if (survivingMessages.Count == 0)
@@ -2564,43 +2567,18 @@ public sealed class StorySceneChatService(
         if (currentActiveLeafMessageId.HasValue && !deletedIds.Contains(currentActiveLeafMessageId.Value))
             return currentActiveLeafMessageId.Value;
 
+        var allMessagesById = allMessages.ToDictionary(x => x.Id);
         var survivingMap = survivingMessages.ToDictionary(x => x.Id);
-        var siblingLeaf = FindNearestSiblingLeaf(targetMessage, deletedIds, survivingMessages);
-        if (siblingLeaf.HasValue)
-            return siblingLeaf.Value;
-
-        Guid? ancestorParentId = targetMessage.ParentMessageId;
-        while (ancestorParentId.HasValue && survivingMap.TryGetValue(ancestorParentId.Value, out var ancestor))
+        Guid? currentMessageId = currentActiveLeafMessageId;
+        while (currentMessageId.HasValue && allMessagesById.TryGetValue(currentMessageId.Value, out var currentMessage))
         {
-            var ancestorSiblingLeaf = FindNearestSiblingLeaf(ancestor, deletedIds, survivingMessages);
-            if (ancestorSiblingLeaf.HasValue)
-                return ancestorSiblingLeaf.Value;
+            if (survivingMap.ContainsKey(currentMessage.Id))
+                return currentMessage.Id;
 
-            ancestorParentId = ancestor.ParentMessageId;
+            currentMessageId = currentMessage.ParentMessageId;
         }
 
         return FindLatestLeaf(survivingMessages);
-    }
-
-    private static Guid? FindNearestSiblingLeaf(
-        DbChatMessage message,
-        IReadOnlySet<Guid> deletedIds,
-        IReadOnlyList<DbChatMessage> survivingMessages)
-    {
-        var siblings = survivingMessages
-            .Where(x => x.ParentMessageId == message.ParentMessageId && x.Id != message.Id && !deletedIds.Contains(x.Id))
-            .OrderBy(x => x.CreatedUtc)
-            .ToList();
-        if (siblings.Count == 0)
-            return null;
-
-        var preferredSibling = siblings
-            .Where(x => x.CreatedUtc <= message.CreatedUtc)
-            .OrderByDescending(x => x.CreatedUtc)
-            .FirstOrDefault()
-            ?? siblings.OrderBy(x => x.CreatedUtc).First();
-
-        return FindLatestLeafInSubtree(survivingMessages, preferredSibling.Id);
     }
 
     private static Guid? ResolveSelectedSpeakerAfterDeletion(

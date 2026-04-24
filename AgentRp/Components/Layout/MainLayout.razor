@@ -4,7 +4,8 @@
 
 <CascadingValue Value="@_shellState">
     <div class="app-shell bg-body-tertiary">
-        <div class="app-shell-menu-toggle d-none d-lg-block">
+        <div class="app-shell-menu-toggle d-none d-lg-flex align-items-center gap-2">
+            @_shellState.DesktopHeaderAction
             <DesktopSidebarModeSelector />
         </div>
 

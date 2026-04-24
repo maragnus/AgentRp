@@ -232,12 +232,8 @@
                 _importSelection,
                 ChatTransferApplyMode.Import,
                 CancellationToken.None);
-            var importedTitle = result.Title;
             ResetImportState();
             NavigationManager.NavigateTo($"/chat/{result.ThreadId}");
-            UserFeedbackService.ShowBackgroundSuccess(
-                $"Imported \"{importedTitle}\".",
-                "Chat Imported");
             await CloseAsync();
         }
         catch (Exception exception)

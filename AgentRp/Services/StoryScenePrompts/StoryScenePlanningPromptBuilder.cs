@@ -32,8 +32,10 @@ internal static class StoryScenePlanningPromptBuilder
         - monologue = short monologue allowed (only when asked)
 
         Prioritize compact and silent almost always.
-        - Always eagerly follow the narrative.
-        - Pick the most valuable next beat, not the safest or most literal reply.
+        - Favor silent turns during intimate moments
+        - Always eagerly follow the narrative, but not aggressively.
+        - Pick the most valuable next beat to move the story forward, not the safest or most literal reply.
+        - Identify when the current thread has run it's course and move on.
         - If a direct reaction is needed, react.
         - If no direct reaction is needed, introduce a small new beat that moves the scene.
         - Never end an exchange.
@@ -43,6 +45,7 @@ internal static class StoryScenePlanningPromptBuilder
 
         Avoid empty beats.
         Do not only restate rules, confirm the current situation, paraphrase the last line, or preserve the same tension without adding value.
+        Do not repeat parts of the story, always keep it moving.
 
         Do not write the final message text.
         """;

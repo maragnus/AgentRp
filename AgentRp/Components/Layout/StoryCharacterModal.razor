@@ -532,9 +532,8 @@
             await LoadAsync(savedCharacter.CharacterId);
             _activeTab = StoryCharacterEditorTab.ModelReady;
             _modelSheetAlertMessage = BuildModelSheetAlertMessage(savedCharacter.Name, savedCharacter.ModelSheetStatus);
-            UserFeedbackService.ShowBackgroundSuccess($"Saved user-friendly notes for '{savedCharacter.Name}'.", "Character Saved");
             if (savedCharacter.ModelSheetStatus != StoryCharacterModelSheetStatus.Ready)
-                UserFeedbackService.ShowBackgroundInfo($"Review and save the model-ready sheet for '{savedCharacter.Name}' before using AI with this character.", "Model-Ready Review Needed");
+                UserFeedbackService.ShowBackgroundWarning($"Review and save the model-ready sheet for '{savedCharacter.Name}' before using AI with this character.", "Model-Ready Review Needed");
 
             await NotifyChangedAsync();
         }
@@ -569,7 +568,6 @@
             _modelReviewSummary = draft.ReviewSummary;
             _modelSheetStatus = draft.Status;
             _modelSheetAlertMessage = "Review the compact sheet below, make any adjustments you want, then save it. AI stays blocked until the reviewed model-ready sheet is saved.";
-            UserFeedbackService.ShowBackgroundSuccess($"Generated a model-ready draft for '{draft.CharacterName}'.", "Model-Ready Draft");
         }
         catch (Exception exception)
         {
@@ -603,7 +601,6 @@
             _activeTab = StoryCharacterEditorTab.ModelReady;
             _modelReviewSummary = null;
             _modelSheetAlertMessage = BuildModelSheetAlertMessage(savedCharacter.Name, savedCharacter.ModelSheetStatus);
-            UserFeedbackService.ShowBackgroundSuccess($"Saved the model-ready sheet for '{savedCharacter.Name}'.", "Model-Ready Saved");
             await NotifyChangedAsync();
         }
         catch (Exception exception)
@@ -630,7 +627,6 @@
         {
             await ChatStoryService.DeleteCharacterAsync(new DeleteCharacter(ThreadId, _selectedCharacterId.Value), CancellationToken.None);
             await LoadAsync();
-            UserFeedbackService.ShowBackgroundSuccess($"Deleted character '{displayName}'.", "Character Deleted");
             await NotifyChangedAsync();
         }
         catch (Exception exception)

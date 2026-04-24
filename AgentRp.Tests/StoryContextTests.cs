@@ -42,7 +42,7 @@ public sealed class StoryContextTests
     }
 
     [Fact]
-    public void NormalizeSelection_WithMessages_IncludesStoryContext()
+    public void NormalizeSelection_WithMessages_DoesNotForceStoryContext()
     {
         var service = CreateTransferService();
 
@@ -51,8 +51,61 @@ public sealed class StoryContextTests
             ChatTransferSelection.All);
 
         Assert.True(selection.Messages);
+        Assert.False(selection.StoryContext);
+        Assert.False(selection.SceneState);
+    }
+
+    [Fact]
+    public void NormalizeSelection_WithoutMessages_RemovesChatLogChildren()
+    {
+        var service = CreateTransferService();
+
+        var selection = service.NormalizeSelection(
+            ChatTransferSelection.All with { Messages = false },
+            ChatTransferSelection.All);
+
+        Assert.False(selection.Messages);
+        Assert.False(selection.Snapshots);
+        Assert.False(selection.CurrentAppearanceBlocks);
+        Assert.True(selection.Characters);
+        Assert.True(selection.Locations);
+        Assert.True(selection.Items);
         Assert.True(selection.StoryContext);
         Assert.True(selection.SceneState);
+    }
+
+    [Fact]
+    public void GetLockedSections_WithMessages_AllowsSectionToggles()
+    {
+        var service = CreateTransferService();
+
+        var lockedSections = service.GetLockedSections(ChatTransferSelection.All, ChatTransferSelection.All);
+
+        Assert.False(lockedSections.Messages);
+        Assert.False(lockedSections.Snapshots);
+        Assert.False(lockedSections.CurrentAppearanceBlocks);
+        Assert.False(lockedSections.Characters);
+        Assert.False(lockedSections.Locations);
+        Assert.False(lockedSections.Items);
+        Assert.False(lockedSections.StoryContext);
+        Assert.False(lockedSections.SceneState);
+    }
+
+    [Fact]
+    public void GetLockedSections_WithoutMessages_LocksChatLogChildren()
+    {
+        var service = CreateTransferService();
+
+        var lockedSections = service.GetLockedSections(ChatTransferSelection.All with { Messages = false }, ChatTransferSelection.All);
+
+        Assert.False(lockedSections.Messages);
+        Assert.True(lockedSections.Snapshots);
+        Assert.True(lockedSections.CurrentAppearanceBlocks);
+        Assert.False(lockedSections.Characters);
+        Assert.False(lockedSections.Locations);
+        Assert.False(lockedSections.Items);
+        Assert.False(lockedSections.StoryContext);
+        Assert.False(lockedSections.SceneState);
     }
 
     [Fact]
