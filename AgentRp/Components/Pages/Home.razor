@@ -4,6 +4,7 @@
 @inject IChatWorkspaceService ChatWorkspaceService
 @inject IStorySceneChatService StorySceneChatService
 @inject IStoryChatSnapshotService StoryChatSnapshotService
+@inject IStoryChatAppearanceReplayService StoryChatAppearanceReplayService
 @inject IActivityNotifier ActivityNotifier
 @inject IModelOperationRegistry ModelOperationRegistry
 @inject IUserFeedbackService UserFeedbackService
@@ -58,6 +59,15 @@ else
                                              OnClick="() => StopSceneRunAsync(ActiveRunningProcess.RunId)" />
                     }
 
+                    <button type="button"
+                            class="btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button"
+                            title="Debug appearance"
+                            aria-label="Debug appearance"
+                            disabled="@(_isAppearanceReplayLoading || _isSubmitting)"
+                            @onclick="OpenAppearanceReplayAsync">
+                        <i class="fa-regular fa-magnifying-glass-chart" aria-hidden="true"></i>
+                    </button>
+
                     <BusyButton Class="btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button d-lg-none"
                                 OnClick="ToggleProcessPanelsAsync"
                                 IsBusy="@_isUpdatingDisplayPreferences"
@@ -97,13 +107,13 @@ else
                     {
                         var message = node.Message;
                         var snapshot = node.Snapshot;
+                        var appearance = node.Appearance;
                         var process = message?.Process;
                         var processDurationText = process is null ? null : DescribeDuration(process.StartedUtc, process.CompletedUtc);
                         var expandedStepId = process is null ? null : GetExpandedStepId(process.RunId);
-                        var processAppearanceEntry = process is null ? null : GetProcessAppearanceEntry(process);
-                        var processAppearanceCharacters = process is null ? Array.Empty<StorySceneCharacterAppearanceView>() : GetProcessAppearanceCharacters(process);
-                        var isEditingProcessAppearance = processAppearanceEntry is not null && _editingAppearanceEntryId == processAppearanceEntry.AppearanceEntryId;
-                        var isAppearanceSectionExpanded = process is not null && IsProcessAppearanceExpanded(process.RunId);
+                        var isStandaloneAppearanceVisible = appearance is not null && _showProcessPanels;
+                        var isStandaloneAppearanceExpanded = appearance is not null && IsAppearanceEntryExpanded(appearance.AppearanceEntryId);
+                        var isEditingStandaloneAppearance = appearance is not null && _editingAppearanceEntryId == appearance.AppearanceEntryId;
                         var isProcessTraceExpanded = process is not null && IsProcessTraceExpanded(process.RunId);
                         var cardClass = message is null ? string.Empty : BuildMessageCardClass(message);
                         var isEditing = message is not null && _editingMessageId == message.MessageId;
@@ -119,118 +129,6 @@ else
                                 <div class="card border-0 bg-body-tertiary shadow-sm">
                                     <div class="card-body p-0">
                                         <section>
-                                            <div class="d-flex align-items-start justify-content-between gap-3 p-3">
-                                                <button type="button"
-                                                        class="btn btn-link flex-grow-1 p-0 text-start text-decoration-none text-reset"
-                                                        aria-expanded="@isAppearanceSectionExpanded"
-                                                        @onclick="() => ToggleProcessAppearance(process.RunId)">
-                                                    <div class="d-flex align-items-start gap-3">
-                                                        <div class="pt-1">
-                                                            <i class="fa-regular fa-shirt text-body-secondary" aria-hidden="true"></i>
-                                                        </div>
-                                                        <div>
-                                                            <div class="fw-semibold">Appearance</div>
-                                                            <div class="small text-body-secondary">@GetProcessAppearanceSectionSubtitle(process)</div>
-                                                        </div>
-                                                    </div>
-                                                </button>
-
-                                                <div class="d-flex align-items-center gap-2 flex-shrink-0">
-                                                    <span class="badge text-bg-light border text-body-secondary">@(processAppearanceCharacters.Count == 1 ? "1 character" : $"{processAppearanceCharacters.Count} characters")</span>
-                                                    <button type="button"
-                                                            class="btn btn-link d-flex align-items-center gap-2 p-0 text-decoration-none text-reset"
-                                                            aria-expanded="@isAppearanceSectionExpanded"
-                                                            @onclick="() => ToggleProcessAppearance(process.RunId)">
-                                                        <i class="fa-regular @(isAppearanceSectionExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
-                                                    </button>
-                                                </div>
-                                            </div>
-
-                                            @if (isAppearanceSectionExpanded)
-                                            {
-                                                <div class="border-top px-3 py-3">
-                                                    <div class="d-flex flex-column gap-3">
-                                                        @if (processAppearanceEntry is not null)
-                                                        {
-                                                            <div class="d-flex flex-wrap gap-3 small text-body-secondary">
-                                                                <span>Recorded @processAppearanceEntry.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
-                                                                <span>@(processAppearanceCharacters.Count == 1 ? "1 character" : $"{processAppearanceCharacters.Count} characters")</span>
-                                                            </div>
-
-                                                            @if (isEditingProcessAppearance)
-                                                            {
-                                                                @foreach (var character in processAppearanceEntry.Characters)
-                                                                {
-                                                                    <div>
-                                                                        <label class="form-label" for="@GetAppearanceEditorId(processAppearanceEntry.AppearanceEntryId, character.CharacterId)">@character.CharacterName</label>
-                                                                        <textarea id="@GetAppearanceEditorId(processAppearanceEntry.AppearanceEntryId, character.CharacterId)"
-                                                                                  class="form-control"
-                                                                                  rows="3"
-                                                                                  disabled="@_isSubmitting"
-                                                                                  @bind:get="GetAppearanceDraft(character.CharacterId)"
-                                                                                  @bind:set="value => SetAppearanceDraft(character.CharacterId, value)"></textarea>
-                                                                    </div>
-                                                                }
-
-                                                                <div class="d-flex justify-content-end gap-2">
-                                                                    <button type="button"
-                                                                            class="btn btn-outline-secondary btn-sm"
-                                                                            disabled="@_isSubmitting"
-                                                                            @onclick="CancelAppearanceEdit">
-                                                                        <i class="fa-regular fa-xmark" aria-hidden="true"></i>
-                                                                    </button>
-                                                                    <BusyButton Class="btn btn-primary btn-sm"
-                                                                                OnClick="() => SaveAppearanceEditAsync(processAppearanceEntry)"
-                                                                                IsBusy="@_isSubmitting"
-                                                                                BusyText="Saving..."
-                                                                                ShowBusyText="false"
-                                                                                Disabled="@_isSubmitting">
-                                                                        <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
-                                                                    </BusyButton>
-                                                                </div>
-                                                            }
-                                                            else
-                                                            {
-                                                                <div class="d-flex flex-column gap-3">
-                                                                    @foreach (var character in processAppearanceCharacters)
-                                                                    {
-                                                                        <div>
-                                                                            <div class="fw-semibold">@character.CharacterName</div>
-                                                                            @if (string.IsNullOrWhiteSpace(character.CurrentAppearance))
-                                                                            {
-                                                                                <div class="small text-body-secondary">No current appearance has been captured yet.</div>
-                                                                            }
-                                                                            else
-                                                                            {
-                                                                                <div class="small">@character.CurrentAppearance</div>
-                                                                            }
-                                                                        </div>
-                                                                    }
-                                                                </div>
-
-                                                                @if (processAppearanceEntry.CanEdit)
-                                                                {
-                                                                    <div class="d-flex justify-content-end">
-                                                                        <button type="button"
-                                                                                class="btn btn-outline-secondary btn-sm"
-                                                                                disabled="@_isSubmitting"
-                                                                                @onclick="() => BeginAppearanceEdit(processAppearanceEntry)">
-                                                                            <i class="fa-regular fa-pen" aria-hidden="true"></i>
-                                                                        </button>
-                                                                    </div>
-                                                                }
-                                                            }
-                                                        }
-                                                        else
-                                                        {
-                                                            <div class="small text-body-secondary">@GetProcessAppearancePendingText(process)</div>
-                                                        }
-                                                    </div>
-                                                </div>
-                                            }
-                                        </section>
-
-                                        <section class="border-top">
                                             <div class="d-flex align-items-start justify-content-between gap-3 p-3">
                                                 <button type="button"
                                                         class="btn btn-link flex-grow-1 p-0 text-start text-decoration-none text-reset"
@@ -740,6 +638,109 @@ else
                                     </div>
                                 </div>
                             }
+
+                            @if (isStandaloneAppearanceVisible && appearance is not null)
+                            {
+                                <div class="card border-0 bg-body-tertiary shadow-sm">
+                                    <div class="card-body p-0">
+                                        <button type="button"
+                                                class="btn btn-link w-100 p-3 text-start text-decoration-none text-reset"
+                                                aria-expanded="@isStandaloneAppearanceExpanded"
+                                                @onclick="() => ToggleAppearanceEntry(appearance.AppearanceEntryId)">
+                                            <div class="d-flex align-items-start justify-content-between gap-3">
+                                                <div class="d-flex align-items-start gap-3">
+                                                    <div class="pt-1">
+                                                        <i class="fa-regular fa-shirt text-body-secondary" aria-hidden="true"></i>
+                                                    </div>
+                                                    <div>
+                                                        <div class="fw-semibold">Appearance</div>
+                                                        <div class="small text-body-secondary">@appearance.Summary</div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="d-flex align-items-center gap-2">
+                                                    <span class="badge text-bg-light border text-body-secondary">@appearance.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
+                                                    <span class="badge text-bg-light border text-body-secondary">@(appearance.Characters.Count == 1 ? "1 character" : $"{appearance.Characters.Count} characters")</span>
+                                                    <i class="fa-regular @(isStandaloneAppearanceExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                </div>
+                                            </div>
+                                        </button>
+
+                                        @if (isStandaloneAppearanceExpanded)
+                                        {
+                                            <div class="border-top px-3 py-3">
+                                                <div class="d-flex flex-column gap-3">
+                                                    <div class="small text-body-secondary">
+                                                        Recorded @appearance.CreatedUtc.ToShorthandDateWithRelativeDays()
+                                                    </div>
+
+                                                    @if (isEditingStandaloneAppearance)
+                                                    {
+                                                        @foreach (var character in appearance.Characters)
+                                                        {
+                                                            <div>
+                                                                <label class="form-label" for="@GetAppearanceEditorId(appearance.AppearanceEntryId, character.CharacterId)">@character.CharacterName</label>
+                                                                <textarea id="@GetAppearanceEditorId(appearance.AppearanceEntryId, character.CharacterId)"
+                                                                          class="form-control"
+                                                                          rows="3"
+                                                                          disabled="@_isSubmitting"
+                                                                          @bind:get="GetAppearanceDraft(character.CharacterId)"
+                                                                          @bind:set="value => SetAppearanceDraft(character.CharacterId, value)"></textarea>
+                                                            </div>
+                                                        }
+
+                                                        <div class="d-flex justify-content-end gap-2">
+                                                            <button type="button"
+                                                                    class="btn btn-outline-secondary btn-sm"
+                                                                    disabled="@_isSubmitting"
+                                                                    @onclick="CancelAppearanceEdit">
+                                                                <i class="fa-regular fa-xmark" aria-hidden="true"></i>
+                                                            </button>
+                                                            <BusyButton Class="btn btn-primary btn-sm"
+                                                                        OnClick="() => SaveAppearanceEditAsync(appearance)"
+                                                                        IsBusy="@_isSubmitting"
+                                                                        BusyText="Saving..."
+                                                                        ShowBusyText="false"
+                                                                        Disabled="@_isSubmitting">
+                                                                <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
+                                                            </BusyButton>
+                                                        </div>
+                                                    }
+                                                    else
+                                                    {
+                                                        @foreach (var character in appearance.Characters)
+                                                        {
+                                                            <div>
+                                                                <div class="fw-semibold">@character.CharacterName</div>
+                                                                @if (string.IsNullOrWhiteSpace(character.CurrentAppearance))
+                                                                {
+                                                                    <div class="small text-body-secondary">No current appearance has been captured yet.</div>
+                                                                }
+                                                                else
+                                                                {
+                                                                    <div class="small">@character.CurrentAppearance</div>
+                                                                }
+                                                            </div>
+                                                        }
+
+                                                        @if (appearance.CanEdit)
+                                                        {
+                                                            <div class="d-flex justify-content-end">
+                                                                <button type="button"
+                                                                        class="btn btn-outline-secondary btn-sm"
+                                                                        disabled="@_isSubmitting"
+                                                                        @onclick="() => BeginAppearanceEdit(appearance)">
+                                                                    <i class="fa-regular fa-pen" aria-hidden="true"></i>
+                                                                </button>
+                                                            </div>
+                                                        }
+                                                    }
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
                         </div>
                     }
                 </div>
@@ -904,6 +905,14 @@ else
                             OnStop="StopSnapshotDraftAsync"
                             OnClose="CloseSnapshotDraftAsync"
                             OnCommit="CommitSnapshotDraftAsync" />
+
+    <StoryChatAppearanceReplayModal IsOpen="@_isAppearanceReplayModalOpen"
+                                    IsLoading="@_isAppearanceReplayLoading"
+                                    IsSaving="@_isSavingAppearanceReplay"
+                                    ErrorMessage="@_appearanceReplayStatusMessage"
+                                    Replay="@_appearanceReplay"
+                                    OnClose="CloseAppearanceReplayAsync"
+                                    OnSave="SaveAppearanceReplayStepAsync" />
 
     <AppModal IsOpen="@_isPlanModalOpen"
               Title="@PlanModalTitle"
@@ -1114,8 +1123,12 @@ else
     private bool _isSnapshotModalOpen;
     private bool _isSnapshotDraftLoading;
     private bool _isCommittingSnapshot;
+    private bool _isAppearanceReplayModalOpen;
+    private bool _isAppearanceReplayLoading;
+    private bool _isSavingAppearanceReplay;
     private bool _isUpdatingDisplayPreferences;
     private StoryChatSnapshotDraftView? _snapshotDraft;
+    private StoryChatAppearanceReplayView? _appearanceReplay;
     private bool _isPlanModalOpen;
     private Guid? _editingPlanMessageId;
     private string? _editingPlanSpeakerName;
@@ -1136,10 +1149,10 @@ else
     private bool _showProcessPanels = true;
     private DateTime _processDurationNowUtc = DateTime.UtcNow;
     private readonly Dictionary<Guid, bool> _expandedProcessRunStates = [];
-    private readonly Dictionary<Guid, bool> _expandedProcessAppearanceStates = [];
     private readonly Dictionary<Guid, bool> _expandedProcessTraceStates = [];
     private readonly Dictionary<Guid, Guid?> _expandedProcessStepIds = [];
     private readonly Dictionary<Guid, bool> _expandedSnapshotStates = [];
+    private readonly Dictionary<Guid, bool> _expandedAppearanceEntryStates = [];
     private readonly Dictionary<Guid, string> _streamedMessageContent = [];
     private readonly HashSet<Guid> _stoppingRunIds = [];
     private System.Threading.Timer? _processDurationRefreshTimer;
@@ -1148,6 +1161,7 @@ else
     private bool _scrollChatLogToBottom;
     private bool _isStoppingSnapshotDraft;
     private string? _snapshotDraftStatusMessage;
+    private string? _appearanceReplayStatusMessage;
     private bool HasDraftText => !string.IsNullOrWhiteSpace(_draftText);
     private StorySceneMessageProcessView? ActiveRunningProcess =>
         _chat?.Transcript
@@ -1202,6 +1216,7 @@ else
 
         _workspaceSubscription?.Dispose();
         _processDurationRefreshTimer?.Dispose();
+        _snapshotDraftOperation?.Dispose();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -1242,13 +1257,15 @@ else
             foreach (var process in _chat.Transcript.Select(x => x.Message).Where(x => x?.Process is not null).Select(x => x!.Process!))
             {
                 _expandedProcessRunStates.TryAdd(process.RunId, false);
-                _expandedProcessAppearanceStates.TryAdd(process.RunId, false);
                 _expandedProcessTraceStates.TryAdd(process.RunId, false);
                 _expandedProcessStepIds.TryAdd(process.RunId, null);
             }
 
             foreach (var snapshot in _chat.Transcript.Select(x => x.Snapshot).Where(x => x is not null).Select(x => x!))
                 _expandedSnapshotStates.TryAdd(snapshot.SnapshotId, false);
+
+            foreach (var appearance in _chat.Transcript.Select(x => x.Appearance).Where(x => x is not null).Select(x => x!))
+                _expandedAppearanceEntryStates.TryAdd(appearance.AppearanceEntryId, false);
 
             if (_editingAppearanceEntryId.HasValue
                 && !_chat.Transcript.Any(x => x.Appearance?.AppearanceEntryId == _editingAppearanceEntryId.Value))
@@ -1936,6 +1953,78 @@ else
         return Task.CompletedTask;
     }
 
+    private async Task OpenAppearanceReplayAsync()
+    {
+        if (_chat is null || _isAppearanceReplayLoading)
+            return;
+
+        CancelInlineEdit();
+        CancelAppearanceEdit();
+        ResetPlanEditState();
+        _isAppearanceReplayModalOpen = true;
+        _isAppearanceReplayLoading = true;
+        _appearanceReplay = null;
+        _appearanceReplayStatusMessage = null;
+        _errorMessage = null;
+
+        try
+        {
+            _appearanceReplay = await StoryChatAppearanceReplayService.CreateReplayAsync(
+                new CreateStoryChatAppearanceReplay(_chat.ThreadId),
+                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Building the appearance replay failed for chat {ThreadId}.", _chat.ThreadId);
+            _appearanceReplayStatusMessage = "Building the appearance replay failed.";
+            _errorMessage = "Building the appearance replay failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Appearance Replay Failed");
+        }
+        finally
+        {
+            _isAppearanceReplayLoading = false;
+        }
+    }
+
+    private Task CloseAppearanceReplayAsync()
+    {
+        if (_isAppearanceReplayLoading || _isSavingAppearanceReplay)
+            return Task.CompletedTask;
+
+        _isAppearanceReplayModalOpen = false;
+        _appearanceReplay = null;
+        _appearanceReplayStatusMessage = null;
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveAppearanceReplayStepAsync(SaveStoryChatAppearanceReplayStep request)
+    {
+        if (_chat is null)
+            return;
+
+        _isSavingAppearanceReplay = true;
+        _appearanceReplayStatusMessage = null;
+        _errorMessage = null;
+
+        try
+        {
+            await StorySceneChatService.SaveAppearanceReplayStepAsync(request, CancellationToken.None);
+            UserFeedbackService.ShowBackgroundSuccess("The replayed appearance was saved to the transcript.", "Appearance Saved");
+            await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving appearance replay step {MessageId} failed for chat {ThreadId}.", request.MessageId, request.ThreadId);
+            _appearanceReplayStatusMessage = "Saving the replayed appearance failed.";
+            _errorMessage = "Saving the replayed appearance failed.";
+            UserFeedbackService.ShowBackgroundError(_errorMessage, "Appearance Save Failed");
+        }
+        finally
+        {
+            _isSavingAppearanceReplay = false;
+        }
+    }
+
     private async Task ConfirmDeleteAsync(StorySceneDeleteMode mode)
     {
         if (_chat is null || _deleteTargetMessage is null)
@@ -2070,15 +2159,30 @@ else
 
     private void RenderDesktopHeaderAction(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
     {
-        builder.OpenComponent<BusyButton>(0);
-        builder.AddAttribute(1, nameof(BusyButton.Class), "btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button");
-        builder.AddAttribute(2, nameof(BusyButton.OnClick), EventCallback.Factory.Create(this, ToggleProcessPanelsAsync));
-        builder.AddAttribute(3, nameof(BusyButton.IsBusy), _isUpdatingDisplayPreferences);
-        builder.AddAttribute(4, nameof(BusyButton.BusyText), "Saving...");
-        builder.AddAttribute(5, nameof(BusyButton.ShowBusyText), false);
-        builder.AddAttribute(6, "title", ProcessPanelsToggleTitle);
-        builder.AddAttribute(7, "aria-label", ProcessPanelsToggleTitle);
-        builder.AddAttribute(8, nameof(BusyButton.ChildContent), (RenderFragment)(childBuilder =>
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "d-flex align-items-center gap-2");
+        builder.OpenElement(2, "button");
+        builder.AddAttribute(3, "type", "button");
+        builder.AddAttribute(4, "class", "btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button");
+        builder.AddAttribute(5, "title", "Debug appearance");
+        builder.AddAttribute(6, "aria-label", "Debug appearance");
+        builder.AddAttribute(7, "disabled", _isAppearanceReplayLoading || _isSubmitting);
+        builder.AddAttribute(8, "onclick", EventCallback.Factory.Create(this, OpenAppearanceReplayAsync));
+        builder.OpenElement(9, "i");
+        builder.AddAttribute(10, "class", "fa-regular fa-magnifying-glass-chart");
+        builder.AddAttribute(11, "aria-hidden", "true");
+        builder.CloseElement();
+        builder.CloseElement();
+
+        builder.OpenComponent<BusyButton>(12);
+        builder.AddAttribute(13, nameof(BusyButton.Class), "btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button");
+        builder.AddAttribute(14, nameof(BusyButton.OnClick), EventCallback.Factory.Create(this, ToggleProcessPanelsAsync));
+        builder.AddAttribute(15, nameof(BusyButton.IsBusy), _isUpdatingDisplayPreferences);
+        builder.AddAttribute(16, nameof(BusyButton.BusyText), "Saving...");
+        builder.AddAttribute(17, nameof(BusyButton.ShowBusyText), false);
+        builder.AddAttribute(18, "title", ProcessPanelsToggleTitle);
+        builder.AddAttribute(19, "aria-label", ProcessPanelsToggleTitle);
+        builder.AddAttribute(20, nameof(BusyButton.ChildContent), (RenderFragment)(childBuilder =>
         {
             childBuilder.OpenElement(0, "i");
             childBuilder.AddAttribute(1, "class", $"fa-regular {ProcessPanelsToggleIconCss}");
@@ -2086,6 +2190,7 @@ else
             childBuilder.CloseElement();
         }));
         builder.CloseComponent();
+        builder.CloseElement();
     }
 
     private void ToggleProcessRun(Guid runId)
@@ -2150,34 +2255,6 @@ else
     private static bool IsResponderProcessStep(StorySceneProcessStepView step) =>
         string.Equals(step.Title, "Responder", StringComparison.OrdinalIgnoreCase);
 
-    private static StorySceneAppearanceEntryView? GetProcessAppearanceEntry(StorySceneMessageProcessView process) =>
-        process.Context?.Appearance?.LatestEntry;
-
-    private static IReadOnlyList<StorySceneCharacterAppearanceView> GetProcessAppearanceCharacters(StorySceneMessageProcessView process)
-    {
-        var latestEntryCharacters = process.Context?.Appearance?.LatestEntry?.Characters;
-        if (latestEntryCharacters?.Count > 0)
-            return latestEntryCharacters;
-
-        return process.Context?.Appearance?.EffectiveCharacters ?? [];
-    }
-
-    private static string GetProcessAppearanceSectionSubtitle(StorySceneMessageProcessView process)
-    {
-        var appearanceEntry = GetProcessAppearanceEntry(process);
-        if (!string.IsNullOrWhiteSpace(appearanceEntry?.Summary))
-            return appearanceEntry.Summary;
-
-        return process.Context?.Appearance is not null
-            ? "Current scene appearance is ready to review."
-            : "Current appearance is still being resolved.";
-    }
-
-    private static string GetProcessAppearancePendingText(StorySceneMessageProcessView process) =>
-        process.Context?.Appearance is null
-            ? "The appearance stage is still resolving the current scene cast. Editing becomes available after the first appearance block is recorded."
-            : "No saved appearance block is available for this process.";
-
     private static string GetProcessTraceSectionSubtitle(StorySceneMessageProcessView process)
     {
         if (!string.IsNullOrWhiteSpace(process.Summary))
@@ -2201,15 +2278,6 @@ else
         return string.Join(" • ", segments);
     }
 
-    private void ToggleProcessAppearance(Guid runId)
-    {
-        var isExpanded = IsProcessAppearanceExpanded(runId);
-        _expandedProcessAppearanceStates[runId] = !isExpanded;
-    }
-
-    private bool IsProcessAppearanceExpanded(Guid runId) =>
-        _expandedProcessAppearanceStates.TryGetValue(runId, out var isExpanded) && isExpanded;
-
     private void ToggleProcessTrace(Guid runId)
     {
         var isExpanded = IsProcessTraceExpanded(runId);
@@ -2227,6 +2295,15 @@ else
 
     private bool IsSnapshotExpanded(Guid snapshotId) =>
         _expandedSnapshotStates.TryGetValue(snapshotId, out var isExpanded) && isExpanded;
+
+    private void ToggleAppearanceEntry(Guid appearanceEntryId)
+    {
+        var isExpanded = IsAppearanceEntryExpanded(appearanceEntryId);
+        _expandedAppearanceEntryStates[appearanceEntryId] = !isExpanded;
+    }
+
+    private bool IsAppearanceEntryExpanded(Guid appearanceEntryId) =>
+        _expandedAppearanceEntryStates.TryGetValue(appearanceEntryId, out var isExpanded) && isExpanded;
 
     private void ToggleProcessStep(Guid runId, Guid stepId)
     {

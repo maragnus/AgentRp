@@ -174,6 +174,62 @@ public sealed class StoryChatAppearanceService(
             ?? throw new InvalidOperationException("Saving the selected character appearance block failed because the updated appearance entry could not be mapped.");
     }
 
+    public async Task<StorySceneAppearanceEntryView> UpsertEntryForMessageAsync(
+        SaveStoryChatAppearanceReplayStep request,
+        CancellationToken cancellationToken)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var thread = await dbContext.ChatThreads
+            .FirstOrDefaultAsync(x => x.Id == request.ThreadId, cancellationToken)
+            ?? throw new InvalidOperationException("Saving the replayed character appearance failed because the selected chat could not be found.");
+        var story = await dbContext.ChatStories
+            .FirstOrDefaultAsync(x => x.ChatThreadId == request.ThreadId, cancellationToken)
+            ?? throw new InvalidOperationException("Saving the replayed character appearance failed because the selected story could not be found.");
+        var messages = await dbContext.ChatMessages
+            .AsNoTracking()
+            .Where(x => x.ThreadId == request.ThreadId)
+            .OrderBy(x => x.CreatedUtc)
+            .ToListAsync(cancellationToken);
+        var selectedLeafMessageId = ResolveSelectedLeafMessageId(messages, thread.ActiveLeafMessageId);
+        if (!selectedLeafMessageId.HasValue)
+            throw new InvalidOperationException("Saving the replayed character appearance failed because the active branch could not be found.");
+
+        var selectedPath = BuildSelectedPath(messages, selectedLeafMessageId.Value);
+        var coveredThroughMessage = selectedPath.FirstOrDefault(x => x.Id == request.MessageId);
+        if (coveredThroughMessage is null)
+            throw new InvalidOperationException("Saving the replayed character appearance failed because the selected message is not on the active branch.");
+
+        var normalizedCharacters = BuildUpdatedCharacters(story, request.Characters);
+        var existingEntry = await GetMatchingEntryForMessageAsync(dbContext, request.ThreadId, selectedPath, request.MessageId, cancellationToken);
+        if (existingEntry is not null)
+        {
+            existingEntry.AppearanceJson = ChatStoryJson.Serialize(StoryChatAppearanceDocumentNormalizer.Normalize(new StoryChatAppearanceDocument(
+                normalizedCharacters
+                    .Select(x => new StoryChatCharacterAppearanceDocument(x.CharacterId, x.CurrentAppearance))
+                    .ToList())));
+            existingEntry.Summary = BuildEntrySummary(null, normalizedCharacters);
+            existingEntry.UpdatedUtc = DateTime.UtcNow;
+            thread.UpdatedUtc = existingEntry.UpdatedUtc;
+
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return MapEntry(existingEntry, story, true, normalizedCharacters)
+                ?? throw new InvalidOperationException("Saving the replayed character appearance failed because the updated appearance entry could not be mapped.");
+        }
+
+        var createdEntry = await CreateEntryAsync(
+            dbContext,
+            request.ThreadId,
+            coveredThroughMessage,
+            normalizedCharacters,
+            null,
+            cancellationToken);
+        thread.UpdatedUtc = DateTime.UtcNow;
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return MapEntry(createdEntry, story, true, normalizedCharacters)
+            ?? throw new InvalidOperationException("Saving the replayed character appearance failed because the new appearance entry could not be mapped.");
+    }
+
     private static IReadOnlyList<StorySceneCharacterAppearanceView> BuildEffectiveCharacters(
         ChatStory story,
         StoryChatAppearanceEntry? latestEntry)
@@ -471,6 +527,24 @@ public sealed class StoryChatAppearanceService(
                     && selectedPathIds.Contains(x.SelectedLeafMessageId)
                     && selectedPathIds.Contains(x.CoveredThroughMessageId),
                 cancellationToken);
+    }
+
+    private static async Task<StoryChatAppearanceEntry?> GetMatchingEntryForMessageAsync(
+        DbAppContext dbContext,
+        Guid threadId,
+        IReadOnlyList<DbChatMessage> selectedPath,
+        Guid messageId,
+        CancellationToken cancellationToken)
+    {
+        var selectedPathIds = selectedPath.Select(x => x.Id).ToHashSet();
+
+        return await dbContext.StoryChatAppearanceEntries
+            .Where(x => x.ThreadId == threadId
+                && x.CoveredThroughMessageId == messageId
+                && selectedPathIds.Contains(x.SelectedLeafMessageId)
+                && selectedPathIds.Contains(x.CoveredThroughMessageId))
+            .OrderByDescending(x => x.CreatedUtc)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     private sealed record AppearanceStageResponse(

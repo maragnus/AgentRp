@@ -1,0 +1,545 @@
+@implements IDisposable
+@inject IStoryChatAppearanceReplayService AppearanceReplayService
+@inject IModelOperationRegistry ModelOperationRegistry
+@inject IUserFeedbackService UserFeedbackService
+@inject ILogger<StoryChatAppearanceReplayModal> Logger
+
+<AppModal IsOpen="IsOpen"
+          Title="Appearance Replay"
+          DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down"
+          CloseDisabled="@(IsLoading || IsSaving || _isGenerating)"
+          OnClose="CloseAsync">
+    <ChildContent>
+        <InlineAlert Message="@DisplayErrorMessage" />
+
+        @if (IsLoading)
+        {
+            <div class="d-flex align-items-center gap-3 py-3">
+                <div class="spinner-border spinner-border-sm" role="status"></div>
+                <span>Loading transcript...</span>
+            </div>
+        }
+        else if (Replay is null)
+        {
+            <div class="alert alert-light border mb-0">The appearance replay could not be loaded.</div>
+        }
+        else if (Replay.Transcript.Count == 0)
+        {
+            <div class="alert alert-light border mb-0">There are no messages in the active transcript.</div>
+        }
+        else
+        {
+            var selectedItem = SelectedItem;
+            var generatedStep = SelectedGeneratedStep;
+            var displayCharacters = DisplayCharacters;
+
+            <div class="row g-3">
+                <div class="col-12 col-lg-4">
+                    <div class="list-group">
+                        @foreach (var item in Replay.Transcript)
+                        {
+                            var isSelected = selectedItem?.MessageId == item.MessageId;
+                            var hasGeneratedStep = _generatedSteps.ContainsKey(item.MessageId);
+                            var hasSavedStep = HasSavedAppearance(item);
+                            <button type="button"
+                                    class="list-group-item list-group-item-action @(isSelected ? "active" : string.Empty)"
+                                    disabled="@(IsSaving || _isGenerating)"
+                                    @onclick="() => SelectItem(item.MessageId)">
+                                <div class="d-flex align-items-start justify-content-between gap-2">
+                                    <div>
+                                        <div class="fw-semibold">@item.SpeakerName</div>
+                                        <div class="small @(isSelected ? string.Empty : "text-body-secondary")">@item.CreatedUtc.ToShorthandDateWithRelativeDays()</div>
+                                    </div>
+                                    <div class="d-flex flex-column align-items-end gap-1">
+                                        @if (hasSavedStep)
+                                        {
+                                            <span class="badge text-bg-success">Saved</span>
+                                        }
+                                        @if (hasGeneratedStep)
+                                        {
+                                            <span class="badge text-bg-primary">Generated</span>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="small text-truncate mt-2">@item.Content</div>
+                            </button>
+                        }
+                    </div>
+                </div>
+
+                <div class="col-12 col-lg-8">
+                    @if (selectedItem is not null)
+                    {
+                        <div class="d-flex flex-column gap-3">
+                            <div class="d-flex flex-wrap align-items-start justify-content-between gap-3">
+                                <div>
+                                    <div class="fw-semibold">@selectedItem.SpeakerName</div>
+                                    <div class="small text-body-secondary">@selectedItem.CreatedUtc.ToShorthandDateWithRelativeDays()</div>
+                                </div>
+                                <div class="d-flex flex-wrap gap-2">
+                                    <span class="badge @(HasSavedAppearance(selectedItem) ? "text-bg-success" : "text-bg-light border text-body-secondary")">
+                                        @(HasSavedAppearance(selectedItem) ? "Saved block" : "No saved block")
+                                    </span>
+                                    @if (generatedStep?.TokenUsage?.TotalTokenCount is not null)
+                                    {
+                                        <span class="badge text-bg-light border text-body-secondary">@generatedStep.TokenUsage.TotalTokenCount tokens</span>
+                                    }
+                                </div>
+                            </div>
+
+                            <div class="border rounded bg-body-tertiary px-3 py-3">
+                                <div class="small">@selectedItem.Content</div>
+                            </div>
+
+                            @if (_isGenerating)
+                            {
+                                <div class="d-flex align-items-center gap-3 py-2">
+                                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                                    <span>Generating appearance...</span>
+                                </div>
+                            }
+                            else if (displayCharacters.Count == 0)
+                            {
+                                <div class="alert alert-light border mb-0">Click Generate to resolve appearance for this point in the transcript.</div>
+                            }
+                            else if (_isEditing)
+                            {
+                                @foreach (var character in displayCharacters)
+                                {
+                                    <div>
+                                        <label class="form-label" for="@GetEditorId(selectedItem.MessageId, character.CharacterId)">@character.CharacterName</label>
+                                        <textarea id="@GetEditorId(selectedItem.MessageId, character.CharacterId)"
+                                                  class="form-control"
+                                                  rows="3"
+                                                  disabled="@IsSaving"
+                                                  @bind:get="GetDraft(character.CharacterId)"
+                                                  @bind:set="value => SetDraft(character.CharacterId, value)"></textarea>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <div class="d-flex flex-column gap-3">
+                                    @foreach (var character in displayCharacters)
+                                    {
+                                        <div class="border-top pt-3">
+                                            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                                                <div class="fw-semibold">@character.CharacterName</div>
+                                                <span class="badge @(character.Changed ? "text-bg-primary" : "text-bg-light border text-body-secondary")">
+                                                    @(character.Changed ? "Changed" : "Unchanged")
+                                                </span>
+                                            </div>
+                                            <div class="row g-3 mt-1">
+                                                <div class="col-12 col-md-6">
+                                                    <div class="small text-body-secondary mb-1">Before</div>
+                                                    <div class="small">@(string.IsNullOrWhiteSpace(character.PreviousAppearance) ? "None" : character.PreviousAppearance)</div>
+                                                </div>
+                                                <div class="col-12 col-md-6">
+                                                    <div class="small text-body-secondary mb-1">After</div>
+                                                    <div class="small">@(string.IsNullOrWhiteSpace(character.CurrentAppearance) ? "None" : character.CurrentAppearance)</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <button type="button"
+                class="btn btn-outline-secondary"
+                disabled="@(IsLoading || IsSaving || _isGenerating || !CanMoveBack)"
+                @onclick="MoveBack">
+            <i class="fa-regular fa-arrow-left" aria-hidden="true"></i>
+        </button>
+
+        <button type="button"
+                class="btn btn-outline-secondary"
+                disabled="@(IsLoading || IsSaving || _isGenerating || !CanMoveNext)"
+                @onclick="MoveNext">
+            <i class="fa-regular fa-arrow-right" aria-hidden="true"></i>
+        </button>
+
+        <button type="button"
+                class="btn btn-outline-secondary"
+                disabled="@(IsLoading || IsSaving || _isGenerating)"
+                @onclick="CloseAsync">
+            Close
+        </button>
+
+        @if (_isGenerating)
+        {
+            <StopOperationButton Class="btn btn-outline-danger"
+                                 ShowText="true"
+                                 IsStopping="@_isStopping"
+                                 Disabled="@_isStopping"
+                                 Title="Stop appearance generation"
+                                 OnClick="StopGenerateAsync" />
+        }
+
+        @if (CanEditSelectedStep)
+        {
+            @if (_isEditing)
+            {
+                <button type="button"
+                        class="btn btn-outline-secondary"
+                        disabled="@IsSaving"
+                        @onclick="CancelEdit">
+                    Cancel
+                </button>
+                <BusyButton Class="btn btn-primary"
+                            OnClick="SaveAsync"
+                            IsBusy="@IsSaving"
+                            BusyText="Saving..."
+                            Disabled="@IsSaving">
+                    Save
+                </BusyButton>
+            }
+            else
+            {
+                <button type="button"
+                        class="btn btn-outline-secondary"
+                        disabled="@(IsSaving || _isGenerating)"
+                        @onclick="BeginEdit">
+                    <i class="fa-regular fa-pen me-1" aria-hidden="true"></i>
+                    Edit
+                </button>
+            }
+        }
+
+        <BusyButton Class="btn btn-primary"
+                    OnClick="GenerateAsync"
+                    IsBusy="@_isGenerating"
+                    BusyText="Generating..."
+                    Disabled="@(IsLoading || IsSaving || _isGenerating || SelectedItem is null)">
+            Generate
+        </BusyButton>
+
+        <BusyButton Class="btn btn-outline-primary"
+                    OnClick="ReconcileTranscriptAsync"
+                    IsBusy="@_isGenerating"
+                    BusyText="Reconciling..."
+                    Disabled="@(IsLoading || IsSaving || _isGenerating || Replay?.Transcript.Count == 0)">
+            Reconcile Transcript
+        </BusyButton>
+    </FooterContent>
+</AppModal>
+
+@code {
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public bool IsLoading { get; set; }
+
+    [Parameter]
+    public bool IsSaving { get; set; }
+
+    [Parameter]
+    public string? ErrorMessage { get; set; }
+
+    [Parameter]
+    public StoryChatAppearanceReplayView? Replay { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public EventCallback<SaveStoryChatAppearanceReplayStep> OnSave { get; set; }
+
+    private StoryChatAppearanceReplayView? _previousReplay;
+    private Guid? _selectedMessageId;
+    private Guid? _lastGeneratedMessageId;
+    private bool _isEditing;
+    private bool _isGenerating;
+    private bool _isStopping;
+    private string? _localErrorMessage;
+    private IModelOperationHandle? _generateOperation;
+    private Dictionary<Guid, string> _drafts = [];
+    private Dictionary<Guid, StoryChatAppearanceReplayGeneratedStepView> _generatedSteps = [];
+    private HashSet<Guid> _savedMessageIds = [];
+
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(_previousReplay, Replay))
+        {
+            _previousReplay = Replay;
+            _selectedMessageId = Replay?.Transcript.FirstOrDefault()?.MessageId;
+            _lastGeneratedMessageId = null;
+            _isEditing = false;
+            _isGenerating = false;
+            _isStopping = false;
+            _localErrorMessage = null;
+            _drafts = [];
+            _generatedSteps = [];
+            _savedMessageIds = [];
+            _generateOperation?.Dispose();
+            _generateOperation = null;
+        }
+    }
+
+    public void Dispose()
+    {
+        _generateOperation?.Dispose();
+    }
+
+    private string? DisplayErrorMessage => _localErrorMessage ?? ErrorMessage;
+
+    private StoryChatAppearanceReplayTranscriptItemView? SelectedItem =>
+        Replay?.Transcript.FirstOrDefault(x => x.MessageId == _selectedMessageId)
+        ?? Replay?.Transcript.FirstOrDefault();
+
+    private StoryChatAppearanceReplayGeneratedStepView? SelectedGeneratedStep =>
+        SelectedItem is null
+            ? null
+            : _generatedSteps.TryGetValue(SelectedItem.MessageId, out var generatedStep) ? generatedStep : null;
+
+    private IReadOnlyList<StoryChatAppearanceReplayCharacterView> DisplayCharacters =>
+        _isEditing
+            ? DraftCharacters
+            : SelectedGeneratedStep?.Characters
+                ?? BuildCharactersFromSavedAppearance(SelectedItem?.SavedAppearance);
+
+    private IReadOnlyList<StoryChatAppearanceReplayCharacterView> DraftCharacters =>
+        SelectedItem is null
+            ? []
+            : BuildEditableCharacters()
+                .Select(x => new StoryChatAppearanceReplayCharacterView(
+                    x.CharacterId,
+                    x.CharacterName,
+                    string.Empty,
+                    GetDraft(x.CharacterId),
+                    true))
+                .ToList();
+
+    private bool CanEditSelectedStep => SelectedItem is not null && DisplayCharacters.Count > 0 && !IsLoading;
+
+    private bool CanMoveBack => Replay is not null && GetSelectedIndex() > 0;
+
+    private bool CanMoveNext => Replay is not null && GetSelectedIndex() >= 0 && GetSelectedIndex() < Replay.Transcript.Count - 1;
+
+    private void SelectItem(Guid messageId)
+    {
+        if (IsSaving || _isGenerating)
+            return;
+
+        _selectedMessageId = messageId;
+        _isEditing = false;
+        _drafts = [];
+        _localErrorMessage = null;
+    }
+
+    private void MoveBack()
+    {
+        if (Replay is null || !CanMoveBack)
+            return;
+
+        SelectItem(Replay.Transcript[GetSelectedIndex() - 1].MessageId);
+    }
+
+    private void MoveNext()
+    {
+        if (Replay is null || !CanMoveNext)
+            return;
+
+        SelectItem(Replay.Transcript[GetSelectedIndex() + 1].MessageId);
+    }
+
+    private async Task GenerateAsync()
+    {
+        await GenerateSelectedAsync(useEntireTranscript: false);
+    }
+
+    private async Task ReconcileTranscriptAsync()
+    {
+        if (Replay?.Transcript.LastOrDefault() is { } lastItem)
+            SelectItem(lastItem.MessageId);
+
+        await GenerateSelectedAsync(useEntireTranscript: true);
+    }
+
+    private async Task GenerateSelectedAsync(bool useEntireTranscript)
+    {
+        if (Replay is null || SelectedItem is null)
+            return;
+
+        _generateOperation?.Dispose();
+        _generateOperation = ModelOperationRegistry.Start();
+        _isGenerating = true;
+        _isStopping = false;
+        _localErrorMessage = null;
+
+        try
+        {
+            var priorOverride = useEntireTranscript ? null : ResolvePriorOverride(SelectedItem.MessageId);
+            var generatedStep = await AppearanceReplayService.GenerateReplayStepAsync(
+                new GenerateStoryChatAppearanceReplayStep(Replay.ThreadId, SelectedItem.MessageId, useEntireTranscript),
+                priorOverride,
+                _generateOperation.CancellationToken);
+            _generatedSteps[SelectedItem.MessageId] = generatedStep;
+            _lastGeneratedMessageId = SelectedItem.MessageId;
+            _isEditing = false;
+            _drafts = [];
+        }
+        catch (OperationCanceledException)
+        {
+            _localErrorMessage = "Appearance generation was stopped.";
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Generating appearance replay step {MessageId} failed for chat {ThreadId}.", SelectedItem.MessageId, Replay.ThreadId);
+            _localErrorMessage = "Generating the replayed appearance failed.";
+            UserFeedbackService.ShowBackgroundError(_localErrorMessage, "Appearance Generation Failed");
+        }
+        finally
+        {
+            _isGenerating = false;
+            _isStopping = false;
+            _generateOperation?.Dispose();
+            _generateOperation = null;
+        }
+    }
+
+    private Task StopGenerateAsync()
+    {
+        if (_generateOperation is null || _isStopping)
+            return Task.CompletedTask;
+
+        _isStopping = true;
+        if (!ModelOperationRegistry.TryCancel(_generateOperation.OperationId))
+            _isStopping = false;
+
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private void BeginEdit()
+    {
+        if (SelectedItem is null)
+            return;
+
+        _drafts = BuildEditableCharacters().ToDictionary(x => x.CharacterId, x => x.CurrentAppearance);
+        _isEditing = true;
+    }
+
+    private void CancelEdit()
+    {
+        _isEditing = false;
+        _drafts = [];
+    }
+
+    private async Task SaveAsync()
+    {
+        if (Replay is null || SelectedItem is null)
+            return;
+
+        var characters = BuildEditableCharacters()
+            .Select(x => new StorySceneCharacterAppearanceView(
+                x.CharacterId,
+                x.CharacterName,
+                GetDraft(x.CharacterId)))
+            .ToList();
+        await OnSave.InvokeAsync(new SaveStoryChatAppearanceReplayStep(Replay.ThreadId, SelectedItem.MessageId, characters));
+
+        _savedMessageIds.Add(SelectedItem.MessageId);
+        _generatedSteps[SelectedItem.MessageId] = new StoryChatAppearanceReplayGeneratedStepView(
+            SelectedItem.MessageId,
+            SelectedGeneratedStep?.TranscriptFromMessageId,
+            SelectedItem.MessageId,
+            SelectedGeneratedStep?.SavedAppearance ?? SelectedItem.SavedAppearance,
+            MergeCharacters(BuildEditableCharacters(), characters),
+            SelectedGeneratedStep?.TokenUsage);
+        _lastGeneratedMessageId = SelectedItem.MessageId;
+        _isEditing = false;
+        _drafts = [];
+    }
+
+    private Task CloseAsync()
+    {
+        if (IsLoading || IsSaving || _isGenerating)
+            return Task.CompletedTask;
+
+        return OnClose.InvokeAsync();
+    }
+
+    private IReadOnlyList<StorySceneCharacterAppearanceView>? ResolvePriorOverride(Guid selectedMessageId)
+    {
+        if (!_lastGeneratedMessageId.HasValue || Replay is null)
+            return null;
+
+        var selectedIndex = Replay.Transcript.ToList().FindIndex(x => x.MessageId == selectedMessageId);
+        var previousIndex = Replay.Transcript.ToList().FindIndex(x => x.MessageId == _lastGeneratedMessageId.Value);
+        if (selectedIndex != previousIndex + 1 || !_generatedSteps.TryGetValue(_lastGeneratedMessageId.Value, out var previousStep))
+            return null;
+
+        return previousStep.Characters
+            .Select(x => new StorySceneCharacterAppearanceView(x.CharacterId, x.CharacterName, x.CurrentAppearance))
+            .ToList();
+    }
+
+    private IReadOnlyList<StorySceneCharacterAppearanceView> BuildEditableCharacters()
+    {
+        if (SelectedGeneratedStep is not null)
+            return SelectedGeneratedStep.Characters
+                .Select(x => new StorySceneCharacterAppearanceView(x.CharacterId, x.CharacterName, x.CurrentAppearance))
+                .ToList();
+
+        return SelectedItem?.SavedAppearance?.Characters ?? [];
+    }
+
+    private static IReadOnlyList<StoryChatAppearanceReplayCharacterView> BuildCharactersFromSavedAppearance(StorySceneAppearanceEntryView? appearance) =>
+        appearance?.Characters
+            .Select(x => new StoryChatAppearanceReplayCharacterView(
+                x.CharacterId,
+                x.CharacterName,
+                string.Empty,
+                x.CurrentAppearance,
+                true))
+            .ToList()
+        ?? [];
+
+    private bool HasSavedAppearance(StoryChatAppearanceReplayTranscriptItemView item) =>
+        item.SavedAppearance is not null || _savedMessageIds.Contains(item.MessageId);
+
+    private static IReadOnlyList<StoryChatAppearanceReplayCharacterView> MergeCharacters(
+        IReadOnlyList<StorySceneCharacterAppearanceView> previousCharacters,
+        IReadOnlyList<StorySceneCharacterAppearanceView> currentCharacters)
+    {
+        var previousLookup = previousCharacters.ToDictionary(x => x.CharacterId, x => x.CurrentAppearance);
+        return currentCharacters
+            .Select(character =>
+            {
+                previousLookup.TryGetValue(character.CharacterId, out var previousAppearance);
+                previousAppearance ??= string.Empty;
+                return new StoryChatAppearanceReplayCharacterView(
+                    character.CharacterId,
+                    character.CharacterName,
+                    previousAppearance,
+                    character.CurrentAppearance,
+                    !string.Equals(CollapseWhitespace(previousAppearance), CollapseWhitespace(character.CurrentAppearance), StringComparison.Ordinal));
+            })
+            .ToList();
+    }
+
+    private int GetSelectedIndex() =>
+        Replay is null || SelectedItem is null
+            ? -1
+            : Replay.Transcript.ToList().FindIndex(x => x.MessageId == SelectedItem.MessageId);
+
+    private string GetDraft(Guid characterId) =>
+        _drafts.TryGetValue(characterId, out var draft) ? draft : string.Empty;
+
+    private void SetDraft(Guid characterId, string? value) =>
+        _drafts[characterId] = value ?? string.Empty;
+
+    private static string GetEditorId(Guid messageId, Guid characterId) =>
+        $"story-appearance-replay-{messageId:N}-{characterId:N}";
+
+    private static string CollapseWhitespace(string value) =>
+        string.Join(" ", value
+            .Split([' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+}

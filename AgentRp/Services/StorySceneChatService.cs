@@ -574,6 +574,14 @@ public sealed class StorySceneChatService(
         PublishWorkspaceRefresh(request.ThreadId);
     }
 
+    public async Task<StorySceneAppearanceEntryView> SaveAppearanceReplayStepAsync(SaveStoryChatAppearanceReplayStep request, CancellationToken cancellationToken)
+    {
+        var updatedAppearance = await storyChatAppearanceService.UpsertEntryForMessageAsync(request, cancellationToken);
+        await RefreshProcessAppearanceAsync(request.ThreadId, updatedAppearance, cancellationToken);
+        PublishWorkspaceRefresh(request.ThreadId);
+        return updatedAppearance;
+    }
+
     public async Task UpdatePlanAsync(UpdateStoryScenePlan request, CancellationToken cancellationToken)
     {
         var updatedPlanner = NormalizeEditablePlanner(request.Planner);
@@ -809,7 +817,7 @@ public sealed class StorySceneChatService(
             sharedContext = generationBuild.Context;
             appearanceResolution = generationBuild.Appearance;
             appearanceTokenUsage = generationBuild.AppearanceTokenUsage;
-            await UpdateAppearanceCompletionAsync(request.ThreadId, runId, request.Mode, trimmedGuidancePrompt, sharedContext, appearanceResolution, appearanceTokenUsage, cancellationToken);
+            await UpdateAppearanceCompletionAsync(request.ThreadId, runId, request.Mode, trimmedGuidancePrompt, sharedContext, appearanceResolution, appearanceTokenUsage, generationBuild.AppearanceStageSkipped, cancellationToken);
             PublishWorkspaceRefresh(request.ThreadId);
 
             if (IsRespondMode(request.Mode))
@@ -1076,6 +1084,7 @@ public sealed class StorySceneChatService(
         StorySceneSharedContext context,
         StorySceneAppearanceResolution appearance,
         StoryMessageTokenUsage? tokenUsage,
+        bool skipAppearanceStep,
         CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -1099,13 +1108,16 @@ public sealed class StorySceneChatService(
             null,
             BuildAppearanceCompletedStepArtifacts(mode, context, appearance)));
 
-        CompleteStepIfPresent(
-            run,
-            ProcessStepKeys.Appearance,
-            now,
-            appearance.LatestEntry?.Summary ?? "Current appearance was resolved for the active branch.",
-            StorySceneSharedPromptBuilder.BuildAppearanceDetail(appearance),
-            tokenUsage);
+        if (skipAppearanceStep)
+            RemoveStepIfPresent(dbContext, run, ProcessStepKeys.Appearance);
+        else
+            CompleteStepIfPresent(
+                run,
+                ProcessStepKeys.Appearance,
+                now,
+                appearance.LatestEntry?.Summary ?? "Current appearance was resolved for the active branch.",
+                StorySceneSharedPromptBuilder.BuildAppearanceDetail(appearance),
+                tokenUsage);
 
         if (IsRespondMode(mode))
         {
@@ -1524,8 +1536,19 @@ public sealed class StorySceneChatService(
                     message.Content))
                 .ToList());
 
-        return new GenerationBuildResult(context, appearance, appearanceStage.TokenUsage);
+        return new GenerationBuildResult(
+            context,
+            appearance,
+            appearanceStage.TokenUsage,
+            ShouldSkipAppearanceProcessStep(appearance, appearanceStage.TokenUsage));
     }
+
+    private static bool ShouldSkipAppearanceProcessStep(
+        StorySceneAppearanceResolution appearance,
+        StoryMessageTokenUsage? tokenUsage) =>
+        tokenUsage is null
+        && appearance.LatestEntry is not null
+        && appearance.TranscriptSinceLatestEntry.Count == 0;
 
     private static StorySceneGenerationContext BuildGenerationContext(StorySceneSharedContext context, Guid? speakerCharacterId) =>
         new(
@@ -1941,6 +1964,16 @@ public sealed class StorySceneChatService(
         var step = FindProcessStep(run, stepKey);
         if (step is not null)
             CompleteProcessStep(step, completedUtc, summary, detail, tokenUsage);
+    }
+
+    private static void RemoveStepIfPresent(DbAppContext dbContext, ProcessRun run, string stepKey)
+    {
+        var step = FindProcessStep(run, stepKey);
+        if (step is null)
+            return;
+
+        run.Steps.Remove(step);
+        dbContext.ProcessSteps.Remove(step);
     }
 
     private static void UpdateStepSummaryIfPresent(ProcessRun run, string stepKey, string summary, string detail)
@@ -3144,7 +3177,8 @@ public sealed class StorySceneChatService(
     private sealed record GenerationBuildResult(
         StorySceneSharedContext Context,
         StorySceneAppearanceResolution Appearance,
-        StoryMessageTokenUsage? AppearanceTokenUsage);
+        StoryMessageTokenUsage? AppearanceTokenUsage,
+        bool AppearanceStageSkipped);
 
     private sealed record PlannerStageExecutionResult(
         StoryMessagePlannerResult Planner,

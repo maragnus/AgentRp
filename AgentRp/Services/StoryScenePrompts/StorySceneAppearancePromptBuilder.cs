@@ -11,52 +11,40 @@ internal static class StorySceneAppearancePromptBuilder
 {
     internal static string BuildSystemPrompt() =>
         """
-        You resolve current in-scene character scene state from a story transcript.
+        You update character scene state.
 
         Return structured output only.
 
-        Your job is to produce a current snapshot for each character in the scene.
-        This is not a history, not a recap, and not a list of changes.
+        Scene state is what is visibly true about each character right now:
+        clothing, carried items, body position, location, posture, visible condition, and current physical contact with people or objects.
 
-        Scene state means what is true and visible now for each character.
-        It may include:
-        - clothing or lack of clothing
-        - visible physical state such as sweaty, overheated, cold, tense, trembling, injured, exhausted, wet
-        - body position or posture
-        - body language or facial expression, only if still true now
-        - where they are relative to the room, furniture, objects, or other characters
-        - what they are currently touching, holding, lying on, under, against, facing, blocking, or interacting with
+        Use the prior scene state as the starting point.
+        Use the latest transcript to update it.
 
-        Evidence:
-        - Use only the transcript
-        - Use the provided prior scene state as fallback only when it still appears true
-        - Do not use general character description
+        Keep stable details from the prior state unless the transcript changes or contradicts them.
+        Stable details include clothing, carried items, injuries, location, posture, and physical contact.
 
-        Resolution rules:
-        - Resolve each character to the best supported current state
-        - Prefer newer evidence over older evidence
-        - Replace outdated prior details with newer supported details
-        - Do not merge old and new details into a running description
-        - Do not describe how a character got into their current position
-        - Do not include intermediate actions unless they are still true now
-        - If a prior detail is no longer clearly true, leave it out
-        - Minimal supported details still count
-        - Relative position and interaction with objects or other characters count as scene state
-        - Lack of clothing counts as scene state when supported
+        Do not drop outfits or carried items just because they were not mentioned again.
 
-        Output rules:
-        - Return one result for every character currently in the scene
-        - Set hasCurrentSceneState to true only when at least one specific current detail is supported
-        - If no specific current detail is supported, set hasCurrentSceneState to false and set currentSceneState to an empty string
-        - currentSceneState must describe only the character's present state
-        - Write currentSceneState as a compact snapshot, not a sequence of actions
-        - Prefer present-state phrases over action narration
-        - Do not include motivations, interpretation, future actions, or unsupported assumptions
-        - Do not drop details just to be brief
+        Temporary details fade unless the latest transcript still supports them.
+        Temporary details include facial expressions, brief gestures, glances, momentary touches, and passing reactions.
+
+        For each character:
+        - keep unchanged stable details regardless of percieved importance
+        - keep details about what is exposed or not being worn
+        - add new visible details
+        - replace changed details
+        - remove contradicted details
+
+        Write only the current snapshot.
+        Do not recap actions.
+        Do not explain changes.
+        Do not include thoughts, motives, memories, or personality.
+
+        Return one result for every character currently in the scene.
+        If a character has no supported current scene state, set hasCurrentSceneState to false and currentSceneState to "".
 
         The summary must mention only characters with hasCurrentSceneState true.
-        The summary must describe each character as they appear now.
-        Respect the supplied explicit-content and violent-content guidance.
         """;
 
     internal static string BuildUserPrompt(

@@ -36,6 +36,7 @@
 
     private static string GetHeaderClass(ToastIntent intent) => intent switch
     {
+        ToastIntent.Success => "bg-success-subtle text-success-emphasis",
         ToastIntent.Error => "bg-danger-subtle text-danger-emphasis",
         _ => "bg-warning-subtle text-warning-emphasis"
     };

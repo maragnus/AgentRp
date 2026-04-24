@@ -30,6 +30,7 @@ builder.Services.AddScoped<IChatTransferService, ChatTransferService>();
 builder.Services.AddScoped<IChatStoryService, ChatStoryService>();
 builder.Services.AddScoped<IStoryChatSnapshotService, StoryChatSnapshotService>();
 builder.Services.AddScoped<IStoryChatAppearanceService, StoryChatAppearanceService>();
+builder.Services.AddScoped<IStoryChatAppearanceReplayService, StoryChatAppearanceReplayService>();
 builder.Services.AddScoped<IStorySceneChatService, StorySceneChatService>();
 builder.Services.AddScoped<IStoryEntityAiAssistService, StoryEntityAiAssistService>();
 builder.Services.AddScoped<IStoryCharacterModelSheetService, StoryCharacterModelSheetService>();

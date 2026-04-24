@@ -371,6 +371,45 @@ public sealed record UpdateStorySceneAppearanceEntry(
     Guid AppearanceEntryId,
     IReadOnlyList<StorySceneCharacterAppearanceView> Characters);
 
+public sealed record StoryChatAppearanceReplayCharacterView(
+    Guid CharacterId,
+    string CharacterName,
+    string PreviousAppearance,
+    string CurrentAppearance,
+    bool Changed);
+
+public sealed record StoryChatAppearanceReplayTranscriptItemView(
+    Guid MessageId,
+    DateTime CreatedUtc,
+    string SpeakerName,
+    string Content,
+    StorySceneAppearanceEntryView? SavedAppearance);
+
+public sealed record StoryChatAppearanceReplayGeneratedStepView(
+    Guid MessageId,
+    Guid? TranscriptFromMessageId,
+    Guid TranscriptThroughMessageId,
+    StorySceneAppearanceEntryView? SavedAppearance,
+    IReadOnlyList<StoryChatAppearanceReplayCharacterView> Characters,
+    StoryMessageTokenUsage? TokenUsage);
+
+public sealed record StoryChatAppearanceReplayView(
+    Guid ThreadId,
+    IReadOnlyList<StoryChatAppearanceReplayTranscriptItemView> Transcript);
+
+public sealed record CreateStoryChatAppearanceReplay(
+    Guid ThreadId);
+
+public sealed record GenerateStoryChatAppearanceReplayStep(
+    Guid ThreadId,
+    Guid MessageId,
+    bool UseEntireTranscript = false);
+
+public sealed record SaveStoryChatAppearanceReplayStep(
+    Guid ThreadId,
+    Guid MessageId,
+    IReadOnlyList<StorySceneCharacterAppearanceView> Characters);
+
 public sealed record UpdateStoryScenePlan(
     Guid ThreadId,
     Guid SourceMessageId,
@@ -464,6 +503,7 @@ public sealed record ToastMessage(
 
 public enum ToastIntent
 {
+    Success,
     Error,
     Warning
 }
@@ -482,6 +522,8 @@ public interface IUserFeedbackService
     IReadOnlyList<ToastMessage> Messages { get; }
 
     void ShowBackgroundError(string message, string title);
+
+    void ShowBackgroundSuccess(string message, string title);
 
     void ShowBackgroundWarning(string message, string title);
 
@@ -954,6 +996,8 @@ public interface IStorySceneChatService
 
     Task UpdateAppearanceEntryAsync(UpdateStorySceneAppearanceEntry request, CancellationToken cancellationToken);
 
+    Task<StorySceneAppearanceEntryView> SaveAppearanceReplayStepAsync(SaveStoryChatAppearanceReplayStep request, CancellationToken cancellationToken);
+
     Task UpdatePlanAsync(UpdateStoryScenePlan request, CancellationToken cancellationToken);
 }
 
@@ -985,6 +1029,22 @@ public interface IStoryChatAppearanceService
 
     Task<StorySceneAppearanceEntryView> UpdateEntryAsync(
         UpdateStorySceneAppearanceEntry request,
+        CancellationToken cancellationToken);
+
+    Task<StorySceneAppearanceEntryView> UpsertEntryForMessageAsync(
+        SaveStoryChatAppearanceReplayStep request,
+        CancellationToken cancellationToken);
+}
+
+public interface IStoryChatAppearanceReplayService
+{
+    Task<StoryChatAppearanceReplayView> CreateReplayAsync(
+        CreateStoryChatAppearanceReplay request,
+        CancellationToken cancellationToken);
+
+    Task<StoryChatAppearanceReplayGeneratedStepView> GenerateReplayStepAsync(
+        GenerateStoryChatAppearanceReplayStep request,
+        IReadOnlyList<StorySceneCharacterAppearanceView>? priorOverride,
         CancellationToken cancellationToken);
 }
 
