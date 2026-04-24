@@ -18,6 +18,7 @@ public sealed class ChatWorkspaceService(
             Id = Guid.NewGuid(),
             Title = "New Chat",
             SelectedAgentName = agentCatalog.GetDefaultAgentName() ?? string.Empty,
+            SelectedAiModelId = agentCatalog.GetDefaultModelId(),
             CreatedUtc = now,
             UpdatedUtc = now
         };

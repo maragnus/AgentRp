@@ -28,6 +28,17 @@ public sealed record UpdateStoryGenerationSettings(
     StoryModelStageSettingsView Planning,
     StoryModelStageSettingsView Writing);
 
+public sealed record CopyStoryGenerationSettingsTarget(
+    Guid ModelId,
+    StoryGenerationSettingsCopySlot Slot);
+
+public enum StoryGenerationSettingsCopySlot
+{
+    Planning,
+    Writing,
+    Both
+}
+
 public sealed record StoryGenerationSettingsStageTransferPackage(
     int SchemaVersion,
     DateTime ExportedUtc,
@@ -38,7 +49,17 @@ public interface IStoryGenerationSettingsService
 {
     Task<StoryGenerationSettingsView> GetSettingsAsync(CancellationToken cancellationToken);
 
+    Task<StoryGenerationSettingsView> GetSettingsAsync(Guid modelId, CancellationToken cancellationToken);
+
     Task<StoryGenerationSettingsView> UpdateSettingsAsync(UpdateStoryGenerationSettings update, CancellationToken cancellationToken);
+
+    Task<StoryGenerationSettingsView> UpdateSettingsAsync(Guid modelId, UpdateStoryGenerationSettings update, CancellationToken cancellationToken);
+
+    Task CopySettingsAsync(
+        StoryGenerationStage sourceStage,
+        StoryModelStageSettingsView settings,
+        IReadOnlyList<CopyStoryGenerationSettingsTarget> targets,
+        CancellationToken cancellationToken);
 
     StoryModelStageSettingsView NormalizeStageSettings(StoryGenerationStage stage, StoryModelStageSettingsView settings);
 
@@ -47,6 +68,8 @@ public interface IStoryGenerationSettingsService
     StoryModelStageSettingsView DeserializeStageTransferPackage(string json, StoryGenerationStage expectedStage);
 
     string BuildStageExportFileName(StoryGenerationStage stage, DateTime exportedUtc);
+
+    string SerializeSettings(StoryModelStageSettingsView settings, StoryGenerationStage stage);
 }
 
 public sealed class StoryGenerationSettingsService(
@@ -71,23 +94,93 @@ public sealed class StoryGenerationSettingsService(
     public async Task<StoryGenerationSettingsView> GetSettingsAsync(CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
-        var settings = await GetOrCreateSettingsAsync(dbContext, cancellationToken);
-        return Deserialize(settings.JsonValue);
+        var modelId = await dbContext.AiModels
+            .AsNoTracking()
+            .Where(x => x.IsEnabled && x.Provider.IsEnabled)
+            .OrderBy(x => x.Provider.SortOrder)
+            .ThenBy(x => x.SortOrder)
+            .Select(x => (Guid?)x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return modelId.HasValue
+            ? await GetSettingsAsync(modelId.Value, cancellationToken)
+            : CreateDefaultSettings();
+    }
+
+    public async Task<StoryGenerationSettingsView> GetSettingsAsync(Guid modelId, CancellationToken cancellationToken)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var model = await dbContext.AiModels.FirstOrDefaultAsync(x => x.Id == modelId, cancellationToken)
+            ?? throw new InvalidOperationException("Loading model settings failed because the selected model could not be found.");
+
+        EnsureModelSettings(model);
+        await dbContext.SaveChangesAsync(cancellationToken);
+        return DeserializeModel(model);
     }
 
     public async Task<StoryGenerationSettingsView> UpdateSettingsAsync(UpdateStoryGenerationSettings update, CancellationToken cancellationToken)
     {
-        var normalized = Normalize(update);
-
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
-        var settings = await GetOrCreateSettingsAsync(dbContext, cancellationToken);
+        var modelId = await dbContext.AiModels
+            .Where(x => x.IsEnabled && x.Provider.IsEnabled)
+            .OrderBy(x => x.Provider.SortOrder)
+            .ThenBy(x => x.SortOrder)
+            .Select(x => (Guid?)x.Id)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException("Saving model settings failed because no enabled model is available.");
 
-        settings.JsonValue = Serialize(normalized);
-        settings.UpdatedUtc = DateTime.UtcNow;
+        return await UpdateSettingsAsync(modelId, update, cancellationToken);
+    }
+
+    public async Task<StoryGenerationSettingsView> UpdateSettingsAsync(Guid modelId, UpdateStoryGenerationSettings update, CancellationToken cancellationToken)
+    {
+        var normalized = Normalize(update);
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var model = await dbContext.AiModels.FirstOrDefaultAsync(x => x.Id == modelId, cancellationToken)
+            ?? throw new InvalidOperationException("Saving model settings failed because the selected model could not be found.");
+
+        model.PlanningSettingsJson = Serialize(normalized.Planning);
+        model.WritingSettingsJson = Serialize(normalized.Writing);
+        model.UpdatedUtc = DateTime.UtcNow;
         await dbContext.SaveChangesAsync(cancellationToken);
 
         PublishRefresh();
         return normalized;
+    }
+
+    public async Task CopySettingsAsync(
+        StoryGenerationStage sourceStage,
+        StoryModelStageSettingsView settings,
+        IReadOnlyList<CopyStoryGenerationSettingsTarget> targets,
+        CancellationToken cancellationToken)
+    {
+        if (targets.Count == 0)
+            throw new InvalidOperationException("Copying model settings failed because no target models were selected.");
+
+        var normalized = NormalizeStage(settings, sourceStage);
+        var json = Serialize(normalized);
+        var targetIds = targets.Select(x => x.ModelId).Distinct().ToHashSet();
+
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var models = await dbContext.AiModels.Where(x => targetIds.Contains(x.Id)).ToListAsync(cancellationToken);
+        if (models.Count != targetIds.Count)
+            throw new InvalidOperationException("Copying model settings failed because one or more target models could not be found.");
+
+        var targetMap = targets.ToDictionary(x => x.ModelId);
+        foreach (var model in models)
+        {
+            var target = targetMap[model.Id];
+            if (target.Slot is StoryGenerationSettingsCopySlot.Planning or StoryGenerationSettingsCopySlot.Both)
+                model.PlanningSettingsJson = json;
+
+            if (target.Slot is StoryGenerationSettingsCopySlot.Writing or StoryGenerationSettingsCopySlot.Both)
+                model.WritingSettingsJson = json;
+
+            model.UpdatedUtc = DateTime.UtcNow;
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        PublishRefresh();
     }
 
     public StoryModelStageSettingsView NormalizeStageSettings(StoryGenerationStage stage, StoryModelStageSettingsView settings) =>
@@ -145,6 +238,9 @@ public sealed class StoryGenerationSettingsService(
         var stageSlug = stage.ToString().ToLowerInvariant();
         return $"story-model-settings-{stageSlug}-{dateStamp}.json";
     }
+
+    public string SerializeSettings(StoryModelStageSettingsView settings, StoryGenerationStage stage) =>
+        Serialize(NormalizeStage(settings, stage));
 
     private static StoryGenerationSettingsView Normalize(UpdateStoryGenerationSettings update) => new(
         NormalizeStage(update.Planning, StoryGenerationStage.Planning),
@@ -287,11 +383,13 @@ public sealed class StoryGenerationSettingsService(
 
     private static string Serialize(StoryGenerationSettingsView settings) => JsonSerializer.Serialize(settings, JsonSerializerOptions);
 
-    private static StoryGenerationSettingsView CreateDefaultSettings() => new(
+    private static string Serialize(StoryModelStageSettingsView settings) => JsonSerializer.Serialize(settings, JsonSerializerOptions);
+
+    internal static StoryGenerationSettingsView CreateDefaultSettings() => new(
         CreateDefaultStageSettings(StoryGenerationStage.Planning),
         CreateDefaultStageSettings(StoryGenerationStage.Writing));
 
-    private static StoryModelStageSettingsView CreateDefaultStageSettings(StoryGenerationStage stage) => new(
+    internal static StoryModelStageSettingsView CreateDefaultStageSettings(StoryGenerationStage stage) => new(
         GetDefaultTemperature(stage),
         null,
         null,
@@ -313,6 +411,43 @@ public sealed class StoryGenerationSettingsService(
         StoryGenerationStage.Writing => "Writing",
         _ => stage.ToString()
     };
+
+    internal static string CreateDefaultStageSettingsJson(StoryGenerationStage stage) => Serialize(CreateDefaultStageSettings(stage));
+
+    private static StoryGenerationSettingsView DeserializeModel(AiModel model) => new(
+        DeserializeStage(model.PlanningSettingsJson, StoryGenerationStage.Planning),
+        DeserializeStage(model.WritingSettingsJson, StoryGenerationStage.Writing));
+
+    private static StoryModelStageSettingsView DeserializeStage(string json, StoryGenerationStage stage)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return CreateDefaultStageSettings(stage);
+
+        try
+        {
+            var document = JsonSerializer.Deserialize<StoryModelStageSettingsDocument>(json, JsonSerializerOptions);
+            return document is null
+                ? CreateDefaultStageSettings(stage)
+                : NormalizeStage(MapStageDocument(document, stage), stage);
+        }
+        catch (JsonException)
+        {
+            return CreateDefaultStageSettings(stage);
+        }
+        catch (InvalidOperationException)
+        {
+            return CreateDefaultStageSettings(stage);
+        }
+    }
+
+    private static void EnsureModelSettings(AiModel model)
+    {
+        if (string.IsNullOrWhiteSpace(model.PlanningSettingsJson))
+            model.PlanningSettingsJson = CreateDefaultStageSettingsJson(StoryGenerationStage.Planning);
+
+        if (string.IsNullOrWhiteSpace(model.WritingSettingsJson))
+            model.WritingSettingsJson = CreateDefaultStageSettingsJson(StoryGenerationStage.Writing);
+    }
 
     private static async Task<AppSetting> GetOrCreateSettingsAsync(AgentRp.Data.AppContext dbContext, CancellationToken cancellationToken)
     {

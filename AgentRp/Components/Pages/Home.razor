@@ -7,7 +7,6 @@
 @inject IStoryChatAppearanceReplayService StoryChatAppearanceReplayService
 @inject IActivityNotifier ActivityNotifier
 @inject IModelOperationRegistry ModelOperationRegistry
-@inject IUserFeedbackService UserFeedbackService
 @inject IStorySceneChatDisplayPreferencesService StorySceneChatDisplayPreferencesService
 @inject NavigationManager NavigationManager
 @inject ILogger<Home> Logger
@@ -283,7 +282,8 @@ else
 
                             @if (message is not null)
                             {
-                                <div class="@cardClass">
+                                <div class="@cardClass"
+                                     @onclick="() => ToggleSelectedMessage(message.MessageId)">
                                     <div class="card shadow-sm">
                                         <div class="card-body d-flex flex-column gap-3">
                                             <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 small text-body-secondary">
@@ -340,7 +340,7 @@ else
                                             }
                                         </div>
 
-                                        <div class="border-top px-3 py-2">
+                                        <div class="app-message-footer border-top px-3 py-2" @onclick:stopPropagation="true">
                                             <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
                                                 <div class="d-flex align-items-center gap-2">
                                                     @if (message.BranchNavigator is not null)
@@ -388,20 +388,6 @@ else
                                                     }
                                                     else
                                                     {
-                                                        @if (canRetryMessage)
-                                                        {
-                                                            <BusyButton Class="btn btn-outline-primary btn-sm"
-                                                                        OnClick="() => BeginRetryAsync(message)"
-                                                                        IsBusy="@(_startingRetryMessageId == message.MessageId)"
-                                                                        BusyText=""
-                                                                        ShowBusyText="false"
-                                                                        Disabled="@(IsSceneInteractionLocked || _startingRetryMessageId.HasValue)"
-                                                                        title="Retry message as a new branch"
-                                                                        aria-label="Retry message as a new branch">
-                                                                <i class="fa-regular fa-rotate-left" aria-hidden="true"></i>
-                                                            </BusyButton>
-                                                        }
-
                                                         <div class="dropdown">
                                                             <button type="button"
                                                                     class="btn btn-outline-primary btn-sm dropdown-toggle"
@@ -449,30 +435,49 @@ else
                                                             </ul>
                                                         </div>
 
-                                                        @if (canRegenerateProse)
+                                                        @if (canRetryMessage)
                                                         {
                                                             <BusyButton Class="btn btn-outline-primary btn-sm"
-                                                                        OnClick="() => RegenerateProseAsync(message)"
-                                                                        IsBusy="@(_regeneratingProseMessageId == message.MessageId)"
+                                                                        OnClick="() => BeginRetryAsync(message)"
+                                                                        IsBusy="@(_startingRetryMessageId == message.MessageId)"
                                                                         BusyText=""
                                                                         ShowBusyText="false"
-                                                                        Disabled="@(IsSceneInteractionLocked || _regeneratingProseMessageId.HasValue)"
-                                                                        title="Regenerate prose from saved plan"
-                                                                        aria-label="Regenerate prose from saved plan">
-                                                                <i class="fa-regular fa-repeat" aria-hidden="true"></i>
+                                                                        Disabled="@(IsSceneInteractionLocked || _startingRetryMessageId.HasValue)"
+                                                                        title="Retry message as a new branch"
+                                                                        aria-label="Retry message as a new branch">
+                                                                <i class="fa-regular fa-rotate-left" aria-hidden="true"></i>
                                                             </BusyButton>
                                                         }
 
-                                                        @if (canEditSavedPlan)
+                                                        @if (canRegenerateProse || canEditSavedPlan)
                                                         {
-                                                            <button type="button"
-                                                                    class="btn btn-outline-primary btn-sm"
-                                                                    title="Edit saved plan"
-                                                                    aria-label="Edit saved plan"
-                                                                    disabled="@IsSceneInteractionLocked"
-                                                                    @onclick="() => OpenPlanModal(message)">
-                                                                <i class="fa-regular fa-list-check" aria-hidden="true"></i>
-                                                            </button>
+                                                            <div class="btn-group btn-group-sm" role="group" aria-label="Saved plan actions">
+                                                                @if (canRegenerateProse)
+                                                                {
+                                                                    <BusyButton Class="btn btn-outline-primary"
+                                                                                OnClick="() => RegenerateProseAsync(message)"
+                                                                                IsBusy="@(_regeneratingProseMessageId == message.MessageId)"
+                                                                                BusyText=""
+                                                                                ShowBusyText="false"
+                                                                                Disabled="@(IsSceneInteractionLocked || _regeneratingProseMessageId.HasValue)"
+                                                                                title="Regenerate prose from saved plan"
+                                                                                aria-label="Regenerate prose from saved plan">
+                                                                        <i class="fa-regular fa-repeat" aria-hidden="true"></i>
+                                                                    </BusyButton>
+                                                                }
+
+                                                                @if (canEditSavedPlan)
+                                                                {
+                                                                    <button type="button"
+                                                                            class="btn btn-outline-primary"
+                                                                            title="Edit saved plan"
+                                                                            aria-label="Edit saved plan"
+                                                                            disabled="@IsSceneInteractionLocked"
+                                                                            @onclick="() => OpenPlanModal(message)">
+                                                                        <i class="fa-regular fa-list-check" aria-hidden="true"></i>
+                                                                    </button>
+                                                                }
+                                                            </div>
                                                         }
 
                                                         @if (message.IsSnapshotCandidate)
@@ -1115,6 +1120,7 @@ else
     private string? _reassigningAuthorKey;
     private Guid? _regeneratingProseMessageId;
     private Guid? _editingMessageId;
+    private Guid? _selectedMessageId;
     private string _editingDraft = string.Empty;
     private StorySceneEditAction? _editingAction;
     private Guid? _editingAppearanceEntryId;
@@ -1270,6 +1276,9 @@ else
             if (_editingAppearanceEntryId.HasValue
                 && !_chat.Transcript.Any(x => x.Appearance?.AppearanceEntryId == _editingAppearanceEntryId.Value))
                 CancelAppearanceEdit();
+            if (_selectedMessageId.HasValue
+                && !_chat.Transcript.Any(x => x.Message?.MessageId == _selectedMessageId.Value))
+                _selectedMessageId = null;
             if (_editingPlanMessageId.HasValue)
             {
                 var editingPlanMessage = _chat.Transcript
@@ -1452,11 +1461,10 @@ else
                 ClearStreamedMessageContent();
             }
 
-            _errorMessage = exception.Message;
-            if (mode != StoryScenePostMode.Manual)
-                UserFeedbackService.ShowBackgroundError(_errorMessage, "Scene Message Failed");
-            else if (retrySourceMessageId.HasValue)
-                UserFeedbackService.ShowBackgroundError(_errorMessage, "Retry Failed");
+            var fallbackMessage = mode == StoryScenePostMode.Manual
+                ? "Posting the manual scene message failed."
+                : "Generating the scene message failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build(fallbackMessage, exception);
         }
         finally
         {
@@ -1490,7 +1498,6 @@ else
             Logger.LogError(exception, "Preparing retry from story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
             ClearRetryState(clearDraft: false);
             _errorMessage = $"Preparing retry for '{message.CanonicalSpeakerName}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Retry Failed");
         }
         finally
         {
@@ -1570,8 +1577,7 @@ else
             Logger.LogError(exception, "Regenerating prose from story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
             await LoadChatAsync(_chat.ThreadId);
             ClearStreamedMessageContent();
-            _errorMessage = exception.Message;
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Prose Regeneration Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Regenerating prose failed.", exception);
         }
         finally
         {
@@ -1605,7 +1611,6 @@ else
         {
             Logger.LogError(exception, "Changing the author for story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
             _errorMessage = "Changing the author for this scene message failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Author Update Failed");
         }
         finally
         {
@@ -1718,7 +1723,6 @@ else
         {
             Logger.LogError(exception, "Updating the saved plan for message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
             _planEditErrorMessage = "The saved plan could not be updated for the selected message.";
-            UserFeedbackService.ShowBackgroundError(_planEditErrorMessage, "Plan Update Failed");
         }
         finally
         {
@@ -1849,7 +1853,6 @@ else
         {
             Logger.LogError(exception, "Selecting branch leaf {LeafMessageId} failed for chat {ThreadId}.", leafMessageId, _chat.ThreadId);
             _errorMessage = "Switching to the selected branch failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Branch Switch Failed");
         }
         finally
         {
@@ -1888,8 +1891,8 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Creating the snapshot draft failed for chat {ThreadId}.", _chat.ThreadId);
-            _snapshotDraftStatusMessage = "Creating the snapshot draft failed.";
-            _errorMessage = "Creating the snapshot draft failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Creating the snapshot draft failed.", exception);
+            _snapshotDraftStatusMessage = _errorMessage;
         }
         finally
         {
@@ -1931,8 +1934,7 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Committing the snapshot draft failed for chat {ThreadId}.", _chat.ThreadId);
-            _errorMessage = "Committing the snapshot draft failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Snapshot Commit Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Committing the snapshot draft failed.", exception);
         }
         finally
         {
@@ -1976,9 +1978,8 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Building the appearance replay failed for chat {ThreadId}.", _chat.ThreadId);
-            _appearanceReplayStatusMessage = "Building the appearance replay failed.";
-            _errorMessage = "Building the appearance replay failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Appearance Replay Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Building the appearance replay failed.", exception);
+            _appearanceReplayStatusMessage = _errorMessage;
         }
         finally
         {
@@ -2009,15 +2010,13 @@ else
         try
         {
             await StorySceneChatService.SaveAppearanceReplayStepAsync(request, CancellationToken.None);
-            UserFeedbackService.ShowBackgroundSuccess("The replayed appearance was saved to the transcript.", "Appearance Saved");
             await LoadChatAsync(_chat.ThreadId);
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving appearance replay step {MessageId} failed for chat {ThreadId}.", request.MessageId, request.ThreadId);
-            _appearanceReplayStatusMessage = "Saving the replayed appearance failed.";
-            _errorMessage = "Saving the replayed appearance failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Appearance Save Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Saving the replayed appearance failed.", exception);
+            _appearanceReplayStatusMessage = _errorMessage;
         }
         finally
         {
@@ -2096,14 +2095,25 @@ else
 
     private string BuildMessageCardClass(StorySceneMessageView message)
     {
-        var classes = new List<string> { "story-scene-message" };
+        var classes = new List<string> { "story-scene-message", "app-message-card" };
 
         if (message.IsNarrator)
             classes.Add("ms-lg-3");
         else if (message.IsSelectedSpeaker)
             classes.Add("ms-lg-5");
+        if (_selectedMessageId == message.MessageId)
+            classes.Add("is-selected");
+        if (_editingMessageId == message.MessageId)
+            classes.Add("is-editing");
 
         return string.Join(" ", classes);
+    }
+
+    private void ToggleSelectedMessage(Guid messageId)
+    {
+        _selectedMessageId = _selectedMessageId == messageId
+            ? null
+            : messageId;
     }
 
     private async Task ToggleProcessPanelsAsync()
@@ -2127,7 +2137,6 @@ else
         {
             Logger.LogError(exception, "Saving story scene chat display preferences failed.");
             _errorMessage = "Saving the display preference for appearance and process panels failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Display Update Failed");
         }
         finally
         {
@@ -2356,6 +2365,7 @@ else
         StoryTurnShape.Brief => "Brief",
         StoryTurnShape.Monologue => "Monologue",
         StoryTurnShape.Silent => "Silent",
+        StoryTurnShape.SilentMonologue => "Silent Monologue",
         _ => turnShape.ToString()
     };
 
@@ -2463,8 +2473,7 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving appearance entry {AppearanceEntryId} failed for chat {ThreadId}.", appearance.AppearanceEntryId, _chat.ThreadId);
-            _errorMessage = "Saving the selected character appearance block failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Appearance Update Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Saving the selected character appearance block failed.", exception);
         }
         finally
         {

@@ -1,0 +1,160 @@
+<div class="d-flex flex-column gap-3">
+    <ul class="nav nav-tabs">
+        <li class="nav-item">
+            <button type="button"
+                    class="@BuildTabClass(StoryGenerationStage.Planning)"
+                    disabled="@Disabled"
+                    @onclick="() => SetStage(StoryGenerationStage.Planning)">
+                Planning
+            </button>
+        </li>
+        <li class="nav-item">
+            <button type="button"
+                    class="@BuildTabClass(StoryGenerationStage.Writing)"
+                    disabled="@Disabled"
+                    @onclick="() => SetStage(StoryGenerationStage.Writing)">
+                Writing
+            </button>
+        </li>
+    </ul>
+
+    <div class="row g-3">
+        <div class="col-12">
+            <label for="@_temperatureInputId" class="form-label d-flex align-items-center justify-content-between">
+                <span>Temperature</span>
+                <span class="text-body-secondary">@ActiveTemperature.ToString("0.0")</span>
+            </label>
+            <input id="@_temperatureInputId" class="form-range" type="range" min="0" max="2" step="0.1" disabled="@Disabled" @bind="ActiveTemperature" @bind:event="oninput" />
+        </div>
+
+        <div class="col-md-6">
+            <label for="@_topPInputId" class="form-label">Top P</label>
+            <input id="@_topPInputId" class="form-control" type="number" min="0" max="1" step="0.01" disabled="@Disabled" @bind="ActiveTopP" @bind:event="oninput" />
+        </div>
+
+        <div class="col-md-6">
+            <label for="@_maxOutputTokensInputId" class="form-label">Max Output Tokens</label>
+            <input id="@_maxOutputTokensInputId" class="form-control" type="number" min="1" step="1" disabled="@Disabled" @bind="ActiveMaxOutputTokens" @bind:event="oninput" />
+        </div>
+
+        <div class="col-md-6">
+            <label for="@_seedInputId" class="form-label">Seed</label>
+            <input id="@_seedInputId" class="form-control" type="number" min="0" step="1" disabled="@Disabled" @bind="ActiveSeed" @bind:event="oninput" />
+        </div>
+
+        <div class="col-md-6">
+            <label for="@_frequencyPenaltyInputId" class="form-label">Frequency Penalty</label>
+            <input id="@_frequencyPenaltyInputId" class="form-control" type="number" min="-2" max="2" step="0.01" disabled="@Disabled" @bind="ActiveFrequencyPenalty" @bind:event="oninput" />
+        </div>
+
+        <div class="col-md-6">
+            <label for="@_presencePenaltyInputId" class="form-label">Presence Penalty</label>
+            <input id="@_presencePenaltyInputId" class="form-control" type="number" min="-2" max="2" step="0.01" disabled="@Disabled" @bind="ActivePresencePenalty" @bind:event="oninput" />
+        </div>
+
+        <div class="col-12">
+            <label for="@_stopSequencesInputId" class="form-label">Stop Sequences</label>
+            <textarea id="@_stopSequencesInputId" class="form-control" rows="4" disabled="@Disabled" @bind="ActiveStopSequencesText" @bind:event="oninput"></textarea>
+            <div class="small text-body-secondary mt-2">Enter one stop sequence per line. Blank means provider default.</div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public StoryModelStageSettingsView Planning { get; set; } = StoryGenerationSettingsService.CreateDefaultStageSettings(StoryGenerationStage.Planning);
+
+    [Parameter]
+    public EventCallback<StoryModelStageSettingsView> PlanningChanged { get; set; }
+
+    [Parameter]
+    public StoryModelStageSettingsView Writing { get; set; } = StoryGenerationSettingsService.CreateDefaultStageSettings(StoryGenerationStage.Writing);
+
+    [Parameter]
+    public EventCallback<StoryModelStageSettingsView> WritingChanged { get; set; }
+
+    [Parameter]
+    public StoryGenerationStage ActiveStage { get; set; } = StoryGenerationStage.Planning;
+
+    [Parameter]
+    public EventCallback<StoryGenerationStage> ActiveStageChanged { get; set; }
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    private readonly string _temperatureInputId = $"model-temperature-{Guid.NewGuid():N}";
+    private readonly string _topPInputId = $"model-top-p-{Guid.NewGuid():N}";
+    private readonly string _maxOutputTokensInputId = $"model-max-output-{Guid.NewGuid():N}";
+    private readonly string _seedInputId = $"model-seed-{Guid.NewGuid():N}";
+    private readonly string _frequencyPenaltyInputId = $"model-frequency-penalty-{Guid.NewGuid():N}";
+    private readonly string _presencePenaltyInputId = $"model-presence-penalty-{Guid.NewGuid():N}";
+    private readonly string _stopSequencesInputId = $"model-stop-sequences-{Guid.NewGuid():N}";
+
+    private StoryModelStageSettingsView ActiveSettings => ActiveStage == StoryGenerationStage.Planning ? Planning : Writing;
+
+    private double ActiveTemperature
+    {
+        get => ActiveSettings.Temperature;
+        set => UpdateActive(ActiveSettings with { Temperature = value });
+    }
+
+    private double? ActiveTopP
+    {
+        get => ActiveSettings.TopP;
+        set => UpdateActive(ActiveSettings with { TopP = value });
+    }
+
+    private int? ActiveMaxOutputTokens
+    {
+        get => ActiveSettings.MaxOutputTokens;
+        set => UpdateActive(ActiveSettings with { MaxOutputTokens = value });
+    }
+
+    private long? ActiveSeed
+    {
+        get => ActiveSettings.Seed;
+        set => UpdateActive(ActiveSettings with { Seed = value });
+    }
+
+    private double? ActiveFrequencyPenalty
+    {
+        get => ActiveSettings.FrequencyPenalty;
+        set => UpdateActive(ActiveSettings with { FrequencyPenalty = value });
+    }
+
+    private double? ActivePresencePenalty
+    {
+        get => ActiveSettings.PresencePenalty;
+        set => UpdateActive(ActiveSettings with { PresencePenalty = value });
+    }
+
+    private string ActiveStopSequencesText
+    {
+        get => string.Join(Environment.NewLine, ActiveSettings.StopSequences);
+        set => UpdateActive(ActiveSettings with
+        {
+            StopSequences = value
+                .Split(Environment.NewLine, StringSplitOptions.None)
+                .Select(x => x.Trim())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToList()
+        });
+    }
+
+    private async void UpdateActive(StoryModelStageSettingsView settings)
+    {
+        if (ActiveStage == StoryGenerationStage.Planning)
+            await PlanningChanged.InvokeAsync(settings);
+        else
+            await WritingChanged.InvokeAsync(settings);
+    }
+
+    private async Task SetStage(StoryGenerationStage stage)
+    {
+        ActiveStage = stage;
+        await ActiveStageChanged.InvokeAsync(stage);
+    }
+
+    private string BuildTabClass(StoryGenerationStage stage) =>
+        ActiveStage == stage ? "nav-link active" : "nav-link";
+}

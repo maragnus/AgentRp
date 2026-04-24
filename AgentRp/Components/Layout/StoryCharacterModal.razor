@@ -540,8 +540,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving character {CharacterName} failed for chat {ChatId}.", _name, ThreadId);
-            _errorMessage = $"Saving character '{BuildDisplayName()}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Character Save Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Saving character '{BuildDisplayName()}' failed.", exception);
         }
         finally
         {
@@ -572,8 +571,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Generating the model-ready sheet failed for character {CharacterId} in chat {ChatId}.", _selectedCharacterId.Value, ThreadId);
-            _errorMessage = $"Generating the model-ready sheet for '{BuildDisplayName()}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Model-Ready Draft Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Generating the model-ready sheet for '{BuildDisplayName()}' failed.", exception);
         }
         finally
         {
@@ -606,8 +604,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving the model-ready sheet failed for character {CharacterId} in chat {ChatId}.", _selectedCharacterId.Value, ThreadId);
-            _errorMessage = $"Saving the model-ready sheet for '{BuildDisplayName()}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Model-Ready Save Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Saving the model-ready sheet for '{BuildDisplayName()}' failed.", exception);
         }
         finally
         {
@@ -633,7 +630,6 @@
         {
             Logger.LogError(exception, "Deleting character {CharacterId} failed for chat {ChatId}.", _selectedCharacterId.Value, ThreadId);
             _errorMessage = $"Deleting character '{displayName}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Character Delete Failed");
         }
         finally
         {

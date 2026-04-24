@@ -34,9 +34,7 @@ If you choose not to reuse a similar existing implementation, briefly state why.
 - ALWAYS write code to be testable, even if no tests exist.
 - ALWAYS use Bootstrap UI components, classes, and styles.
 - ALWAYS try to avoid custom CSS classes, custom CSS styling, component CSS, and inline styles in Blazor UI. In the event custom CSS is needed, use `app.css` so that it is globally accessible and easy to maintain.
-- For async user-action buttons, use a `BusyButton` component instead of hand-rolled button busy state. A `BusyButton` must disable itself while work is running and show a Bootstrap spinner so users can see that the action is in progress.
-- For async server/network/background actions, use a toast feedback system for completion feedback. Success and failure should both be visible unless the action is a trivial local-only UI toggle.
-- User-facing errors must explain what step failed and what item or operation was being processed. Preserve the technical cause as an inner exception for logs instead of surfacing raw low-level exceptions directly to users.
+- User-facing errors must follow the Displaying Failure Context rules so users always receive a meaningful reason for failures.
 - When working through a bug, if the root cause is unclear, add detailed debugging output and ask the user to reproduce. Don't put in failsafe checks down the line until the user confirms that the root cause search has been exhausted.
 - Do not spend effort on migrations or backwards compatibility unless the user explicitly asks for them.
 - For Codex running in WSL for this repo, prefer the normal WSL home directory, default global NuGet cache, and standard OS cache/temp directories for transient build and test state. Do not mirror NuGet packages into repo-local `artifacts` unless the user explicitly asks for a repo-local cache.
@@ -68,6 +66,24 @@ If you choose not to reuse a similar existing implementation, briefly state why.
 - Do not add redundant indicators when selection state, active styling, or layout already makes the current item obvious.
 - Display simple representations of complex things but enable access to details through accordians, popups, and/or dedicated detail pages.
   Example: A task list may be a checklist where the active items display real-time status, but can be expanded to display more details. And a the task list itself should have a full detail page that examples all steps in full detail.
+
+## Async Feedback
+- Async user-action buttons must use a `BusyButton` component instead of hand-rolled button busy state. A `BusyButton` must disable itself while work is running and show a Bootstrap spinner so users can see that the action is in progress.
+- Successful async actions must not show toast popups.
+- Communicate success through local UI state whenever possible: refreshed data, closed modals, saved badges, check icons, cleared busy state, navigation, or updated content.
+- Add inline Bootstrap success or status text only when completion would otherwise be invisible or ambiguous.
+- Toast popups are only for errors and warnings that are not already immediately visible to the user.
+- If a form, modal, page, or panel already has an inline error block, show the error there and do not also show a toast.
+- Use toasts for background or compact-control failures that do not have a visible inline error region, such as copy, rename, star, import shortcuts, or sidebar-only actions.
+- User-facing async errors must follow the Displaying Failure Context rules.
+
+## Displaying Failure Context
+- Every failed async action must tell the user what failed, which item/provider/model was being processed when that matters, and the best available reason the action failed.
+- Use the shared user-facing error formatter for caught exceptions so internal and external failures are handled consistently.
+- If a service, domain validation, or exception chain contains a meaningful reason, show a sanitized version of that reason to the user.
+- If no structured or domain-specific reason exists, show the sanitized exception message rather than replacing it with a vague generic failure.
+- Only suppress details that are unsafe or noisy: stack traces, raw exception type names, secrets, tokens, and full raw response dumps when a useful field can be extracted.
+- Preserve full technical causes in logs and inner exceptions; this is in addition to, not a replacement for, showing the user a meaningful sanitized reason.
 
 ## Required Commands
 Use these command patterns. NEVER hand-edit project or package metadata files.

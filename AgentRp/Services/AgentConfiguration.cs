@@ -2,47 +2,37 @@
 
 using System.ClientModel;
 using System.ClientModel.Primitives;
+using AgentRp.Data;
+using Anthropic;
+using Anthropic.Core;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Options;
 using OpenAI;
 using OpenAI.Chat;
+using DbAppContext = AgentRp.Data.AppContext;
 
 namespace AgentRp.Services;
 
-public sealed class AgentOptions
-{
-    public List<AgentEndpointOptions> Agents { get; set; } = [];
-}
-
-public sealed class AgentEndpointOptions
-{
-    public string Name { get; set; } = string.Empty;
-
-    public string EndPoint { get; set; } = string.Empty;
-
-    public string ApiKey { get; set; } = string.Empty;
-
-    public string TextModel { get; set; } = string.Empty;
-
-    public bool UseJsonSchemaResponseFormat { get; set; }
-}
-
 public sealed record AgentProviderOptionView(
+    Guid ModelId,
     string Name,
-    AgentProviderKind ProviderKind);
+    string ProviderName,
+    AiProviderKind ProviderKind);
 
 public sealed record ConfiguredAgent(
+    Guid ModelId,
     string Name,
+    string ProviderName,
     string EndPoint,
     string ApiKey,
     string TextModel,
-    AgentProviderKind ProviderKind,
+    AiProviderKind ProviderKind,
     bool UseJsonSchemaResponseFormat,
     IChatClient ChatClient);
 
 public sealed record ThreadAgentSelectionView(
     string? SelectedAgentName,
+    Guid? SelectedModelId,
     IReadOnlyList<AgentProviderOptionView> AvailableAgents,
     bool IsAiAvailable);
 
@@ -54,9 +44,15 @@ public interface IAgentCatalog
 
     IReadOnlyList<ConfiguredAgent> GetConfiguredAgents();
 
+    Guid? GetDefaultModelId();
+
     string? GetDefaultAgentName();
 
+    Guid? NormalizeSelectedModelId(Guid? selectedModelId);
+
     string? NormalizeSelectedAgentName(string? selectedAgentName);
+
+    ConfiguredAgent? GetAgentOrDefault(Guid? selectedModelId);
 
     ConfiguredAgent? GetAgentOrDefault(string? selectedAgentName);
 }
@@ -67,123 +63,149 @@ public interface IThreadAgentService
 
     Task<ConfiguredAgent?> GetSelectedAgentAsync(Guid threadId, CancellationToken cancellationToken);
 
+    Task SetSelectedAgentAsync(Guid threadId, Guid modelId, CancellationToken cancellationToken);
+
     Task SetSelectedAgentAsync(Guid threadId, string agentName, CancellationToken cancellationToken);
 }
 
 public sealed class AgentCatalog(
-    IOptions<AgentOptions> options,
+    IDbContextFactory<DbAppContext> dbContextFactory,
     IServiceProvider serviceProvider) : IAgentCatalog
 {
-    private readonly IReadOnlyList<ConfiguredAgent> _enabledAgents = BuildConfiguredAgents(options.Value, serviceProvider);
+    public bool HasEnabledAgents => GetEnabledModelRows().Count > 0;
 
-    public bool HasEnabledAgents => _enabledAgents.Count > 0;
+    public IReadOnlyList<AgentProviderOptionView> GetEnabledAgents() =>
+        GetEnabledModelRows()
+            .Select(x => new AgentProviderOptionView(x.ModelId, x.Name, x.ProviderName, x.ProviderKind))
+            .ToList();
 
-    public IReadOnlyList<AgentProviderOptionView> GetEnabledAgents() => BuildAgentViews(_enabledAgents);
+    public IReadOnlyList<ConfiguredAgent> GetConfiguredAgents() =>
+        GetEnabledModelRows()
+            .Select(BuildConfiguredAgent)
+            .ToList();
 
-    public IReadOnlyList<ConfiguredAgent> GetConfiguredAgents() => _enabledAgents;
+    public Guid? GetDefaultModelId() => GetEnabledModelRows().FirstOrDefault()?.ModelId;
 
-    public string? GetDefaultAgentName() => _enabledAgents.FirstOrDefault()?.Name;
+    public string? GetDefaultAgentName() => GetEnabledModelRows().FirstOrDefault()?.Name;
+
+    public Guid? NormalizeSelectedModelId(Guid? selectedModelId)
+    {
+        var models = GetEnabledModelRows();
+        if (models.Count == 0)
+            return null;
+
+        if (selectedModelId.HasValue && models.Any(x => x.ModelId == selectedModelId.Value))
+            return selectedModelId.Value;
+
+        return models[0].ModelId;
+    }
 
     public string? NormalizeSelectedAgentName(string? selectedAgentName)
     {
-        if (_enabledAgents.Count == 0)
+        var models = GetEnabledModelRows();
+        if (models.Count == 0)
             return null;
 
         if (!string.IsNullOrWhiteSpace(selectedAgentName))
         {
-            var exactMatch = _enabledAgents.FirstOrDefault(x => string.Equals(x.Name, selectedAgentName, StringComparison.Ordinal));
+            var exactMatch = models.FirstOrDefault(x => string.Equals(x.Name, selectedAgentName, StringComparison.Ordinal));
             if (exactMatch is not null)
                 return exactMatch.Name;
         }
 
-        return _enabledAgents[0].Name;
+        return models[0].Name;
+    }
+
+    public ConfiguredAgent? GetAgentOrDefault(Guid? selectedModelId)
+    {
+        var normalizedModelId = NormalizeSelectedModelId(selectedModelId);
+        if (!normalizedModelId.HasValue)
+            return null;
+
+        return BuildConfiguredAgent(GetEnabledModelRows().First(x => x.ModelId == normalizedModelId.Value));
     }
 
     public ConfiguredAgent? GetAgentOrDefault(string? selectedAgentName)
     {
-        var normalizedName = NormalizeSelectedAgentName(selectedAgentName);
-        if (normalizedName is null)
+        var models = GetEnabledModelRows();
+        if (models.Count == 0)
             return null;
 
-        return _enabledAgents.First(x => string.Equals(x.Name, normalizedName, StringComparison.Ordinal));
+        var model = !string.IsNullOrWhiteSpace(selectedAgentName)
+            ? models.FirstOrDefault(x => string.Equals(x.Name, selectedAgentName, StringComparison.Ordinal))
+            : null;
+
+        return BuildConfiguredAgent(model ?? models[0]);
     }
 
-    private static IReadOnlyList<ConfiguredAgent> BuildConfiguredAgents(AgentOptions options, IServiceProvider serviceProvider)
+    private IReadOnlyList<EnabledModelRow> GetEnabledModelRows()
     {
-        var configuredAgents = new List<ConfiguredAgent>();
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        var configuredOptions = options.Agents ?? [];
+        using var dbContext = dbContextFactory.CreateDbContext();
+        var rows = dbContext.AiModels
+            .AsNoTracking()
+            .Include(x => x.Provider)
+            .Where(x => x.IsEnabled && x.Provider.IsEnabled)
+            .Select(x => new EnabledModelRow(
+                x.Id,
+                x.DisplayName,
+                x.Provider.Name,
+                x.Provider.ProviderKind,
+                x.Provider.SortOrder,
+                x.SortOrder,
+                x.Endpoint ?? x.Provider.BaseEndpoint,
+                x.Provider.ApiKey,
+                x.ProviderModelId,
+                x.UseJsonSchemaResponseFormat))
+            .ToList();
 
-        foreach (var agent in configuredOptions)
-        {
-            var name = agent.Name.Trim();
-            if (string.IsNullOrWhiteSpace(name))
-                throw new InvalidOperationException("Each configured AI endpoint must have a name.");
-
-            if (!names.Add(name))
-                throw new InvalidOperationException($"The configured AI endpoint '{name}' appears more than once.");
-
-            if (!IsEnabled(agent))
-                continue;
-
-            ValidateEnabledAgent(agent);
-            var providerKind = DetectProviderKind(agent.EndPoint.Trim());
-            configuredAgents.Add(new ConfiguredAgent(
-                name,
-                agent.EndPoint.Trim(),
-                agent.ApiKey.Trim(),
-                agent.TextModel.Trim(),
-                providerKind,
-                agent.UseJsonSchemaResponseFormat,
-                BuildChatClient(agent, serviceProvider)));
-        }
-
-        return configuredAgents;
+        return rows
+            .OrderBy(x => x.ProviderSortOrder)
+            .ThenBy(x => x.ProviderName)
+            .ThenBy(x => x, EnabledModelRowComparer.Instance)
+            .ToList();
     }
 
-    private static IReadOnlyList<AgentProviderOptionView> BuildAgentViews(IReadOnlyList<ConfiguredAgent> agents) =>
-        agents.Select(x => new AgentProviderOptionView(x.Name, x.ProviderKind)).ToList();
-
-    private static bool IsEnabled(AgentEndpointOptions agent)
+    private ConfiguredAgent BuildConfiguredAgent(EnabledModelRow model)
     {
-        if (string.IsNullOrWhiteSpace(agent.Name) || string.IsNullOrWhiteSpace(agent.EndPoint))
-            return false;
-            
-        var name = agent.Name.Trim();
-
-        if (string.Equals(name, "OpenAI", StringComparison.Ordinal))
-            return !string.IsNullOrWhiteSpace(agent.ApiKey) && !string.IsNullOrWhiteSpace(agent.TextModel);
-
-        return true;
+        ValidateEnabledModel(model);
+        return new ConfiguredAgent(
+            model.ModelId,
+            model.Name,
+            model.ProviderName,
+            model.Endpoint,
+            model.ApiKey,
+            model.ProviderModelId,
+            model.ProviderKind,
+            model.UseJsonSchemaResponseFormat,
+            BuildChatClient(model));
     }
 
-    private static void ValidateEnabledAgent(AgentEndpointOptions agent)
+    private IChatClient BuildChatClient(EnabledModelRow model)
     {
-        var name = agent.Name.Trim();
-        var endpoint = agent.EndPoint.Trim();
-        var model = agent.TextModel.Trim();
+        var client = model.ProviderKind == AiProviderKind.Claude
+            ? BuildClaudeChatClient(model)
+            : BuildOpenAiCompatibleChatClient(model);
 
-        if (!endpoint.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-            && !endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"The configured endpoint for AI provider '{name}' must start with http:// or https://.");
-
-        if (string.IsNullOrWhiteSpace(model))
-            throw new InvalidOperationException($"The configured text model for AI provider '{name}' is missing.");
-
-        if (string.Equals(name, "OpenAI", StringComparison.Ordinal)
-            && string.IsNullOrWhiteSpace(agent.ApiKey))
-            throw new InvalidOperationException("The configured OpenAI provider is missing its API key.");
+        return new ChatClientBuilder(client)
+            .UseFunctionInvocation(serviceProvider.GetService<ILoggerFactory>(), configure: null)
+            .Build(serviceProvider);
     }
 
-    private static IChatClient BuildChatClient(AgentEndpointOptions agent, IServiceProvider serviceProvider)
+    private static IChatClient BuildClaudeChatClient(EnabledModelRow model)
     {
-        var endpoint = new Uri(agent.EndPoint.Trim());
+        var client = new AnthropicClient(new ClientOptions { ApiKey = model.ApiKey });
+        return client.AsIChatClient(model.ProviderModelId);
+    }
+
+    private static IChatClient BuildOpenAiCompatibleChatClient(EnabledModelRow model)
+    {
+        var endpoint = new Uri(model.Endpoint);
         OpenAI.Chat.ChatClient chatClient;
 
-        if (string.IsNullOrWhiteSpace(agent.ApiKey))
+        if (string.IsNullOrWhiteSpace(model.ApiKey))
         {
             chatClient = new OpenAI.Chat.ChatClient(
-                model: agent.TextModel.Trim(),
+                model: model.ProviderModelId,
                 authenticationPolicy: new AnonymousAuthenticationPolicy(),
                 options: new OpenAIClientOptions
                 {
@@ -193,27 +215,32 @@ public sealed class AgentCatalog(
         else
         {
             chatClient = new OpenAI.Chat.ChatClient(
-                model: agent.TextModel.Trim(),
-                credential: new ApiKeyCredential(agent.ApiKey),
+                model: model.ProviderModelId,
+                credential: new ApiKeyCredential(model.ApiKey),
                 options: new OpenAIClientOptions
                 {
                     Endpoint = endpoint
                 });
         }
 
-        var openAiClient = chatClient.AsIChatClient();
-
-        return new ChatClientBuilder(openAiClient)
-            .UseFunctionInvocation(serviceProvider.GetService<ILoggerFactory>(), configure: null)
-            .Build(serviceProvider);
+        return chatClient.AsIChatClient();
     }
 
-    private static AgentProviderKind DetectProviderKind(string endpoint)
+    private static void ValidateEnabledModel(EnabledModelRow model)
     {
-        var endpointUri = new Uri(endpoint);
-        return endpointUri.Host.EndsWith(".endpoints.huggingface.cloud", StringComparison.OrdinalIgnoreCase)
-            ? AgentProviderKind.HuggingFaceInferenceEndpoint
-            : AgentProviderKind.OpenAiCompatible;
+        if (string.IsNullOrWhiteSpace(model.Endpoint))
+            throw new InvalidOperationException($"Loading AI model '{model.Name}' failed because its endpoint is missing.");
+
+        if (!model.Endpoint.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            && !model.Endpoint.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Loading AI model '{model.Name}' failed because its endpoint must start with http:// or https://.");
+
+        if (string.IsNullOrWhiteSpace(model.ProviderModelId))
+            throw new InvalidOperationException($"Loading AI model '{model.Name}' failed because its provider model id is missing.");
+
+        if (model.ProviderKind is AiProviderKind.OpenAI or AiProviderKind.Grok or AiProviderKind.Claude
+            && string.IsNullOrWhiteSpace(model.ApiKey))
+            throw new InvalidOperationException($"Loading AI model '{model.Name}' failed because the {model.ProviderName} API key is missing.");
     }
 
     private sealed class AnonymousAuthenticationPolicy : AuthenticationPolicy
@@ -224,10 +251,49 @@ public sealed class AgentCatalog(
         public override ValueTask ProcessAsync(PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex) =>
             ProcessNextAsync(message, pipeline, currentIndex);
     }
+
+    private sealed record EnabledModelRow(
+        Guid ModelId,
+        string Name,
+        string ProviderName,
+        AiProviderKind ProviderKind,
+        int ProviderSortOrder,
+        int ModelSortOrder,
+        string Endpoint,
+        string ApiKey,
+        string ProviderModelId,
+        bool UseJsonSchemaResponseFormat);
+
+    private sealed class EnabledModelRowComparer : IComparer<EnabledModelRow>
+    {
+        public static EnabledModelRowComparer Instance { get; } = new();
+
+        public int Compare(EnabledModelRow? x, EnabledModelRow? y)
+        {
+            if (ReferenceEquals(x, y))
+                return 0;
+
+            if (x is null)
+                return 1;
+
+            if (y is null)
+                return -1;
+
+            var modelIdComparison = AiModelPresentation.CompareProviderModelIds(x.ProviderKind, x.ProviderModelId, y.ProviderModelId);
+            if (modelIdComparison != 0)
+                return modelIdComparison;
+
+            var sortOrderComparison = x.ModelSortOrder.CompareTo(y.ModelSortOrder);
+            if (sortOrderComparison != 0)
+                return sortOrderComparison;
+
+            return string.Compare(x.Name, y.Name, StringComparison.OrdinalIgnoreCase);
+        }
+    }
 }
 
 public sealed class ThreadAgentService(
-    IDbContextFactory<AgentRp.Data.AppContext> dbContextFactory,
+    IDbContextFactory<DbAppContext> dbContextFactory,
     IActivityNotifier activityNotifier,
     IAgentCatalog agentCatalog) : IThreadAgentService
 {
@@ -237,11 +303,14 @@ public sealed class ThreadAgentService(
         var thread = await dbContext.ChatThreads
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.Id == threadId, cancellationToken)
-            ?? throw new InvalidOperationException("Loading the chat AI provider failed because the selected chat could not be found.");
+            ?? throw new InvalidOperationException("Loading the chat AI model failed because the selected chat could not be found.");
 
         var availableAgents = agentCatalog.GetEnabledAgents();
+        var normalizedModelId = agentCatalog.NormalizeSelectedModelId(thread.SelectedAiModelId);
+        var selected = availableAgents.FirstOrDefault(x => x.ModelId == normalizedModelId);
         return new ThreadAgentSelectionView(
-            agentCatalog.NormalizeSelectedAgentName(thread.SelectedAgentName),
+            selected?.Name,
+            selected?.ModelId,
             availableAgents,
             availableAgents.Count > 0);
     }
@@ -252,30 +321,41 @@ public sealed class ThreadAgentService(
         var thread = await dbContext.ChatThreads
             .AsNoTracking()
             .FirstOrDefaultAsync(x => x.Id == threadId, cancellationToken)
-            ?? throw new InvalidOperationException("Loading the chat AI provider failed because the selected chat could not be found.");
+            ?? throw new InvalidOperationException("Loading the chat AI model failed because the selected chat could not be found.");
 
-        return agentCatalog.GetAgentOrDefault(thread.SelectedAgentName);
+        return agentCatalog.GetAgentOrDefault(thread.SelectedAiModelId);
     }
 
-    public async Task SetSelectedAgentAsync(Guid threadId, string agentName, CancellationToken cancellationToken)
+    public async Task SetSelectedAgentAsync(Guid threadId, Guid modelId, CancellationToken cancellationToken)
     {
-        var normalizedAgentName = agentCatalog.NormalizeSelectedAgentName(agentName);
-        if (!string.Equals(normalizedAgentName, agentName, StringComparison.Ordinal))
-            throw new InvalidOperationException($"Selecting AI provider '{agentName}' failed because it is not available.");
+        var normalizedModelId = agentCatalog.NormalizeSelectedModelId(modelId);
+        if (normalizedModelId != modelId)
+            throw new InvalidOperationException("Selecting the AI model failed because it is not available.");
 
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         var thread = await dbContext.ChatThreads
             .FirstOrDefaultAsync(x => x.Id == threadId, cancellationToken)
-            ?? throw new InvalidOperationException("Selecting the AI provider failed because the selected chat could not be found.");
+            ?? throw new InvalidOperationException("Selecting the AI model failed because the selected chat could not be found.");
 
-        if (string.Equals(thread.SelectedAgentName, normalizedAgentName, StringComparison.Ordinal))
+        if (thread.SelectedAiModelId == normalizedModelId)
             return;
 
-        thread.SelectedAgentName = normalizedAgentName ?? string.Empty;
+        thread.SelectedAiModelId = normalizedModelId;
+        thread.SelectedAgentName = agentCatalog.GetEnabledAgents().First(x => x.ModelId == normalizedModelId).Name;
         thread.UpdatedUtc = DateTime.UtcNow;
 
         await dbContext.SaveChangesAsync(cancellationToken);
         PublishRefresh(threadId);
+    }
+
+    public async Task SetSelectedAgentAsync(Guid threadId, string agentName, CancellationToken cancellationToken)
+    {
+        var match = agentCatalog.GetEnabledAgents()
+            .FirstOrDefault(x => string.Equals(x.Name, agentName, StringComparison.Ordinal));
+        if (match is null)
+            throw new InvalidOperationException($"Selecting AI model '{agentName}' failed because it is not available.");
+
+        await SetSelectedAgentAsync(threadId, match.ModelId, cancellationToken);
     }
 
     private void PublishRefresh(Guid threadId)

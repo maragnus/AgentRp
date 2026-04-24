@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using AgentRp.Data;
 
 namespace AgentRp.Services;
 
@@ -19,7 +20,7 @@ public sealed class AgentEndpointManagementService(
     public async Task<IReadOnlyList<AgentEndpointStatusView>> GetStatusesAsync(CancellationToken cancellationToken)
     {
         var huggingFaceAgents = agentCatalog.GetConfiguredAgents()
-            .Where(x => x.ProviderKind == AgentProviderKind.HuggingFaceInferenceEndpoint)
+            .Where(x => x.ProviderKind == AiProviderKind.HuggingFaceInferenceEndpoint)
             .ToList();
         if (huggingFaceAgents.Count == 0)
             return [];
@@ -68,7 +69,7 @@ public sealed class AgentEndpointManagementService(
         var agent = agentCatalog.GetConfiguredAgents()
             .FirstOrDefault(x => string.Equals(x.Name, agentName, StringComparison.Ordinal))
             ?? throw new InvalidOperationException($"Managing the Hugging Face endpoint failed because the configured agent '{agentName}' could not be found.");
-        if (agent.ProviderKind != AgentProviderKind.HuggingFaceInferenceEndpoint)
+        if (agent.ProviderKind != AiProviderKind.HuggingFaceInferenceEndpoint)
             throw new InvalidOperationException($"Managing the Hugging Face endpoint failed because '{agentName}' is not a Hugging Face-managed endpoint.");
         if (string.IsNullOrWhiteSpace(agent.ApiKey))
             throw new InvalidOperationException($"Managing the Hugging Face endpoint for '{agentName}' failed because the configured API key is missing.");
@@ -93,9 +94,12 @@ public sealed class AgentEndpointManagementService(
         }
         catch (HuggingFaceAuthenticationException exception)
         {
-            throw new InvalidOperationException(
-                $"Managing the Hugging Face endpoint for '{agent.Name}' failed because the configured API key could not access Hugging Face endpoint management.",
-                exception);
+            var message = UserFacingErrorMessageBuilder.BuildExternalHttpFailure(
+                $"Managing the Hugging Face endpoint for '{agent.Name}'",
+                exception.StatusCode,
+                exception.ResponseBody ?? string.Empty,
+                "Hugging Face");
+            throw new ExternalServiceFailureException(message, exception.StatusCode, exception.ResponseBody, exception);
         }
     }
 
@@ -326,8 +330,12 @@ public sealed class AgentEndpointManagementService(
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             throw new HuggingFaceAuthenticationException(response.StatusCode, responseBody);
 
-        throw new InvalidOperationException(
-            $"Calling Hugging Face endpoint management failed with status code {(int)response.StatusCode} ({response.StatusCode}). Response: {responseBody}");
+        var message = UserFacingErrorMessageBuilder.BuildExternalHttpFailure(
+            "Calling Hugging Face endpoint management",
+            response.StatusCode,
+            responseBody,
+            "Hugging Face");
+        throw new ExternalServiceFailureException(message, response.StatusCode, responseBody);
     }
 
     private sealed record ManagedEndpoint(
@@ -338,6 +346,8 @@ public sealed class AgentEndpointManagementService(
         : InvalidOperationException($"Hugging Face endpoint management authentication failed with status code {(int)statusCode} ({statusCode}). Response: {responseBody}")
     {
         public HttpStatusCode StatusCode { get; } = statusCode;
+
+        public string? ResponseBody { get; } = responseBody;
     }
 
     private sealed class HuggingFaceWhoAmIResponse

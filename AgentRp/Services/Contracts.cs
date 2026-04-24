@@ -175,12 +175,6 @@ public enum ChatTransferApplyMode
     Import
 }
 
-public enum AgentProviderKind
-{
-    OpenAiCompatible,
-    HuggingFaceInferenceEndpoint
-}
-
 public enum ManagedAgentAction
 {
     Start,
@@ -190,7 +184,7 @@ public enum ManagedAgentAction
 
 public sealed record AgentEndpointStatusView(
     string AgentName,
-    AgentProviderKind ProviderKind,
+    AiProviderKind ProviderKind,
     bool IsLinked,
     string? State,
     string? StatusMessage,
@@ -203,6 +197,16 @@ public sealed record AgentEndpointStatusView(
     bool CanScaleToZero,
     string? UnlinkedReason);
 
+public sealed record AiProviderSidebarWidgetView(
+    Guid ProviderId,
+    string ProviderName,
+    AiProviderKind ProviderKind,
+    int DiscoveredModelCount,
+    int EnabledModelCount,
+    DateTime? RefreshedUtc,
+    string? ErrorMessage,
+    IReadOnlyList<AiProviderMetricView> Metrics);
+
 public sealed record ChatStorySidebarView(
     Guid ThreadId,
     string? CurrentLocationName,
@@ -213,8 +217,10 @@ public sealed record ChatStorySidebarView(
     int FactCount,
     int TimelineEntryCount,
     string? SelectedAgentName,
+    Guid? SelectedModelId,
     IReadOnlyList<AgentProviderOptionView> AvailableAgents,
     bool IsAiAvailable,
+    IReadOnlyList<AiProviderSidebarWidgetView> ProviderWidgets,
     IReadOnlyList<AgentEndpointStatusView> ManagedAgentEndpoints,
     string? ManagedAgentEndpointsErrorMessage);
 
@@ -503,7 +509,6 @@ public sealed record ToastMessage(
 
 public enum ToastIntent
 {
-    Success,
     Error,
     Warning
 }
@@ -522,8 +527,6 @@ public interface IUserFeedbackService
     IReadOnlyList<ToastMessage> Messages { get; }
 
     void ShowBackgroundError(string message, string title);
-
-    void ShowBackgroundSuccess(string message, string title);
 
     void ShowBackgroundWarning(string message, string title);
 
@@ -918,7 +921,8 @@ public enum StoryTurnShape
     Compact,
     Brief,
     Monologue,
-    Silent
+    Silent,
+    SilentMonologue
 }
 
 public sealed record StoryMessagePlannerResult(

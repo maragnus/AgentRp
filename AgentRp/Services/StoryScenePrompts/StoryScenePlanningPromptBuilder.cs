@@ -16,7 +16,7 @@ internal static class StoryScenePlanningPromptBuilder
         Choose one immediate beat, not a sequence.
 
         Build the plan using these fields:
-        - Turn shape: choose exactly one of compact, brief, monologue, or silent.
+        - Turn shape: choose exactly one of compact, brief, monologue, silent, or silent monologue.
         - Beat: the kind of move being made in this turn.
         - Intent: the actor's immediate intention.
         - Immediate goal: what this turn tries to achieve right now.
@@ -27,12 +27,14 @@ internal static class StoryScenePlanningPromptBuilder
 
         Turn shape definitions:
         - compact = one action beat, one or two phrases, optional short tag (always preferred)
-        - silent = action/subtext only, no spoken lines (common)
+        - silent = quick action/subtext only, no spoken lines (common)
+        - silent monologue = extended action/subtext only, no spoken lines; detailed movement, touch, posture, expression, atmosphere, or implication across one playable move (common in intimate, physical, or subtext-heavy moments)
         - brief = one action beat, one to two short lines with a tag in between (rare)
         - monologue = short monologue allowed (only when asked)
 
-        Prioritize compact and silent almost always.
-        - Favor silent turns during intimate moments
+        Prioritize compact, silent, and silent monologue almost always.
+        - Favor silent turns for quick intimate moments.
+        - Favor silent monologue when an intimate, physical, or subtext-heavy moment needs a longer nonverbal beat instead of speech.
         - Always eagerly follow the narrative, but not aggressively.
         - Pick the most valuable next beat to move the story forward, not the safest or most literal reply.
         - Identify when the current thread has run it's course and move on.

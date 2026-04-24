@@ -282,6 +282,7 @@ public sealed class ChatTransferService(
             Id = Guid.NewGuid(),
             Title = title,
             SelectedAgentName = agentCatalog.GetDefaultAgentName() ?? string.Empty,
+            SelectedAiModelId = agentCatalog.GetDefaultModelId(),
             CreatedUtc = now,
             UpdatedUtc = now,
             ActiveLeafMessageId = normalizedSelection.Messages

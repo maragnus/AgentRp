@@ -69,10 +69,10 @@ internal static class StorySceneProsePromptBuilder
                 builder.AppendLine(
                     """
                     This turn has a monologue shape, fulfill the beat with a longer move.
-                    - A longer reply is allowed here.
-                    - Up to three sentenses maximum of spoken words with simple actions in between.
-                    - Still focus on one beat only.
-                    - Stop at the first clear landing point.
+                    - A longer reply is allowed here. You can make up to three connected beats in a row.
+                    - Up to five sentenses maximum of spoken words with simple actions in between.
+                    - Still focus on one beat but expand it into three parts.
+                    - Provide a clear landing point.
                     - Do not ramble, recap, or drift into a second move.
                     """);
                 break;
@@ -84,6 +84,18 @@ internal static class StorySceneProsePromptBuilder
                     - Do not use dialogue unless a word or two is necessary to land the beat.
                     - Keep it restrained and readable.
                     - Stop early once action is clear.
+                    """);
+                break;
+            case StoryTurnShape.SilentMonologue:
+                builder.AppendLine(
+                    """
+                    This turn has a silent monologue shape, fulfill the beat with a longer nonverbal move and no dialogue.
+                    - Use connected physical detail: touch, movement, posture, expression, distance, atmosphere, or subtext.
+                    - Let the action imply the emotional or tactical shift without explaining it.
+                    - Keep this to one playable move, not a full scene sequence.
+                    - Provide a clear landing point.
+                    - Do not use spoken words.
+                    - Do not ramble, recap, or drift into exposition.
                     """);
                 break;
         }
@@ -177,6 +189,17 @@ internal static class StorySceneProsePromptBuilder
                     - Keep it restrained and readable.
                     """);
                 break;
+            case StoryTurnShape.SilentMonologue:
+                builder.AppendLine(
+                    """
+                    Write only a silent monologue turn with:
+                    - Detailed nonverbal *action* and subtext only.
+                    - Use touch, movement, posture, expression, distance, hesitation, or atmosphere.
+                    - Build one connected physical move with a clear landing point.
+                    - Do not use "dialogue" or explain the subtext directly.
+                    - Stop before it becomes a sequence or exposition.
+                    """);
+                break;
         }
         builder.AppendLine("- Stop");
 
@@ -209,6 +232,13 @@ internal static class StorySceneProsePromptBuilder
             - Do not add spoken dialogue.
             - Add words only if silence would make the beat unclear.
             """,
+        StoryTurnShape.SilentMonologue =>
+            """
+            - Use detailed action, gesture, atmosphere, and subtext only.
+            - Choreograph one longer nonverbal move through movement, distance, touch, or expression.
+            - Do not add spoken dialogue or explain the subtext directly.
+            - Land on a clear emotional or tactical shift.
+            """,
         _ => throw new InvalidOperationException("Building the prose prompt failed because the narrator turn shape was invalid.")
     };
 
@@ -237,6 +267,13 @@ internal static class StorySceneProsePromptBuilder
             - Use action, gesture, or subtext only.
             - Do not add a spoken line unless silence would make the beat unclear.
             - Let the silence itself carry pressure.
+            """,
+        StoryTurnShape.SilentMonologue =>
+            """
+            - Use detailed action, gesture, or subtext only.
+            - Choreograph one longer nonverbal move through movement, distance, touch, or expression.
+            - Do not add spoken dialogue or explain the subtext directly.
+            - Let the silence land as a clear emotional or tactical shift.
             """,
         _ => throw new InvalidOperationException("Building the prose prompt failed because the turn shape was invalid.")
     };

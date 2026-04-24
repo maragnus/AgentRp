@@ -93,7 +93,8 @@ public sealed class StorySceneChatService(
         var currentLocationName = story.Scene.CurrentLocationId.HasValue
             ? story.Locations.Entries.FirstOrDefault(x => x.Id == story.Scene.CurrentLocationId.Value)?.Name
             : null;
-        var selectedAgentName = agentCatalog.NormalizeSelectedAgentName(thread.SelectedAgentName);
+        var selectedModelId = agentCatalog.NormalizeSelectedModelId(thread.SelectedAiModelId);
+        var selectedAgentName = agentCatalog.GetEnabledAgents().FirstOrDefault(x => x.ModelId == selectedModelId)?.Name;
 
         return new StorySceneChatState(
             thread.Id,
@@ -312,7 +313,7 @@ public sealed class StorySceneChatService(
                 .Include(x => x.Messages)
                 .FirstOrDefaultAsync(x => x.Id == request.ThreadId, cancellationToken)
                 ?? throw new InvalidOperationException("Regenerating the scene prose failed because the selected chat could not be found.");
-            agent = agentCatalog.GetAgentOrDefault(thread.SelectedAgentName)
+            agent = agentCatalog.GetAgentOrDefault(thread.SelectedAiModelId)
                 ?? throw new InvalidOperationException("Regenerating the scene prose failed because no AI provider is configured for this chat.");
             var sourceMessage = thread.Messages.FirstOrDefault(x => x.Id == request.SourceMessageId)
                 ?? throw new InvalidOperationException("Regenerating the scene prose failed because the source message could not be found.");
@@ -449,7 +450,7 @@ public sealed class StorySceneChatService(
 
         try
         {
-            var generationSettings = await storyGenerationSettingsService.GetSettingsAsync(operation.CancellationToken);
+            var generationSettings = await storyGenerationSettingsService.GetSettingsAsync(agent.ModelId, operation.CancellationToken);
             var proseText = await StreamProseStageAsync(
                 agent,
                 request.ThreadId,
@@ -726,7 +727,7 @@ public sealed class StorySceneChatService(
         {
             var thread = await dbContext.ChatThreads.FirstOrDefaultAsync(x => x.Id == request.ThreadId, cancellationToken)
                 ?? throw new InvalidOperationException("Generating the scene message failed because the selected chat could not be found.");
-            agent = agentCatalog.GetAgentOrDefault(thread.SelectedAgentName)
+            agent = agentCatalog.GetAgentOrDefault(thread.SelectedAiModelId)
                 ?? throw new InvalidOperationException("Generating the scene message failed because no AI provider is configured for this chat.");
             var story = await GetOrCreateStoryAsync(dbContext, request.ThreadId, cancellationToken);
 
@@ -812,7 +813,7 @@ public sealed class StorySceneChatService(
 
         try
         {
-            var generationSettings = await storyGenerationSettingsService.GetSettingsAsync(operation.CancellationToken);
+            var generationSettings = await storyGenerationSettingsService.GetSettingsAsync(agent.ModelId, operation.CancellationToken);
             var generationBuild = await BuildSharedGenerationContextAsync(request.ThreadId, contextLeafMessageId, operation.CancellationToken);
             sharedContext = generationBuild.Context;
             appearanceResolution = generationBuild.Appearance;
@@ -3234,6 +3235,7 @@ public sealed class StorySceneChatService(
             "brief" => StoryTurnShape.Brief,
             "monologue" => StoryTurnShape.Monologue,
             "silent" => StoryTurnShape.Silent,
+            "silentmonologue" => StoryTurnShape.SilentMonologue,
             _ => throw new InvalidOperationException("Planning the scene message failed because the planner returned an invalid turn shape.")
         };
     }

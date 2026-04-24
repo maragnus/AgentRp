@@ -356,9 +356,6 @@ else
             _transferErrorMessage = _transferMode == ChatTransferDialogMode.Duplicate
                 ? $"Duplicating \"{_transferThread.Title}\" failed."
                 : $"Exporting \"{_transferThread.Title}\" failed.";
-            UserFeedbackService.ShowBackgroundError(
-                _transferErrorMessage,
-                _transferMode == ChatTransferDialogMode.Duplicate ? "Duplicate Failed" : "Export Failed");
         }
         finally
         {

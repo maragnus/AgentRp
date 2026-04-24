@@ -20,6 +20,12 @@ public sealed class AppContext(DbContextOptions<AppContext> options) : DbContext
 
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
 
+    public DbSet<AiProvider> AiProviders => Set<AiProvider>();
+
+    public DbSet<AiModel> AiModels => Set<AiModel>();
+
+    public DbSet<AiProviderMetric> AiProviderMetrics => Set<AiProviderMetric>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<ChatThread>(builder =>
@@ -27,8 +33,13 @@ public sealed class AppContext(DbContextOptions<AppContext> options) : DbContext
             builder.HasKey(x => x.Id);
             builder.Property(x => x.Title).HasColumnType("nvarchar(max)");
             builder.Property(x => x.SelectedAgentName).HasMaxLength(200);
+            builder.HasIndex(x => x.SelectedAiModelId);
             builder.HasIndex(x => x.UpdatedUtc);
             builder.HasIndex(x => new { x.IsStarred, x.UpdatedUtc });
+            builder.HasOne(x => x.SelectedAiModel)
+                .WithMany()
+                .HasForeignKey(x => x.SelectedAiModelId)
+                .OnDelete(DeleteBehavior.SetNull);
             builder.HasOne(x => x.Story)
                 .WithOne(x => x.Thread)
                 .HasForeignKey<ChatStory>(x => x.ChatThreadId)
@@ -113,6 +124,54 @@ public sealed class AppContext(DbContextOptions<AppContext> options) : DbContext
             builder.Property(x => x.JsonValue).HasColumnType("nvarchar(max)");
         });
 
+        modelBuilder.Entity<AiProvider>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.Name).HasMaxLength(200);
+            builder.Property(x => x.ProviderKind).HasConversion<string>().HasMaxLength(80);
+            builder.Property(x => x.BaseEndpoint).HasMaxLength(1000);
+            builder.Property(x => x.ApiKey).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.ManagementApiKey).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.AccountId).HasMaxLength(300);
+            builder.Property(x => x.ProjectId).HasMaxLength(300);
+            builder.Property(x => x.TeamId).HasMaxLength(300);
+            builder.Property(x => x.LastDiscoveryError).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.LastMetricsError).HasColumnType("nvarchar(max)");
+            builder.HasIndex(x => x.Name).IsUnique();
+            builder.HasIndex(x => new { x.IsEnabled, x.SortOrder });
+            builder.HasMany(x => x.Models)
+                .WithOne(x => x.Provider)
+                .HasForeignKey(x => x.ProviderId)
+                .OnDelete(DeleteBehavior.Cascade);
+            builder.HasMany(x => x.Metrics)
+                .WithOne(x => x.Provider)
+                .HasForeignKey(x => x.ProviderId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AiModel>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.ProviderModelId).HasMaxLength(500);
+            builder.Property(x => x.DisplayName).HasMaxLength(500);
+            builder.Property(x => x.Endpoint).HasMaxLength(1000);
+            builder.Property(x => x.Repository).HasMaxLength(500);
+            builder.Property(x => x.PlanningSettingsJson).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.WritingSettingsJson).HasColumnType("nvarchar(max)");
+            builder.HasIndex(x => new { x.ProviderId, x.ProviderModelId }).IsUnique();
+            builder.HasIndex(x => new { x.IsEnabled, x.SortOrder });
+        });
+
+        modelBuilder.Entity<AiProviderMetric>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.MetricKind).HasMaxLength(120);
+            builder.Property(x => x.Label).HasMaxLength(300);
+            builder.Property(x => x.Value).HasMaxLength(500);
+            builder.Property(x => x.Detail).HasColumnType("nvarchar(max)");
+            builder.HasIndex(x => new { x.ProviderId, x.MetricKind });
+        });
+
         modelBuilder.Entity<StoryChatSnapshot>(builder =>
         {
             builder.HasKey(x => x.Id);
@@ -153,6 +212,10 @@ public sealed class ChatThread
     public Guid? SelectedSpeakerCharacterId { get; set; }
 
     public string SelectedAgentName { get; set; } = string.Empty;
+
+    public Guid? SelectedAiModelId { get; set; }
+
+    public AiModel? SelectedAiModel { get; set; }
 
     public ChatStory? Story { get; set; }
 
@@ -315,6 +378,106 @@ public sealed class AppSetting
     public required string JsonValue { get; set; }
 
     public DateTime UpdatedUtc { get; set; }
+}
+
+public sealed class AiProvider
+{
+    public Guid Id { get; set; }
+
+    public required string Name { get; set; }
+
+    public AiProviderKind ProviderKind { get; set; }
+
+    public required string BaseEndpoint { get; set; }
+
+    public string ApiKey { get; set; } = string.Empty;
+
+    public string ManagementApiKey { get; set; } = string.Empty;
+
+    public string? AccountId { get; set; }
+
+    public string? ProjectId { get; set; }
+
+    public string? TeamId { get; set; }
+
+    public bool IsEnabled { get; set; } = true;
+
+    public int SortOrder { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+
+    public DateTime UpdatedUtc { get; set; }
+
+    public DateTime? LastDiscoveredUtc { get; set; }
+
+    public string? LastDiscoveryError { get; set; }
+
+    public DateTime? LastMetricsRefreshUtc { get; set; }
+
+    public string? LastMetricsError { get; set; }
+
+    public List<AiModel> Models { get; set; } = [];
+
+    public List<AiProviderMetric> Metrics { get; set; } = [];
+}
+
+public sealed class AiModel
+{
+    public Guid Id { get; set; }
+
+    public Guid ProviderId { get; set; }
+
+    public required string ProviderModelId { get; set; }
+
+    public required string DisplayName { get; set; }
+
+    public string? Endpoint { get; set; }
+
+    public string? Repository { get; set; }
+
+    public bool IsEnabled { get; set; }
+
+    public bool UseJsonSchemaResponseFormat { get; set; } = true;
+
+    public int SortOrder { get; set; }
+
+    public required string PlanningSettingsJson { get; set; }
+
+    public required string WritingSettingsJson { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+
+    public DateTime UpdatedUtc { get; set; }
+
+    public AiProvider Provider { get; set; } = null!;
+}
+
+public sealed class AiProviderMetric
+{
+    public Guid Id { get; set; }
+
+    public Guid ProviderId { get; set; }
+
+    public required string MetricKind { get; set; }
+
+    public required string Label { get; set; }
+
+    public required string Value { get; set; }
+
+    public string? Detail { get; set; }
+
+    public DateTime RefreshedUtc { get; set; }
+
+    public AiProvider Provider { get; set; } = null!;
+}
+
+public enum AiProviderKind
+{
+    OpenAI,
+    Grok,
+    Claude,
+    HuggingFaceInferenceEndpoint,
+    OpenAiCompatible
 }
 
 public enum ChatRole

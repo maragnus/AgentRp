@@ -1,7 +1,6 @@
 @inject IStoryEntityAiAssistService StoryEntityAiAssistService
 @inject IThreadAgentService ThreadAgentService
 @inject IModelOperationRegistry ModelOperationRegistry
-@inject IUserFeedbackService UserFeedbackService
 @inject ILogger<StoryEntityAiAssistModal> Logger
 
 <AppModal IsOpen="IsOpen" Title="@BuildTitle()" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down" CloseDisabled="@IsAiOperationActive" OnClose="CloseAsync">
@@ -251,7 +250,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Generating AI draft failed for {EntityKind} {EntityId} in chat {ThreadId}.", EntityKind, EntityId, ThreadId);
-            _errorMessage = $"Generating the {BuildEntityLabel()} draft failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Generating the {BuildEntityLabel()} draft failed.", exception);
         }
         finally
         {
@@ -301,7 +300,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Refining AI draft failed for {EntityKind} {EntityId} in chat {ThreadId}.", EntityKind, EntityId, ThreadId);
-            _errorMessage = $"Refining the {BuildEntityLabel()} draft failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Refining the {BuildEntityLabel()} draft failed.", exception);
         }
         finally
         {
@@ -333,7 +332,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Accepting AI draft failed for {EntityKind} {EntityId} in chat {ThreadId}.", EntityKind, EntityId, ThreadId);
-            _errorMessage = $"Saving the accepted {BuildEntityLabel()} draft failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Saving the accepted {BuildEntityLabel()} draft failed.", exception);
         }
         finally
         {

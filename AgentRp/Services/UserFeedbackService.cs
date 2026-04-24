@@ -10,8 +10,6 @@ public sealed class UserFeedbackService : IUserFeedbackService
 
     public void ShowBackgroundError(string message, string title) => Add(message, title, ToastIntent.Error);
 
-    public void ShowBackgroundSuccess(string message, string title) => Add(message, title, ToastIntent.Success);
-
     public void ShowBackgroundWarning(string message, string title) => Add(message, title, ToastIntent.Warning);
 
     public void Dismiss(Guid id)

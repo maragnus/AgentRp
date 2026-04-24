@@ -1,0 +1,1117 @@
+@inject IAiProviderCatalogService ProviderCatalogService
+@inject IStoryGenerationSettingsService StoryGenerationSettingsService
+@inject IJSRuntime JSRuntime
+@inject ILogger<AiProviderModelEditorModal> Logger
+
+<AppModal IsOpen="IsOpen" Title="AI Providers" OnClose="CloseAsync" CloseDisabled="@IsMainModalCloseDisabled" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down">
+    <ChildContent>
+        @if (_isLoading)
+        {
+            <div class="d-flex align-items-center gap-3 py-3">
+                <div class="spinner-border spinner-border-sm" role="status"></div>
+                <span>Loading providers...</span>
+            </div>
+        }
+        else
+        {
+            @if (_isOnboarding)
+            {
+                @RenderOnboarding()
+            }
+            else
+            {
+                <div class="row g-3">
+                    <div class="col-12 col-lg-4">
+                        <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                            <div class="fw-semibold">Providers</div>
+                            <button type="button" class="btn btn-outline-primary btn-sm" title="Add provider" aria-label="Add provider" @onclick="BeginCreateProvider">
+                                <i class="fa-regular fa-plus" aria-hidden="true"></i>
+                            </button>
+                        </div>
+
+                        @if (_catalog?.Providers.Count == 0)
+                        {
+                            <div class="alert alert-light border mb-3">No providers yet.</div>
+                        }
+                        else if (_catalog is not null)
+                        {
+                            <div class="list-group mb-3">
+                                @foreach (var provider in _catalog.Providers)
+                                {
+                                    <button type="button"
+                                            class="list-group-item list-group-item-action @(provider.ProviderId == _selectedProviderId ? "active" : string.Empty)"
+                                            @onclick="() => SelectProvider(provider.ProviderId)">
+                                        <div class="d-flex justify-content-between gap-2">
+                                            <span class="text-truncate">@provider.Name</span>
+                                            <span class="badge text-bg-light">@provider.Models.Count</span>
+                                        </div>
+                                        <div class="small @(provider.ProviderId == _selectedProviderId ? "text-white-50" : "text-body-secondary")">@DescribeProviderKind(provider.ProviderKind)</div>
+                                    </button>
+                                }
+                            </div>
+                        }
+
+                        <div class="d-flex flex-wrap gap-2">
+                            <BusyButton Class="btn btn-outline-secondary btn-sm" IsBusy="_isExporting" BusyText="Exporting..." OnClick="ExportAsync">
+                                <i class="fa-regular fa-arrow-up-from-bracket me-2" aria-hidden="true"></i>
+                                Export
+                            </BusyButton>
+                            <label class="btn btn-outline-secondary btn-sm mb-0 @(_isImporting ? "disabled" : string.Empty)" for="@_importInputId">
+                                <i class="fa-regular fa-arrow-down-to-bracket me-2" aria-hidden="true"></i>
+                                Import
+                            </label>
+                            <InputFile @key="_importInputKey" id="@_importInputId" class="d-none" accept=".json" disabled="_isImporting" OnChange="ImportAsync" />
+                        </div>
+                    </div>
+
+                    <div class="col-12 col-lg-8">
+                        <InlineAlert Message="@_errorMessage" />
+                        @if (SelectedProvider is not null)
+                        {
+                            @RenderProviderDashboard(SelectedProvider)
+                        }
+                        else
+                        {
+                            <div class="text-body-secondary">Select a provider or add a new one.</div>
+                        }
+                    </div>
+                </div>
+            }
+        }
+    </ChildContent>
+    <FooterContent>
+        @if (_isOnboarding)
+        {
+            @RenderOnboardingFooter()
+        }
+        else
+        {
+            <button type="button" class="btn btn-outline-secondary" disabled="@IsMainModalCloseDisabled" @onclick="CloseAsync">Close</button>
+        }
+    </FooterContent>
+</AppModal>
+
+<AppModal IsOpen="@(_editingModel is not null)" Title="@ModelSettingsTitle" DialogClass="modal-lg modal-dialog-scrollable modal-fullscreen-sm-down" OnClose="CloseModelSettingsAsync">
+    <ChildContent>
+        @if (_editingModel is not null)
+        {
+            <StoryModelSettingsEditor Planning="_editingPlanning"
+                                      Writing="_editingWriting"
+                                      ActiveStage="_editingStage"
+                                      ActiveStageChanged="stage => _editingStage = stage"
+                                      PlanningChanged="settings => _editingPlanning = settings"
+                                      WritingChanged="settings => _editingWriting = settings"
+                                      Disabled="@_isSavingModelSettings" />
+
+            <div class="border-top pt-3 mt-3">
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                    <div class="fw-semibold">Copy To</div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="() => _isCopyOpen = !_isCopyOpen">
+                        <i class="fa-regular fa-copy me-2" aria-hidden="true"></i>
+                        Copy To
+                    </button>
+                </div>
+
+                @if (_isCopyOpen)
+                {
+                    <div class="list-group">
+                        @foreach (var model in EnabledCopyTargets)
+                        {
+                            <div class="list-group-item">
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <div class="min-w-0">
+                                        <div class="fw-semibold text-truncate">@model.Name</div>
+                                        <div class="small text-body-secondary">@model.ProviderName</div>
+                                    </div>
+                                    <select class="form-select form-select-sm w-auto" @bind="_copyTargets[model.ModelId]">
+                                        <option value="@StoryGenerationSettingsCopySlot.Planning">Planning</option>
+                                        <option value="@StoryGenerationSettingsCopySlot.Writing">Writing</option>
+                                        <option value="@StoryGenerationSettingsCopySlot.Both">Both</option>
+                                    </select>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <button type="button" class="btn btn-outline-secondary" disabled="@_isSavingModelSettings" @onclick="CloseModelSettingsAsync">Cancel</button>
+        @if (_isCopyOpen)
+        {
+            <BusyButton Class="btn btn-outline-primary" IsBusy="_isCopyingSettings" BusyText="Copying..." OnClick="CopySettingsAsync">
+                Copy
+            </BusyButton>
+        }
+        <BusyButton Class="btn btn-primary" IsBusy="_isSavingModelSettings" BusyText="Saving..." OnClick="SaveModelSettingsAsync">
+            Save
+        </BusyButton>
+    </FooterContent>
+</AppModal>
+
+@code {
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
+    private readonly string _importInputId = $"provider-import-{Guid.NewGuid():N}";
+    private readonly string _providerNameInputId = $"provider-name-{Guid.NewGuid():N}";
+    private readonly string _providerKindInputId = $"provider-kind-{Guid.NewGuid():N}";
+    private readonly string _providerEndpointInputId = $"provider-endpoint-{Guid.NewGuid():N}";
+    private readonly string _providerApiKeyInputId = $"provider-api-key-{Guid.NewGuid():N}";
+    private readonly string _providerManagementKeyInputId = $"provider-management-key-{Guid.NewGuid():N}";
+    private readonly string _providerProjectInputId = $"provider-project-{Guid.NewGuid():N}";
+    private readonly string _providerTeamInputId = $"provider-team-{Guid.NewGuid():N}";
+    private readonly string _providerAccountInputId = $"provider-account-{Guid.NewGuid():N}";
+    private readonly string _providerEnabledInputId = $"provider-enabled-{Guid.NewGuid():N}";
+
+    private bool _wasOpen;
+    private bool _isLoading;
+    private bool _isSavingProvider;
+    private bool _isDeletingProvider;
+    private bool _isDiscovering;
+    private bool _isRefreshingMetrics;
+    private bool _isExporting;
+    private bool _isImporting;
+    private bool _isCreatingProvider;
+    private bool _isOnboarding;
+    private bool _isTestingDraftProvider;
+    private bool _isDiscoveringDraftModels;
+    private bool _isTestingManualModel;
+    private bool _isFinishingOnboarding;
+    private int _importInputKey;
+    private string? _errorMessage;
+    private string? _onboardingMessage;
+    private AiProviderCatalogView? _catalog;
+    private Guid? _selectedProviderId;
+    private ProviderOnboardingStep _onboardingStep = ProviderOnboardingStep.Provider;
+    private string _providerName = string.Empty;
+    private AiProviderKind _providerKind = AiProviderKind.OpenAI;
+    private string _providerEndpoint = "https://api.openai.com/v1/";
+    private string _providerApiKey = string.Empty;
+    private string _providerManagementApiKey = string.Empty;
+    private string? _providerAccountId;
+    private string? _providerProjectId;
+    private string? _providerTeamId;
+    private bool _providerIsEnabled = true;
+    private AiModelEditorView? _editingModel;
+    private StoryGenerationStage _editingStage = StoryGenerationStage.Planning;
+    private StoryGenerationSettingsView _editingSettings = AgentRp.Services.StoryGenerationSettingsService.CreateDefaultSettings();
+    private bool _isSavingModelSettings;
+    private bool _isCopyingSettings;
+    private bool _isCopyOpen;
+    private readonly Dictionary<Guid, StoryGenerationSettingsCopySlot> _copyTargets = [];
+    private List<AiProviderDraftModelSelection> _draftModels = [];
+    private string _manualModelId = string.Empty;
+    private bool _manualModelTested;
+
+    private AiProviderEditorView? SelectedProvider => _catalog?.Providers.FirstOrDefault(x => x.ProviderId == _selectedProviderId);
+
+    private StoryModelStageSettingsView _editingPlanning
+    {
+        get => _editingSettings.Planning;
+        set => _editingSettings = _editingSettings with { Planning = value };
+    }
+
+    private StoryModelStageSettingsView _editingWriting
+    {
+        get => _editingSettings.Writing;
+        set => _editingSettings = _editingSettings with { Writing = value };
+    }
+
+    private string ModelSettingsTitle => _editingModel is null ? "Model Settings" : $"Model Settings - {_editingModel.DisplayName}";
+
+    private IReadOnlyList<AgentProviderOptionView> EnabledCopyTargets =>
+        _catalog?.EnabledModels.Where(x => _editingModel is null || x.ModelId != _editingModel.ModelId).ToList() ?? [];
+
+    private bool IsOnboardingBusy =>
+        _isTestingDraftProvider
+        || _isDiscoveringDraftModels
+        || _isTestingManualModel
+        || _isFinishingOnboarding;
+
+    private bool IsMainModalCloseDisabled =>
+        _isSavingProvider
+        || _isDeletingProvider
+        || _isDiscovering
+        || _isRefreshingMetrics
+        || _isImporting
+        || IsOnboardingBusy;
+
+    private bool RequiresManualModel => _providerKind == AiProviderKind.OpenAiCompatible && _draftModels.Count == 0;
+
+    private bool CanFinishOnboarding =>
+        _draftModels.Any(x => x.IsEnabled)
+        && (!RequiresManualModel || _manualModelTested);
+
+    private RenderFragment RenderOnboarding() => @<div class="d-flex flex-column gap-4">
+        <div>
+            <div>
+                <div class="small text-uppercase text-body-secondary mb-1">New AI Provider</div>
+                <h5 class="mb-1">@BuildOnboardingTitle()</h5>
+                <div class="text-body-secondary">@BuildOnboardingSubtitle()</div>
+            </div>
+        </div>
+
+        <InlineAlert Message="@_errorMessage" />
+
+        @if (_onboardingStep == ProviderOnboardingStep.Provider)
+        {
+            <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-3">
+                @foreach (var kind in GetOnboardingProviderKinds())
+                {
+                    <div class="col">
+                        <button type="button"
+                                class="btn btn-outline-primary h-100 w-100 text-start p-3"
+                                @onclick="() => SelectOnboardingProvider(kind)">
+                            <div class="d-flex align-items-center gap-3">
+                                <i class="@BuildProviderIcon(kind) fs-3" aria-hidden="true"></i>
+                                <div>
+                                    <div class="fw-semibold">@DescribeProviderKind(kind)</div>
+                                    <div class="small text-body-secondary">@BuildProviderHelpText(kind)</div>
+                                </div>
+                            </div>
+                        </button>
+                    </div>
+                }
+            </div>
+        }
+        else if (_onboardingStep == ProviderOnboardingStep.Connection)
+        {
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label" for="@_providerNameInputId">Provider Name</label>
+                    <input id="@_providerNameInputId" class="form-control" disabled="@IsOnboardingBusy" @bind="_providerName" />
+                </div>
+                @if (ShowEndpointField(_providerKind))
+                {
+                    <div class="col-md-6">
+                        <label class="form-label" for="@_providerEndpointInputId">Endpoint</label>
+                        <input id="@_providerEndpointInputId" class="form-control" disabled="@IsOnboardingBusy" @bind="_providerEndpoint" />
+                    </div>
+                }
+                <div class="col-md-6">
+                    <label class="form-label" for="@_providerApiKeyInputId">@BuildApiKeyLabel(_providerKind)</label>
+                    <input id="@_providerApiKeyInputId" class="form-control" type="password" disabled="@IsOnboardingBusy" @bind="_providerApiKey" />
+                </div>
+                @if (_providerKind == AiProviderKind.OpenAiCompatible)
+                {
+                    <div class="col-12 small text-body-secondary">The API key is optional for local endpoints. The next step will try to discover models and will fall back to manual model entry if needed.</div>
+                }
+            </div>
+
+        }
+        else if (_onboardingStep == ProviderOnboardingStep.Models)
+        {
+            @if (!string.IsNullOrWhiteSpace(_onboardingMessage))
+            {
+                <div class="alert alert-light border mb-0">@_onboardingMessage</div>
+            }
+
+            @if (RequiresManualModel)
+            {
+                <div class="row g-3">
+                    <div class="col-md-8">
+                        <label class="form-label" for="manual-provider-model">Model Name</label>
+                        <input id="manual-provider-model" class="form-control" disabled="@IsOnboardingBusy" @bind="_manualModelId" />
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                        <BusyButton Class="btn btn-outline-primary w-100" IsBusy="_isTestingManualModel" Disabled="@IsOnboardingBusy" BusyText="Testing..." OnClick="TestManualModelAsync">
+                            Test Model
+                        </BusyButton>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="list-group">
+                    @for (var index = 0; index < _draftModels.Count; index++)
+                    {
+                        var model = _draftModels[index];
+                        <label class="list-group-item d-flex align-items-start gap-3">
+                            <input class="form-check-input mt-1" type="checkbox" checked="@model.IsEnabled" disabled="@IsOnboardingBusy" @onchange="args => ToggleDraftModel(model.ProviderModelId, args)" />
+                            <span class="min-w-0">
+                                <span class="fw-semibold d-block text-truncate">@model.DisplayName</span>
+                                @if (AiModelPresentation.ShouldShowSubtitle(model.DisplayName, model.ProviderModelId))
+                                {
+                                    <span class="small text-body-secondary d-block text-truncate">@model.ProviderModelId</span>
+                                }
+                            </span>
+                        </label>
+                    }
+                </div>
+            }
+        }
+        else
+        {
+            <div class="text-center py-5">
+                <i class="fa-regular fa-circle-check text-success fs-1 mb-3" aria-hidden="true"></i>
+                <h5>Provider Ready</h5>
+                <div class="text-body-secondary">The provider was saved and selected models are available in the quick switch.</div>
+            </div>
+        }
+    </div>;
+
+    private RenderFragment RenderOnboardingFooter() => @<div class="d-flex align-items-center justify-content-between gap-2 w-100">
+        <div class="d-flex flex-wrap gap-2">
+            <button type="button" class="btn btn-outline-secondary" disabled="@IsOnboardingBusy" @onclick="CancelOnboarding">Cancel setup</button>
+            @if (_onboardingStep == ProviderOnboardingStep.Connection)
+            {
+                <button type="button" class="btn btn-outline-secondary" disabled="@IsOnboardingBusy" @onclick="() => _onboardingStep = ProviderOnboardingStep.Provider">Back</button>
+            }
+            else if (_onboardingStep == ProviderOnboardingStep.Models)
+            {
+                <button type="button" class="btn btn-outline-secondary" disabled="@IsOnboardingBusy" @onclick="() => _onboardingStep = ProviderOnboardingStep.Connection">Back</button>
+            }
+        </div>
+
+        <div class="d-flex flex-wrap gap-2 justify-content-end">
+            @if (_onboardingStep == ProviderOnboardingStep.Connection)
+            {
+                <BusyButton Class="btn btn-outline-primary" IsBusy="_isTestingDraftProvider" Disabled="@IsOnboardingBusy" BusyText="Testing..." OnClick="TestDraftProviderAsync">
+                    <i class="fa-regular fa-plug me-2" aria-hidden="true"></i>
+                    Test Connection
+                </BusyButton>
+                <BusyButton Class="btn btn-primary" IsBusy="_isDiscoveringDraftModels" Disabled="@IsOnboardingBusy" BusyText="Loading..." OnClick="ContinueToModelsAsync">
+                    Next
+                </BusyButton>
+            }
+            else if (_onboardingStep == ProviderOnboardingStep.Models)
+            {
+                <BusyButton Class="btn btn-outline-primary" IsBusy="_isDiscoveringDraftModels" Disabled="@IsOnboardingBusy" BusyText="Refreshing..." OnClick="RefreshDraftModelsAsync">
+                    <i class="fa-regular fa-arrows-rotate me-2" aria-hidden="true"></i>
+                    Refresh Models
+                </BusyButton>
+                <BusyButton Class="btn btn-primary" IsBusy="_isFinishingOnboarding" Disabled="@(IsOnboardingBusy || !CanFinishOnboarding)" BusyText="Saving..." OnClick="FinishOnboardingAsync">
+                    Done
+                </BusyButton>
+            }
+        </div>
+    </div>;
+
+    private RenderFragment RenderProviderDashboard(AiProviderEditorView provider) => @<div class="d-flex flex-column gap-3">
+        <div class="d-flex align-items-start justify-content-between gap-3">
+            <div>
+                <div class="small text-uppercase text-body-secondary">@DescribeProviderKind(provider.ProviderKind)</div>
+                <h5 class="mb-1">@provider.Name</h5>
+                <div class="small text-body-secondary">@provider.Models.Count(x => x.IsEnabled) of @provider.Models.Count models enabled</div>
+            </div>
+            <div class="form-check form-switch">
+                <input id="@_providerEnabledInputId" class="form-check-input" type="checkbox" @bind="_providerIsEnabled" />
+                <label class="form-check-label" for="@_providerEnabledInputId">Enabled</label>
+            </div>
+        </div>
+
+        <div class="border-top pt-3">
+            <div class="fw-semibold mb-2">Connection</div>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label" for="@_providerNameInputId">Name</label>
+                    <input id="@_providerNameInputId" class="form-control" @bind="_providerName" />
+                </div>
+                @if (ShowEndpointField(provider.ProviderKind))
+                {
+                    <div class="col-md-6">
+                        <label class="form-label" for="@_providerEndpointInputId">Endpoint</label>
+                        <input id="@_providerEndpointInputId" class="form-control" @bind="_providerEndpoint" />
+                    </div>
+                }
+                <div class="col-md-6">
+                    <label class="form-label" for="@_providerApiKeyInputId">@BuildApiKeyLabel(provider.ProviderKind)</label>
+                    <input id="@_providerApiKeyInputId" class="form-control" type="password" @bind="_providerApiKey" />
+                </div>
+                @if (provider.ProviderKind == AiProviderKind.Grok || provider.ProviderKind == AiProviderKind.Claude)
+                {
+                    <div class="col-md-6">
+                        <label class="form-label" for="@_providerManagementKeyInputId">Admin / Management Key</label>
+                        <input id="@_providerManagementKeyInputId" class="form-control" type="password" @bind="_providerManagementApiKey" />
+                    </div>
+                }
+                @if (provider.ProviderKind == AiProviderKind.OpenAI || provider.ProviderKind == AiProviderKind.Claude)
+                {
+                    <div class="col-md-6">
+                        <label class="form-label" for="@_providerProjectInputId">Project</label>
+                        <input id="@_providerProjectInputId" class="form-control" @bind="_providerProjectId" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="@_providerAccountInputId">Account</label>
+                        <input id="@_providerAccountInputId" class="form-control" @bind="_providerAccountId" />
+                    </div>
+                }
+                @if (provider.ProviderKind == AiProviderKind.Grok)
+                {
+                    <div class="col-md-6">
+                        <label class="form-label" for="@_providerTeamInputId">Team</label>
+                        <input id="@_providerTeamInputId" class="form-control" @bind="_providerTeamId" />
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="d-flex flex-wrap gap-2 border-top pt-3">
+            <BusyButton Class="btn btn-primary" IsBusy="_isSavingProvider" BusyText="Saving..." OnClick="SaveProviderAsync">
+                <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                Save
+            </BusyButton>
+            <BusyButton Class="btn btn-outline-primary" IsBusy="_isTestingDraftProvider" BusyText="Testing..." OnClick="TestDraftProviderAsync">
+                <i class="fa-regular fa-plug me-2" aria-hidden="true"></i>
+                Test Connection
+            </BusyButton>
+            <BusyButton Class="btn btn-outline-primary" IsBusy="_isDiscovering" BusyText="Refreshing..." OnClick="DiscoverAsync">
+                <i class="fa-regular fa-arrows-rotate me-2" aria-hidden="true"></i>
+                Refresh Models
+            </BusyButton>
+            <BusyButton Class="btn btn-outline-secondary" IsBusy="_isRefreshingMetrics" BusyText="Refreshing..." OnClick="RefreshMetricsAsync">
+                <i class="fa-regular fa-chart-line me-2" aria-hidden="true"></i>
+                Refresh Widget
+            </BusyButton>
+            <BusyButton Class="btn btn-outline-danger ms-auto" IsBusy="_isDeletingProvider" BusyText="Deleting..." OnClick="DeleteProviderAsync">
+                <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
+                Delete
+            </BusyButton>
+        </div>
+
+        <div class="border-top pt-3">
+            <div class="fw-semibold mb-2">Provider Widget</div>
+            @if (provider.Metrics.Count == 0)
+            {
+                <div class="small text-body-secondary">Refresh the widget to load connection and usage details.</div>
+            }
+            else
+            {
+                <div class="row g-2">
+                    @foreach (var metric in provider.Metrics)
+                    {
+                        <div class="col-md-6">
+                            <div class="border rounded p-3 h-100">
+                                <div class="small text-uppercase text-body-secondary">@metric.Label</div>
+                                <div class="fw-semibold">@metric.Value</div>
+                                @if (!string.IsNullOrWhiteSpace(metric.Detail))
+                                {
+                                    <div class="small text-body-secondary text-break mt-1">@metric.Detail</div>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+
+        <div class="border-top pt-3">
+            <div class="fw-semibold mb-2">Models</div>
+            @if (provider.Models.Count == 0)
+            {
+                <div class="small text-body-secondary">No discovered models yet.</div>
+            }
+            else
+            {
+                <div class="list-group">
+                    @foreach (var model in provider.Models)
+                    {
+                        <div class="list-group-item">
+                            <div class="d-flex align-items-start justify-content-between gap-2">
+                                <div class="min-w-0">
+                                    <div class="fw-semibold text-truncate">@model.DisplayName</div>
+                                    @if (AiModelPresentation.ShouldShowSubtitle(model.DisplayName, model.ProviderModelId))
+                                    {
+                                        <div class="small text-body-secondary text-truncate">@model.ProviderModelId</div>
+                                    }
+                                </div>
+                                <div class="d-flex align-items-center gap-2">
+                                    <div class="form-check form-switch mb-0">
+                                        <input class="form-check-input" type="checkbox" checked="@model.IsEnabled" @onchange="args => ToggleModelAsync(model, args)" />
+                                    </div>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" title="Edit model settings" aria-label="Edit model settings" @onclick="() => EditModel(model)">
+                                        <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!IsOpen)
+        {
+            _wasOpen = false;
+            return;
+        }
+
+        if (_wasOpen)
+            return;
+
+        _wasOpen = true;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _isLoading = true;
+        _errorMessage = null;
+        try
+        {
+            _catalog = await ProviderCatalogService.GetCatalogAsync(CancellationToken.None);
+            _selectedProviderId ??= _catalog.Providers.FirstOrDefault()?.ProviderId;
+            ApplyProviderDraft();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Loading AI providers failed.");
+            _errorMessage = "Loading AI providers failed.";
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private void BeginCreateProvider()
+    {
+        _isCreatingProvider = true;
+        _isOnboarding = true;
+        _onboardingStep = ProviderOnboardingStep.Provider;
+        _selectedProviderId = null;
+        ResetDraft(AiProviderKind.OpenAI);
+    }
+
+    private void SelectProvider(Guid providerId)
+    {
+        _isCreatingProvider = false;
+        _isOnboarding = false;
+        _selectedProviderId = providerId;
+        ApplyProviderDraft();
+    }
+
+    private void ApplyProviderDraft()
+    {
+        var provider = SelectedProvider;
+        if (provider is null)
+            return;
+
+        _providerName = provider.Name;
+        _providerKind = provider.ProviderKind;
+        _providerEndpoint = provider.BaseEndpoint;
+        _providerApiKey = provider.ApiKey;
+        _providerManagementApiKey = provider.ManagementApiKey;
+        _providerAccountId = provider.AccountId;
+        _providerProjectId = provider.ProjectId;
+        _providerTeamId = provider.TeamId;
+        _providerIsEnabled = provider.IsEnabled;
+    }
+
+    private void SelectOnboardingProvider(AiProviderKind kind)
+    {
+        ResetDraft(kind);
+        _onboardingStep = ProviderOnboardingStep.Connection;
+    }
+
+    private void ResetDraft(AiProviderKind kind)
+    {
+        _providerKind = kind;
+        _providerName = DescribeProviderKind(kind);
+        _providerEndpoint = GetDefaultEndpoint(kind);
+        _providerApiKey = string.Empty;
+        _providerManagementApiKey = string.Empty;
+        _providerAccountId = null;
+        _providerProjectId = null;
+        _providerTeamId = null;
+        _providerIsEnabled = true;
+        _draftModels = [];
+        _manualModelId = string.Empty;
+        _manualModelTested = false;
+        _onboardingMessage = null;
+        _errorMessage = null;
+    }
+
+    private void CancelOnboarding()
+    {
+        if (IsOnboardingBusy)
+            return;
+
+        _isOnboarding = false;
+        _isCreatingProvider = false;
+        _onboardingStep = ProviderOnboardingStep.Provider;
+        _errorMessage = null;
+        _onboardingMessage = null;
+        _selectedProviderId ??= _catalog?.Providers.FirstOrDefault()?.ProviderId;
+        ApplyProviderDraft();
+    }
+
+    private AiProviderDraft BuildDraft() => new(
+        _providerName,
+        _providerKind,
+        _providerEndpoint,
+        _providerApiKey,
+        _providerManagementApiKey,
+        _providerAccountId,
+        _providerProjectId,
+        _providerTeamId);
+
+    private async Task TestDraftProviderAsync()
+    {
+        _isTestingDraftProvider = true;
+        _errorMessage = null;
+        try
+        {
+            await ProviderCatalogService.TestDraftProviderAsync(BuildDraft(), CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Testing provider {ProviderName} failed.", _providerName);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Testing {_providerName} failed.", exception);
+        }
+        finally
+        {
+            _isTestingDraftProvider = false;
+        }
+    }
+
+    private async Task ContinueToModelsAsync()
+    {
+        _isDiscoveringDraftModels = true;
+        _errorMessage = null;
+        try
+        {
+            await ProviderCatalogService.TestDraftProviderAsync(BuildDraft(), CancellationToken.None);
+            await LoadDraftModelsAsync();
+            _onboardingStep = ProviderOnboardingStep.Models;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Preparing provider {ProviderName} failed.", _providerName);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Preparing {_providerName} failed.", exception);
+        }
+        finally
+        {
+            _isDiscoveringDraftModels = false;
+        }
+    }
+
+    private async Task RefreshDraftModelsAsync()
+    {
+        _isDiscoveringDraftModels = true;
+        _errorMessage = null;
+        try
+        {
+            await LoadDraftModelsAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Refreshing draft models for provider {ProviderName} failed.", _providerName);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Refreshing models for {_providerName} failed.", exception);
+        }
+        finally
+        {
+            _isDiscoveringDraftModels = false;
+        }
+    }
+
+    private async Task LoadDraftModelsAsync()
+    {
+        var discovery = await ProviderCatalogService.DiscoverDraftModelsAsync(BuildDraft(), CancellationToken.None);
+        _onboardingMessage = discovery.Message;
+        _manualModelTested = false;
+        _manualModelId = string.Empty;
+        _draftModels = AiModelPresentation.BuildDraftSelections(_providerKind, discovery.Models, _draftModels).ToList();
+    }
+
+    private async Task TestManualModelAsync()
+    {
+        _isTestingManualModel = true;
+        _errorMessage = null;
+        try
+        {
+            await ProviderCatalogService.TestDraftModelAsync(BuildDraft(), _manualModelId, CancellationToken.None);
+            var modelId = _manualModelId.Trim();
+            _draftModels =
+            [
+                new AiProviderDraftModelSelection(modelId, modelId, null, null, true)
+            ];
+            _manualModelTested = true;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Testing manual model {ModelId} failed for provider {ProviderName}.", _manualModelId, _providerName);
+            _manualModelTested = false;
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Testing model '{_manualModelId}' for {_providerName} failed.", exception);
+        }
+        finally
+        {
+            _isTestingManualModel = false;
+        }
+    }
+
+    private async Task FinishOnboardingAsync()
+    {
+        _isFinishingOnboarding = true;
+        _errorMessage = null;
+        try
+        {
+            var saved = await ProviderCatalogService.CreateProviderFromDraftAsync(
+                new CreateAiProviderFromDraft(BuildDraft(), _draftModels),
+                CancellationToken.None);
+            _selectedProviderId = saved.ProviderId;
+            _isOnboarding = false;
+            _isCreatingProvider = false;
+            _onboardingStep = ProviderOnboardingStep.Done;
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Finishing provider onboarding failed for {ProviderName}.", _providerName);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Saving provider '{_providerName}' failed.", exception);
+        }
+        finally
+        {
+            _isFinishingOnboarding = false;
+        }
+    }
+
+    private void ToggleDraftModel(string modelId, ChangeEventArgs args)
+    {
+        var isEnabled = args.Value is bool value && value;
+        _draftModels = _draftModels
+            .Select(x => string.Equals(x.ProviderModelId, modelId, StringComparison.Ordinal)
+                ? x with { IsEnabled = isEnabled }
+                : x)
+            .ToList();
+    }
+
+    private async Task SaveProviderAsync()
+    {
+        _isSavingProvider = true;
+        _errorMessage = null;
+        try
+        {
+            var saved = await ProviderCatalogService.SaveProviderAsync(
+                new SaveAiProvider(
+                    _isCreatingProvider ? null : _selectedProviderId,
+                    _providerName,
+                    _providerKind,
+                    _providerEndpoint,
+                    _providerApiKey,
+                    _providerManagementApiKey,
+                    _providerAccountId,
+                    _providerProjectId,
+                    _providerTeamId,
+                    _providerIsEnabled),
+                CancellationToken.None);
+            _isCreatingProvider = false;
+            _selectedProviderId = saved.ProviderId;
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving AI provider failed.");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Saving the AI provider failed.", exception);
+        }
+        finally
+        {
+            _isSavingProvider = false;
+        }
+    }
+
+    private async Task DeleteProviderAsync()
+    {
+        if (!_selectedProviderId.HasValue)
+            return;
+
+        _isDeletingProvider = true;
+        _errorMessage = null;
+        try
+        {
+            await ProviderCatalogService.DeleteProviderAsync(_selectedProviderId.Value, CancellationToken.None);
+            _selectedProviderId = null;
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Deleting AI provider failed.");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Deleting the AI provider failed.", exception);
+        }
+        finally
+        {
+            _isDeletingProvider = false;
+        }
+    }
+
+    private async Task DiscoverAsync()
+    {
+        if (!_selectedProviderId.HasValue)
+            return;
+
+        _isDiscovering = true;
+        _errorMessage = null;
+        try
+        {
+            await ProviderCatalogService.DiscoverModelsAsync(_selectedProviderId.Value, CancellationToken.None);
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Discovering AI provider models failed.");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Discovering models failed for the selected provider.", exception);
+        }
+        finally
+        {
+            _isDiscovering = false;
+        }
+    }
+
+    private async Task RefreshMetricsAsync()
+    {
+        if (!_selectedProviderId.HasValue)
+            return;
+
+        _isRefreshingMetrics = true;
+        _errorMessage = null;
+        try
+        {
+            await ProviderCatalogService.RefreshMetricsAsync(_selectedProviderId.Value, CancellationToken.None);
+            await LoadAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Refreshing AI provider widget failed.");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Refreshing provider widget details failed.", exception);
+        }
+        finally
+        {
+            _isRefreshingMetrics = false;
+        }
+    }
+
+    private async Task ToggleModelAsync(AiModelEditorView model, ChangeEventArgs args)
+    {
+        var isEnabled = args.Value is bool value && value;
+        try
+        {
+            await ProviderCatalogService.SaveModelAsync(
+                new SaveAiModel(model.ModelId, model.DisplayName, model.Endpoint, isEnabled, model.UseJsonSchemaResponseFormat),
+                CancellationToken.None);
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Toggling AI model failed for {ModelId}.", model.ModelId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Updating model '{model.DisplayName}' failed.", exception);
+        }
+    }
+
+    private void EditModel(AiModelEditorView model)
+    {
+        _editingModel = model;
+        _editingSettings = model.Settings;
+        _editingStage = StoryGenerationStage.Planning;
+        _isCopyOpen = false;
+        _copyTargets.Clear();
+        foreach (var target in EnabledCopyTargets)
+            _copyTargets[target.ModelId] = StoryGenerationSettingsCopySlot.Both;
+    }
+
+    private async Task SaveModelSettingsAsync()
+    {
+        if (_editingModel is null)
+            return;
+
+        _isSavingModelSettings = true;
+        try
+        {
+            await StoryGenerationSettingsService.UpdateSettingsAsync(
+                _editingModel.ModelId,
+                new UpdateStoryGenerationSettings(_editingSettings.Planning, _editingSettings.Writing),
+                CancellationToken.None);
+            _editingModel = null;
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving model settings failed.");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Saving model settings failed.", exception);
+        }
+        finally
+        {
+            _isSavingModelSettings = false;
+        }
+    }
+
+    private async Task CopySettingsAsync()
+    {
+        _isCopyingSettings = true;
+        try
+        {
+            var source = _editingStage == StoryGenerationStage.Planning ? _editingSettings.Planning : _editingSettings.Writing;
+            var targets = _copyTargets.Select(x => new CopyStoryGenerationSettingsTarget(x.Key, x.Value)).ToList();
+            await StoryGenerationSettingsService.CopySettingsAsync(_editingStage, source, targets, CancellationToken.None);
+            await LoadAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Copying model settings failed.");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Copying model settings failed.", exception);
+        }
+        finally
+        {
+            _isCopyingSettings = false;
+        }
+    }
+
+    private async Task ExportAsync()
+    {
+        if (_catalog is null)
+            return;
+
+        _isExporting = true;
+        try
+        {
+            var json = ProviderCatalogService.ExportCatalogJson(_catalog);
+            await JSRuntime.InvokeVoidAsync("chatTransfer.downloadJson", $"ai-providers-{DateTime.UtcNow:yyyy-MM-dd}.json", json);
+        }
+        finally
+        {
+            _isExporting = false;
+        }
+    }
+
+    private async Task ImportAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+            return;
+
+        _isImporting = true;
+        _errorMessage = null;
+        try
+        {
+            using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var json = await reader.ReadToEndAsync();
+            var result = await ProviderCatalogService.ImportCatalogAsync(json, CancellationToken.None);
+            _selectedProviderId = null;
+            await LoadAsync();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Importing AI provider catalog failed.");
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Importing provider catalog from \"{file.Name}\" failed.", exception);
+        }
+        finally
+        {
+            _isImporting = false;
+            _importInputKey++;
+        }
+    }
+
+    private Task CloseModelSettingsAsync()
+    {
+        if (_isSavingModelSettings || _isCopyingSettings)
+            return Task.CompletedTask;
+
+        _editingModel = null;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseAsync()
+    {
+        if (_isSavingProvider || _isDeletingProvider || _isDiscovering || _isRefreshingMetrics || _isImporting || IsOnboardingBusy)
+            return Task.CompletedTask;
+
+        return OnClose.InvokeAsync();
+    }
+
+    private static IReadOnlyList<AiProviderKind> GetOnboardingProviderKinds() =>
+    [
+        AiProviderKind.OpenAI,
+        AiProviderKind.Grok,
+        AiProviderKind.Claude,
+        AiProviderKind.HuggingFaceInferenceEndpoint,
+        AiProviderKind.OpenAiCompatible
+    ];
+
+    private static string BuildOnboardingTitle() => "Connect a provider";
+
+    private string BuildOnboardingSubtitle() => _onboardingStep switch
+    {
+        ProviderOnboardingStep.Provider => "Choose the platform you want to use for AI generation.",
+        ProviderOnboardingStep.Connection => $"Add credentials for {DescribeProviderKind(_providerKind)}, then test the connection.",
+        ProviderOnboardingStep.Models => "Choose the models that should appear in the sidebar quick switch.",
+        ProviderOnboardingStep.Done => "Your provider is ready.",
+        _ => string.Empty
+    };
+
+    private static string BuildProviderHelpText(AiProviderKind kind) => kind switch
+    {
+        AiProviderKind.OpenAI => "Use OpenAI platform models.",
+        AiProviderKind.Grok => "Use xAI Grok models.",
+        AiProviderKind.Claude => "Use Anthropic Claude models.",
+        AiProviderKind.HuggingFaceInferenceEndpoint => "Use managed HF inference endpoints.",
+        AiProviderKind.OpenAiCompatible => "Use LM Studio, Ollama gateways, or compatible APIs.",
+        _ => "Use a model provider."
+    };
+
+    private static string BuildProviderIcon(AiProviderKind kind) => kind switch
+    {
+        AiProviderKind.OpenAI => "fa-regular fa-hexagon-nodes",
+        AiProviderKind.Grok => "fa-regular fa-bolt",
+        AiProviderKind.Claude => "fa-regular fa-sparkles",
+        AiProviderKind.HuggingFaceInferenceEndpoint => "fa-regular fa-cloud",
+        AiProviderKind.OpenAiCompatible => "fa-regular fa-plug",
+        _ => "fa-regular fa-server"
+    };
+
+    private static string BuildApiKeyLabel(AiProviderKind kind) => kind switch
+    {
+        AiProviderKind.OpenAiCompatible => "API Key (optional)",
+        AiProviderKind.Claude => "Claude API Key",
+        AiProviderKind.Grok => "xAI API Key",
+        AiProviderKind.HuggingFaceInferenceEndpoint => "Hugging Face API Key",
+        _ => "API Key"
+    };
+
+    private static bool ShowEndpointField(AiProviderKind kind) =>
+        kind is AiProviderKind.OpenAiCompatible or AiProviderKind.HuggingFaceInferenceEndpoint;
+
+    private static string GetDefaultEndpoint(AiProviderKind kind) => kind switch
+    {
+        AiProviderKind.OpenAI => "https://api.openai.com/v1/",
+        AiProviderKind.Grok => "https://api.x.ai/v1/",
+        AiProviderKind.Claude => "https://api.anthropic.com/v1/",
+        AiProviderKind.HuggingFaceInferenceEndpoint => "https://api.endpoints.huggingface.cloud/v2/",
+        _ => string.Empty
+    };
+
+    private static string DescribeProviderKind(AiProviderKind kind) => kind switch
+    {
+        AiProviderKind.OpenAI => "OpenAI",
+        AiProviderKind.Grok => "Grok / xAI",
+        AiProviderKind.Claude => "Claude / Anthropic",
+        AiProviderKind.HuggingFaceInferenceEndpoint => "Hugging Face Endpoints",
+        AiProviderKind.OpenAiCompatible => "OpenAI-compatible",
+        _ => kind.ToString()
+    };
+
+    private enum ProviderOnboardingStep
+    {
+        Provider,
+        Connection,
+        Models,
+        Done
+    }
+}

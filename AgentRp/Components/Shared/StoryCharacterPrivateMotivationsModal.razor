@@ -268,8 +268,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Generating private motivations failed for character {CharacterName} in chat {ThreadId}.", Character.Name, ThreadId);
-            _errorMessage = $"Generating private motivations for '{BuildDisplayName()}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Private Motivations Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Generating private motivations for '{BuildDisplayName()}' failed.", exception);
         }
         finally
         {
@@ -315,8 +314,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Previewing private motivations failed for character {CharacterName} in chat {ThreadId}.", Character.Name, ThreadId);
-            _errorMessage = $"Previewing private motivations for '{BuildDisplayName()}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Preview Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Previewing private motivations for '{BuildDisplayName()}' failed.", exception);
         }
         finally
         {
@@ -346,8 +344,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Applying private motivations failed for character {CharacterName} in chat {ThreadId}.", Character.Name, ThreadId);
-            _errorMessage = $"Applying private motivations to '{BuildDisplayName()}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Apply Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Applying private motivations to '{BuildDisplayName()}' failed.", exception);
         }
         finally
         {

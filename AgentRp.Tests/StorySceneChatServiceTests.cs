@@ -17,9 +17,9 @@ public sealed class StorySceneChatServiceTests
             "GetResponderCandidates",
             new List<StorySceneCharacterContext>
             {
-                new(activeSpeakerId, "Ava", "Lead", "Coat", "Rain damp hair", "Focused", "Ben", "Truth", true),
-                new(Guid.NewGuid(), "Ben", "Support", "Jacket", "Rolled sleeves", "Calm", "Ava", "Trust", true),
-                new(Guid.NewGuid(), "Cleo", "Offstage", "Scarf", "Hidden", "Watchful", "Ava", "Distance", false)
+                Character(activeSpeakerId, "Ava", true),
+                Character(Guid.NewGuid(), "Ben", true),
+                Character(Guid.NewGuid(), "Cleo", false)
             },
             activeSpeakerId);
 
@@ -35,9 +35,9 @@ public sealed class StorySceneChatServiceTests
             "GetResponderCandidates",
             new List<StorySceneCharacterContext>
             {
-                new(Guid.NewGuid(), "Ava", "Lead", "Coat", "Rain damp hair", "Focused", "Ben", "Truth", true),
-                new(Guid.NewGuid(), "Ben", "Support", "Jacket", "Rolled sleeves", "Calm", "Ava", "Trust", true),
-                new(Guid.NewGuid(), "Cleo", "Offstage", "Scarf", "Hidden", "Watchful", "Ava", "Distance", false)
+                Character(Guid.NewGuid(), "Ava", true),
+                Character(Guid.NewGuid(), "Ben", true),
+                Character(Guid.NewGuid(), "Cleo", false)
             },
             null);
 
@@ -53,8 +53,8 @@ public sealed class StorySceneChatServiceTests
                 "GetResponderCandidates",
                 new List<StorySceneCharacterContext>
                 {
-                    new(activeSpeakerId, "Ava", "Lead", "Coat", "Rain damp hair", "Focused", "Ben", "Truth", true),
-                    new(Guid.NewGuid(), "Cleo", "Offstage", "Scarf", "Hidden", "Watchful", "Ava", "Distance", false)
+                    Character(activeSpeakerId, "Ava", true),
+                    Character(Guid.NewGuid(), "Cleo", false)
                 },
                 activeSpeakerId));
 
@@ -214,9 +214,11 @@ public sealed class StorySceneChatServiceTests
                 "Immediate goal",
                 "Why now",
                 "Change introduced",
+                [],
                 []));
 
-        Assert.Empty(planner.Guardrails);
+        Assert.Empty(planner.NarrativeGuardrails);
+        Assert.Empty(planner.ContentGuardrails);
     }
 
     [Fact]
@@ -231,10 +233,27 @@ public sealed class StorySceneChatServiceTests
                 "Immediate goal",
                 "Why now",
                 "Change introduced",
+                null!,
                 null!));
 
-        Assert.Empty(planner.Guardrails);
+        Assert.Empty(planner.NarrativeGuardrails);
+        Assert.Empty(planner.ContentGuardrails);
     }
+
+    private static StorySceneCharacterContext Character(Guid id, string name, bool isPresentInScene) => new(
+        id,
+        name,
+        $"{name} summary",
+        $"{name} appearance",
+        $"{name} current appearance",
+        $"{name} voice",
+        $"{name} hides",
+        $"{name} tendency",
+        $"{name} constraint",
+        $"{name} relationships",
+        $"{name} likes",
+        $"{name} private motivations",
+        isPresentInScene);
 
     private static ChatThread CreateThread() => new()
     {

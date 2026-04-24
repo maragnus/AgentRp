@@ -6,7 +6,6 @@
 @inject IThreadAgentService ThreadAgentService
 @inject IStoryGenerationSettingsService StoryGenerationSettingsService
 @inject IActivityNotifier ActivityNotifier
-@inject IUserFeedbackService UserFeedbackService
 @inject IJSRuntime JSRuntime
 @inject NavigationManager NavigationManager
 @inject ILogger<StorySidebarSection> Logger
@@ -43,14 +42,205 @@
         else
         {
             <div>
-                <div class="small text-uppercase text-body-secondary mb-2">AI Provider</div>
+                <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                    <div class="small text-uppercase text-body-secondary">AI Model</div>
+                    <button type="button"
+                            class="btn btn-outline-secondary btn-sm"
+                            title="Manage AI providers"
+                            aria-label="Manage AI providers"
+                            @onclick="OpenProviderEditor">
+                        <i class="fa-regular fa-server" aria-hidden="true"></i>
+                    </button>
+                </div>
 
                 @if (_story.AvailableAgents.Count == 0)
                 {
-                    <div class="small text-body-secondary">AI actions are unavailable until an Aspire-configured provider is enabled.</div>
+                    <div class="alert alert-light border mb-0">
+                        <div class="fw-semibold mb-1">Connect an AI provider</div>
+                        <div class="small text-body-secondary mb-2">Add a platform API key, discover models, and enable one model to get started.</div>
+                        <button type="button" class="btn btn-primary btn-sm" @onclick="OpenProviderEditor">
+                            <i class="fa-regular fa-plug me-2" aria-hidden="true"></i>
+                            Set Up AI
+                        </button>
+                    </div>
                 }
                 else
                 {
+                    <div class="d-flex align-items-center justify-content-between gap-2">
+                        <div class="min-w-0">
+                            <div class="fw-semibold text-truncate">@(_story.SelectedAgentName ?? "No model selected")</div>
+                            <div class="small text-body-secondary text-truncate">@SelectedProviderSummary</div>
+                        </div>
+                        <div class="d-flex gap-1">
+                            <button type="button"
+                                    class="btn btn-outline-primary btn-sm"
+                                    title="Switch model"
+                                    aria-label="Switch model"
+                                    @onclick="ToggleModelSwitcher">
+                                <i class="fa-regular fa-shuffle" aria-hidden="true"></i>
+                            </button>
+                            <button type="button"
+                                    class="btn btn-outline-secondary btn-sm"
+                                    title="Edit selected model settings"
+                                    aria-label="Edit selected model settings"
+                                    @onclick="OpenGenerationSettingsModal">
+                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    @if (_isModelSwitcherOpen)
+                    {
+                        <div class="list-group mt-2">
+                            @foreach (var agent in _story.AvailableAgents)
+                            {
+                                var isSelected = _story.SelectedModelId == agent.ModelId;
+                                var isSwitchingAgent = _switchingAgentNames.Contains(agent.Name);
+
+                                <div class="list-group-item">
+                                    <div class="d-flex align-items-center justify-content-between gap-2">
+                                        <button type="button"
+                                                class="btn @(isSelected ? "btn-primary" : "btn-outline-primary") btn-sm flex-grow-1 text-start text-truncate"
+                                                disabled="@(isSwitchingAgent || isSelected)"
+                                                @onclick="() => SelectAgentAsync(agent.ModelId, agent.Name)">
+                                            @agent.Name
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-outline-secondary btn-sm"
+                                                title="@($"Edit {agent.Name} settings")"
+                                                aria-label="@($"Edit {agent.Name} settings")"
+                                                @onclick="() => OpenGenerationSettingsModal(agent.ModelId)">
+                                            <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                    <div class="small text-body-secondary mt-1">@agent.ProviderName</div>
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (_generationSettings is not null)
+                    {
+                        <div class="small text-body-secondary text-truncate mt-2" title="@BuildGenerationSettingsSummary(_generationSettings)">
+                            @BuildGenerationSettingsSummary(_generationSettings)
+                        </div>
+                    }
+
+                    @if (_story.ProviderWidgets.Count > 0)
+                    {
+                        <div class="border-top pt-2 mt-2">
+                            <div class="small text-uppercase text-body-secondary mb-2">Provider Widgets</div>
+                            @foreach (var widget in _story.ProviderWidgets)
+                            {
+                                <div class="border-bottom pb-2 mb-2">
+                                    <div class="d-flex align-items-center justify-content-between gap-2 small">
+                                        <span class="fw-semibold text-truncate">@widget.ProviderName</span>
+                                        <span class="text-body-secondary">@widget.EnabledModelCount/@widget.DiscoveredModelCount models</span>
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(widget.ErrorMessage))
+                                    {
+                                        <div class="small text-danger">@widget.ErrorMessage</div>
+                                    }
+                                    @foreach (var metric in widget.Metrics.Take(2))
+                                    {
+                                        <div class="d-flex align-items-center justify-content-between gap-2 small text-body-secondary">
+                                            <span class="text-truncate">@metric.Label</span>
+                                            <span class="text-truncate">@metric.Value</span>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+
+                    @if (SelectedManagedEndpoint is not null || ShouldShowManagedEndpointError)
+                    {
+                        <div class="border-top pt-2 mt-2">
+                            @if (ShouldShowManagedEndpointError)
+                            {
+                                <div class="small text-body-secondary">@_story.ManagedAgentEndpointsErrorMessage</div>
+                            }
+                            else
+                            {
+                                var endpoint = SelectedManagedEndpoint!;
+                                var isManagingEndpoint = IsManagingEndpoint(endpoint.AgentName);
+
+                                <div class="d-flex align-items-center justify-content-between gap-2">
+                                    <div class="d-flex align-items-center gap-2 overflow-hidden">
+                                        <span class="@BuildManagedEndpointStatusIconClass(endpoint.State)"
+                                              title="@FormatManagedEndpointState(endpoint.State)"
+                                              aria-label="@FormatManagedEndpointState(endpoint.State)">
+                                            <i class="@BuildManagedEndpointStatusIcon(endpoint.State)" aria-hidden="true"></i>
+                                        </span>
+
+                                        @if (endpoint.IsLinked)
+                                        {
+                                            @if (endpoint.StatusUpdatedUtc.HasValue)
+                                            {
+                                                <span class="small text-body-secondary text-truncate">@FormatManagedEndpointAge(endpoint)</span>
+                                            }
+                                            else if (!string.IsNullOrWhiteSpace(endpoint.StatusMessage))
+                                            {
+                                                <span class="small text-body-secondary text-truncate">@endpoint.StatusMessage</span>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <span class="small text-body-secondary text-truncate">@GetManagedEndpointUnlinkedText(endpoint)</span>
+                                        }
+                                    </div>
+
+                                    @if (endpoint.IsLinked)
+                                    {
+                                        <div class="d-flex align-items-center gap-1 flex-shrink-0">
+                                            @if (endpoint.CanStart)
+                                            {
+                                                <BusyButton Class="btn btn-outline-success btn-sm"
+                                                            IsBusy="@IsManagingEndpointAction(endpoint.AgentName, ManagedAgentAction.Start)"
+                                                            Disabled="@isManagingEndpoint"
+                                                            BusyText=""
+                                                            ShowBusyText="false"
+                                                            title="@($"Start {endpoint.AgentName}")"
+                                                            aria-label="@($"Start {endpoint.AgentName}")"
+                                                            OnClick="() => ManageEndpointAsync(endpoint, ManagedAgentAction.Start)">
+                                                    <i class="fa-regular fa-play" aria-hidden="true"></i>
+                                                </BusyButton>
+                                            }
+
+                                            @if (endpoint.CanPause)
+                                            {
+                                                <BusyButton Class="btn btn-outline-secondary btn-sm"
+                                                            IsBusy="@IsManagingEndpointAction(endpoint.AgentName, ManagedAgentAction.Pause)"
+                                                            Disabled="@isManagingEndpoint"
+                                                            BusyText=""
+                                                            ShowBusyText="false"
+                                                            title="@($"Pause {endpoint.AgentName}")"
+                                                            aria-label="@($"Pause {endpoint.AgentName}")"
+                                                            OnClick="() => ManageEndpointAsync(endpoint, ManagedAgentAction.Pause)">
+                                                    <i class="fa-regular fa-pause" aria-hidden="true"></i>
+                                                </BusyButton>
+                                            }
+
+                                            @if (endpoint.CanScaleToZero)
+                                            {
+                                                <BusyButton Class="btn btn-outline-danger btn-sm"
+                                                            IsBusy="@IsManagingEndpointAction(endpoint.AgentName, ManagedAgentAction.ScaleToZero)"
+                                                            Disabled="@isManagingEndpoint"
+                                                            BusyText=""
+                                                            ShowBusyText="false"
+                                                            title="@($"Scale {endpoint.AgentName} to zero")"
+                                                            aria-label="@($"Scale {endpoint.AgentName} to zero")"
+                                                            OnClick="() => ManageEndpointAsync(endpoint, ManagedAgentAction.ScaleToZero)">
+                                                    <i class="fa-regular fa-power-off" aria-hidden="true"></i>
+                                                </BusyButton>
+                                            }
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+@*
                     <div class="row row-cols-3 g-2">
                         @foreach (var agent in _story.AvailableAgents)
                         {
@@ -182,6 +372,7 @@
                             </div>
                         </div>
                     }
+*@
                 }
             </div>
 
@@ -350,6 +541,10 @@
                        OnChanged="HandleStoryChangedAsync" />
 }
 
+<AiProviderModelEditorModal IsOpen="_isProviderEditorOpen"
+                            OnClose="CloseProviderEditor"
+                            OnChanged="HandleStoryChangedAsync" />
+
 <AppModal IsOpen="@_isGenerationSettingsModalOpen"
           Title="Model Settings"
           DialogClass="modal-lg modal-dialog-scrollable modal-fullscreen-sm-down"
@@ -411,7 +606,37 @@
                            accept=".json"
                            disabled="@IsGenerationSettingsBusy"
                            OnChange="HandleGenerationSettingsImportAsync" />
+
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        disabled="@IsGenerationSettingsBusy"
+                        @onclick="ToggleGenerationSettingsCopy">
+                    <i class="fa-regular fa-copy me-2" aria-hidden="true"></i>
+                    Copy To
+                </button>
             </div>
+
+            @if (_isGenerationSettingsCopyOpen && _story is not null)
+            {
+                <div class="list-group">
+                    @foreach (var model in _story.AvailableAgents.Where(x => x.ModelId != _generationSettingsModelId))
+                    {
+                        <div class="list-group-item">
+                            <div class="d-flex align-items-center justify-content-between gap-2">
+                                <div class="min-w-0">
+                                    <div class="fw-semibold text-truncate">@model.Name</div>
+                                    <div class="small text-body-secondary">@model.ProviderName</div>
+                                </div>
+                                <select class="form-select form-select-sm w-auto" @bind="_generationSettingsCopyTargets[model.ModelId]">
+                                    <option value="@StoryGenerationSettingsCopySlot.Planning">Planning</option>
+                                    <option value="@StoryGenerationSettingsCopySlot.Writing">Writing</option>
+                                    <option value="@StoryGenerationSettingsCopySlot.Both">Both</option>
+                                </select>
+                            </div>
+                        </div>
+                    }
+                </div>
+            }
 
             @if (_isImportingGenerationSettings)
             {
@@ -528,6 +753,16 @@
                 @onclick="CloseGenerationSettingsModal">
             Cancel
         </button>
+        @if (_isGenerationSettingsCopyOpen)
+        {
+            <BusyButton Class="btn btn-outline-primary"
+                        IsBusy="@_isCopyingGenerationSettings"
+                        Disabled="@IsGenerationSettingsBusy"
+                        BusyText="Copying..."
+                        OnClick="CopyGenerationSettingsAsync">
+                Copy
+            </BusyButton>
+        }
         <BusyButton Class="btn btn-primary"
                     IsBusy="@_isSavingGenerationSettings"
                     Disabled="@(!CanSaveGenerationSettings)"
@@ -559,9 +794,13 @@
     private bool _isItemsModalOpen;
     private bool _isHistoryModalOpen;
     private bool _isGenerationSettingsModalOpen;
+    private bool _isProviderEditorOpen;
+    private bool _isModelSwitcherOpen;
     private bool _isSavingGenerationSettings;
     private bool _isExportingGenerationSettings;
     private bool _isImportingGenerationSettings;
+    private bool _isCopyingGenerationSettings;
+    private bool _isGenerationSettingsCopyOpen;
     private int _generationSettingsImportInputKey;
     private string? _generationSettingsImportFileName;
     private StoryGenerationStage _activeGenerationSettingsStage = StoryGenerationStage.Planning;
@@ -572,12 +811,14 @@
     private bool _startCharacterModalInCreateMode;
     private string? _errorMessage;
     private string? _generationSettingsErrorMessage;
+    private Guid? _generationSettingsModelId;
     private HashSet<Guid> _togglingCharacterIds = [];
     private HashSet<Guid> _togglingItemIds = [];
     private HashSet<string> _switchingSpeakerKeys = [];
     private HashSet<string> _switchingAgentNames = [];
     private HashSet<string> _managingEndpointAgentNames = [];
     private HashSet<string> _managingEndpointActionKeys = [];
+    private Dictionary<Guid, StoryGenerationSettingsCopySlot> _generationSettingsCopyTargets = [];
     private CancellationTokenSource? _managedEndpointPollingCancellationTokenSource;
     private Task? _managedEndpointPollingTask;
 
@@ -607,12 +848,18 @@
             _threadId = await ResolveCurrentThreadIdAsync();
             if (_threadId.HasValue)
             {
-                var storyTask = ChatStoryService.GetSidebarAsync(_threadId.Value, CancellationToken.None);
-                var generationSettingsTask = StoryGenerationSettingsService.GetSettingsAsync(CancellationToken.None);
-                await Task.WhenAll(storyTask, generationSettingsTask);
+                _story = await ChatStoryService.GetSidebarAsync(_threadId.Value, CancellationToken.None);
+                if (_story?.SelectedModelId.HasValue == true)
+                {
+                    _generationSettingsModelId = _story.SelectedModelId;
+                    ApplyGenerationSettings(await StoryGenerationSettingsService.GetSettingsAsync(_story.SelectedModelId.Value, CancellationToken.None));
+                }
+                else
+                {
+                    _generationSettingsModelId = null;
+                    _generationSettings = null;
+                }
 
-                _story = storyTask.Result;
-                ApplyGenerationSettings(generationSettingsTask.Result);
                 EnsureManagedEndpointPolling();
             }
             else
@@ -633,7 +880,8 @@
     private bool IsGenerationSettingsBusy =>
         _isSavingGenerationSettings
         || _isExportingGenerationSettings
-        || _isImportingGenerationSettings;
+        || _isImportingGenerationSettings
+        || _isCopyingGenerationSettings;
 
     private bool CanSaveGenerationSettings =>
         !IsGenerationSettingsBusy
@@ -685,14 +933,33 @@
 
     private void OpenHistoryModal() => _isHistoryModalOpen = true;
 
-    private void OpenGenerationSettingsModal()
-    {
-        if (_generationSettings is null)
-            return;
+    private void OpenProviderEditor() => _isProviderEditorOpen = true;
 
-        ApplyGenerationSettingsDraft(_generationSettings);
+    private Task CloseProviderEditor()
+    {
+        _isProviderEditorOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private void ToggleModelSwitcher() => _isModelSwitcherOpen = !_isModelSwitcherOpen;
+
+    private Task OpenGenerationSettingsModal()
+    {
+        if (_story?.SelectedModelId is not Guid modelId)
+            return Task.CompletedTask;
+
+        return OpenGenerationSettingsModal(modelId);
+    }
+
+    private async Task OpenGenerationSettingsModal(Guid modelId)
+    {
+        _generationSettingsModelId = modelId;
+        ApplyGenerationSettings(await StoryGenerationSettingsService.GetSettingsAsync(modelId, CancellationToken.None));
+        ApplyGenerationSettingsDraft(_generationSettings!);
         _generationSettingsErrorMessage = null;
         _generationSettingsImportFileName = null;
+        _isGenerationSettingsCopyOpen = false;
+        ResetGenerationSettingsCopyTargets();
         _isGenerationSettingsModalOpen = true;
     }
 
@@ -731,6 +998,7 @@
         _isGenerationSettingsModalOpen = false;
         _generationSettingsErrorMessage = null;
         _generationSettingsImportFileName = null;
+        _isGenerationSettingsCopyOpen = false;
         _generationSettingsImportInputKey++;
         if (_generationSettings is not null)
             ApplyGenerationSettingsDraft(_generationSettings);
@@ -757,8 +1025,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Running endpoint action {Action} failed for agent {AgentName}.", action, endpoint.AgentName);
-            _errorMessage = $"{DescribeManagedEndpointAction(action)} the Hugging Face endpoint for '{endpoint.AgentName}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Endpoint Update Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"{DescribeManagedEndpointAction(action)} the Hugging Face endpoint for '{endpoint.AgentName}' failed.", exception);
         }
         finally
         {
@@ -811,12 +1078,36 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Selecting AI provider {AgentName} failed for chat {ChatId}.", agentName, _threadId.Value);
-            _errorMessage = $"Selecting the AI provider '{agentName}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "AI Provider Failed");
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Selecting the AI provider '{agentName}' failed.", exception);
         }
         finally
         {
             _switchingAgentNames.Remove(agentName);
+            StateHasChanged();
+        }
+    }
+
+    private async Task SelectAgentAsync(Guid modelId, string modelName)
+    {
+        if (!_threadId.HasValue || !_switchingAgentNames.Add(modelName))
+            return;
+
+        _errorMessage = null;
+
+        try
+        {
+            await ThreadAgentService.SetSelectedAgentAsync(_threadId.Value, modelId, CancellationToken.None);
+            _isModelSwitcherOpen = false;
+            await LoadAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Selecting AI model {ModelId} failed for chat {ChatId}.", modelId, _threadId.Value);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Selecting the AI model '{modelName}' failed.", exception);
+        }
+        finally
+        {
+            _switchingAgentNames.Remove(modelName);
             StateHasChanged();
         }
     }
@@ -833,7 +1124,10 @@
         try
         {
             var update = BuildDraftGenerationSettingsUpdate();
-            var savedSettings = await StoryGenerationSettingsService.UpdateSettingsAsync(update, CancellationToken.None);
+            if (!_generationSettingsModelId.HasValue)
+                throw new InvalidOperationException("Saving model settings failed because no model is selected.");
+
+            var savedSettings = await StoryGenerationSettingsService.UpdateSettingsAsync(_generationSettingsModelId.Value, update, CancellationToken.None);
             ApplyGenerationSettings(savedSettings);
             _isGenerationSettingsModalOpen = false;
             _generationSettingsErrorMessage = null;
@@ -844,7 +1138,6 @@
         {
             Logger.LogError(exception, "Saving story model settings failed.");
             _generationSettingsErrorMessage = DescribeGenerationSettingsFailure(exception, "Saving story model settings failed.");
-            UserFeedbackService.ShowBackgroundError(_generationSettingsErrorMessage, "Model Settings Failed");
         }
         finally
         {
@@ -869,6 +1162,49 @@
         _planningGenerationSettingsDraft = _writingGenerationSettingsDraft.Clone();
     }
 
+    private void ToggleGenerationSettingsCopy()
+    {
+        _isGenerationSettingsCopyOpen = !_isGenerationSettingsCopyOpen;
+        if (_isGenerationSettingsCopyOpen)
+            ResetGenerationSettingsCopyTargets();
+    }
+
+    private void ResetGenerationSettingsCopyTargets()
+    {
+        _generationSettingsCopyTargets = _story?.AvailableAgents
+            .Where(x => x.ModelId != _generationSettingsModelId)
+            .ToDictionary(x => x.ModelId, _ => StoryGenerationSettingsCopySlot.Both)
+            ?? [];
+    }
+
+    private async Task CopyGenerationSettingsAsync()
+    {
+        if (!_generationSettingsCopyTargets.Any())
+            return;
+
+        _isCopyingGenerationSettings = true;
+        _generationSettingsErrorMessage = null;
+
+        try
+        {
+            var settings = BuildDraftStageSettingsView(_activeGenerationSettingsStage);
+            var targets = _generationSettingsCopyTargets
+                .Select(x => new CopyStoryGenerationSettingsTarget(x.Key, x.Value))
+                .ToList();
+            await StoryGenerationSettingsService.CopySettingsAsync(_activeGenerationSettingsStage, settings, targets, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Copying {Stage} model settings failed.", _activeGenerationSettingsStage);
+            _generationSettingsErrorMessage = DescribeGenerationSettingsFailure(exception, $"Copying {DescribeGenerationStage(_activeGenerationSettingsStage)} model settings failed.");
+        }
+        finally
+        {
+            _isCopyingGenerationSettings = false;
+            StateHasChanged();
+        }
+    }
+
     private async Task ExportGenerationSettingsAsync()
     {
         if (_generationSettings is null || IsGenerationSettingsBusy)
@@ -891,7 +1227,6 @@
             _generationSettingsErrorMessage = DescribeGenerationSettingsFailure(
                 exception,
                 $"Exporting {DescribeGenerationStage(stage)} model settings failed.");
-            UserFeedbackService.ShowBackgroundError(_generationSettingsErrorMessage, "Model Settings Export Failed");
         }
         finally
         {
@@ -924,7 +1259,6 @@
             _generationSettingsErrorMessage = DescribeGenerationSettingsFailure(
                 exception,
                 $"Importing {DescribeGenerationStage(_activeGenerationSettingsStage)} model settings from \"{file.Name}\" failed.");
-            UserFeedbackService.ShowBackgroundError(_generationSettingsErrorMessage, "Model Settings Import Failed");
         }
         finally
         {
@@ -1030,11 +1364,15 @@
             ? null
             : _story.ManagedAgentEndpoints.FirstOrDefault(x => string.Equals(x.AgentName, _story.SelectedAgentName, StringComparison.Ordinal));
 
+    private string SelectedProviderSummary =>
+        _story?.AvailableAgents.FirstOrDefault(x => x.ModelId == _story.SelectedModelId)?.ProviderName
+        ?? "Provider unavailable";
+
     private bool ShouldShowManagedEndpointError =>
         _story is not null
         && !string.IsNullOrWhiteSpace(_story.ManagedAgentEndpointsErrorMessage)
         && _story.AvailableAgents.Any(x =>
-            x.ProviderKind == AgentProviderKind.HuggingFaceInferenceEndpoint
+            x.ProviderKind == AiProviderKind.HuggingFaceInferenceEndpoint
             && string.Equals(x.Name, _story.SelectedAgentName, StringComparison.Ordinal));
 
     private bool IsManagingEndpoint(string agentName) => _managingEndpointAgentNames.Contains(agentName);
@@ -1310,7 +1648,7 @@
         stage == StoryGenerationStage.Planning ? "Planning" : "Writing";
 
     private static string DescribeGenerationSettingsFailure(Exception exception, string fallbackMessage) =>
-        string.IsNullOrWhiteSpace(exception.Message) ? fallbackMessage : exception.Message;
+        UserFacingErrorMessageBuilder.Build(fallbackMessage, exception);
 
     private static string FormatTemperature(double temperature) =>
         temperature.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);

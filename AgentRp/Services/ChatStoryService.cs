@@ -22,6 +22,25 @@ public sealed class ChatStoryService(
         var story = await GetOrCreateStoryAsync(dbContext, threadId, cancellationToken);
         if (story is null)
             return null;
+        var providerWidgets = await dbContext.AiProviders
+            .AsNoTracking()
+            .Include(x => x.Models)
+            .Include(x => x.Metrics)
+            .OrderBy(x => x.SortOrder)
+            .ThenBy(x => x.Name)
+            .Select(x => new AiProviderSidebarWidgetView(
+                x.Id,
+                x.Name,
+                x.ProviderKind,
+                x.Models.Count,
+                x.Models.Count(model => model.IsEnabled),
+                x.LastMetricsRefreshUtc,
+                x.LastMetricsError,
+                x.Metrics
+                    .OrderBy(metric => metric.Label)
+                    .Select(metric => new AiProviderMetricView(metric.MetricKind, metric.Label, metric.Value, metric.Detail, metric.RefreshedUtc))
+                    .ToList()))
+            .ToListAsync(cancellationToken);
 
         IReadOnlyList<AgentEndpointStatusView> managedAgentEndpoints = [];
         string? managedAgentEndpointsErrorMessage = null;
@@ -32,14 +51,16 @@ public sealed class ChatStoryService(
         catch (Exception exception)
         {
             logger.LogError(exception, "Loading Hugging Face endpoint status failed for chat {ThreadId}.", threadId);
-            managedAgentEndpointsErrorMessage = "Hugging Face endpoint status is temporarily unavailable.";
+            managedAgentEndpointsErrorMessage = UserFacingErrorMessageBuilder.Build("Loading Hugging Face endpoint status failed.", exception);
         }
 
         return MapSidebarView(
             story,
             thread.SelectedSpeakerCharacterId,
-            agentCatalog.NormalizeSelectedAgentName(thread.SelectedAgentName),
+            agentCatalog.GetEnabledAgents().FirstOrDefault(x => x.ModelId == agentCatalog.NormalizeSelectedModelId(thread.SelectedAiModelId))?.Name,
+            agentCatalog.NormalizeSelectedModelId(thread.SelectedAiModelId),
             agentCatalog.GetEnabledAgents(),
+            providerWidgets,
             managedAgentEndpoints,
             managedAgentEndpointsErrorMessage);
     }
@@ -491,7 +512,9 @@ public sealed class ChatStoryService(
         ChatStory story,
         Guid? selectedSpeakerCharacterId,
         string? selectedAgentName,
+        Guid? selectedModelId,
         IReadOnlyList<AgentProviderOptionView> availableAgents,
+        IReadOnlyList<AiProviderSidebarWidgetView> providerWidgets,
         IReadOnlyList<AgentEndpointStatusView> managedAgentEndpoints,
         string? managedAgentEndpointsErrorMessage)
     {
@@ -535,8 +558,10 @@ public sealed class ChatStoryService(
             story.History.Facts.Count,
             story.History.TimelineEntries.Count,
             selectedAgentName,
+            selectedModelId,
             availableAgents,
             availableAgents.Count > 0,
+            providerWidgets,
             managedAgentEndpoints,
             managedAgentEndpointsErrorMessage);
     }

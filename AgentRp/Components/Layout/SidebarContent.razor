@@ -1,7 +1,6 @@
 @implements IDisposable
 @inject IChatWorkspaceService ChatWorkspaceService
 @inject IChatTransferService ChatTransferService
-@inject IUserFeedbackService UserFeedbackService
 @inject NavigationManager NavigationManager
 @inject ILogger<SidebarContent> Logger
 
@@ -200,7 +199,6 @@
         {
             Logger.LogError(exception, "Reading chat import file {FileName} failed.", file.Name);
             _importErrorMessage = $"Reading chat export file \"{file.Name}\" failed.";
-            UserFeedbackService.ShowBackgroundError(_importErrorMessage, "Import Failed");
         }
         finally
         {
@@ -240,7 +238,6 @@
         {
             Logger.LogError(exception, "Importing chat from {FileName} failed.", _importFileName);
             _importErrorMessage = $"Importing chat from \"{_importFileName ?? "the selected file"}\" failed.";
-            UserFeedbackService.ShowBackgroundError(_importErrorMessage, "Import Failed");
         }
         finally
         {

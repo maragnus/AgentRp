@@ -1,6 +1,5 @@
 @inject IChatStoryService ChatStoryService
 @inject IStoryFieldGuidanceService StoryFieldGuidanceService
-@inject IUserFeedbackService UserFeedbackService
 @inject ILogger<StoryHistoryModal> Logger
 
 <AppModal IsOpen="IsOpen" Title="Story Context" OnClose="CloseAsync" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down">
@@ -825,7 +824,6 @@
         {
             Logger.LogError(exception, "Saving story context failed for chat {ChatId}.", ThreadId);
             _errorMessage = "Saving story context failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Story Context");
         }
         finally
         {
@@ -858,7 +856,6 @@
         {
             Logger.LogError(exception, "Saving history fact {FactTitle} failed for chat {ChatId}.", _factTitle, ThreadId);
             _errorMessage = $"Saving history fact '{BuildFactDisplayName()}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Story Context");
         }
         finally
         {
@@ -884,7 +881,6 @@
         {
             Logger.LogError(exception, "Deleting history fact {FactId} failed for chat {ChatId}.", _selectedFactId.Value, ThreadId);
             _errorMessage = $"Deleting history fact '{displayName}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Story Context");
         }
         finally
         {
@@ -919,7 +915,6 @@
         {
             Logger.LogError(exception, "Saving timeline entry {TimelineTitle} failed for chat {ChatId}.", _timelineTitle, ThreadId);
             _errorMessage = $"Saving timeline entry '{BuildTimelineDisplayName()}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Story Context");
         }
         finally
         {
@@ -945,7 +940,6 @@
         {
             Logger.LogError(exception, "Deleting timeline entry {TimelineEntryId} failed for chat {ChatId}.", _selectedTimelineEntryId.Value, ThreadId);
             _errorMessage = $"Deleting timeline entry '{displayName}' failed.";
-            UserFeedbackService.ShowBackgroundError(_errorMessage, "Story Context");
         }
         finally
         {

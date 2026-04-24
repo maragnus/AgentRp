@@ -15,15 +15,15 @@ builder.Services.AddDbContextFactory<AgentRp.Data.AppContext>((serviceProvider, 
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
-builder.Services.Configure<AgentOptions>(builder.Configuration);
 builder.Services.AddSingleton<IActivityNotifier, ActivityNotifier>();
 builder.Services.AddSingleton<IUserFeedbackService, UserFeedbackService>();
 builder.Services.AddSingleton<IMarkdownRenderer, MarkdownRenderer>();
 builder.Services.AddSingleton<IModelOperationRegistry, ModelOperationRegistry>();
 builder.Services.AddSingleton<IAgentTurnComposer, AgentTurnComposer>();
-builder.Services.AddSingleton<IAgentCatalog, AgentCatalog>();
+builder.Services.AddScoped<IAgentCatalog, AgentCatalog>();
 builder.Services.AddHttpClient();
-builder.Services.AddSingleton<IAgentEndpointManagementService, AgentEndpointManagementService>();
+builder.Services.AddScoped<IAgentEndpointManagementService, AgentEndpointManagementService>();
+builder.Services.AddScoped<IAiProviderCatalogService, AiProviderCatalogService>();
 builder.Services.AddScoped<IThreadAgentService, ThreadAgentService>();
 builder.Services.AddScoped<IChatWorkspaceService, ChatWorkspaceService>();
 builder.Services.AddScoped<IChatTransferService, ChatTransferService>();

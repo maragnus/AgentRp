@@ -1,7 +1,6 @@
 @implements IDisposable
 @inject IStoryChatAppearanceReplayService AppearanceReplayService
 @inject IModelOperationRegistry ModelOperationRegistry
-@inject IUserFeedbackService UserFeedbackService
 @inject ILogger<StoryChatAppearanceReplayModal> Logger
 
 <AppModal IsOpen="IsOpen"
@@ -392,8 +391,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Generating appearance replay step {MessageId} failed for chat {ThreadId}.", SelectedItem.MessageId, Replay.ThreadId);
-            _localErrorMessage = "Generating the replayed appearance failed.";
-            UserFeedbackService.ShowBackgroundError(_localErrorMessage, "Appearance Generation Failed");
+            _localErrorMessage = UserFacingErrorMessageBuilder.Build("Generating the replayed appearance failed.", exception);
         }
         finally
         {

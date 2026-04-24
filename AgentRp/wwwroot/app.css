@@ -144,6 +144,7 @@ a, .btn-link {
 
 .app-message-footer {
     opacity: 0;
+    pointer-events: none;
     transform: translateY(0.25rem);
     transition: opacity 0.2s ease, transform 0.2s ease;
 }
@@ -153,6 +154,7 @@ a, .btn-link {
 .app-message-card.is-selected .app-message-footer,
 .app-message-card.is-editing .app-message-footer {
     opacity: 1;
+    pointer-events: auto;
     transform: translateY(0);
 }
 
@@ -241,12 +243,21 @@ a, .btn-link {
 
     .app-message-footer {
         opacity: 0;
+        pointer-events: none;
         transform: translateY(0.25rem);
     }
 
     .app-message-card:hover .app-message-footer {
         opacity: 0;
+        pointer-events: none;
         transform: translateY(0.25rem);
+    }
+
+    .app-message-card.is-selected .app-message-footer,
+    .app-message-card.is-editing .app-message-footer {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateY(0);
     }
 }
 

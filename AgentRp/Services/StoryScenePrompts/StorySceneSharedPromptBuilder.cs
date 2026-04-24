@@ -209,6 +209,7 @@ internal static class StorySceneSharedPromptBuilder
         StoryTurnShape.Brief => "brief",
         StoryTurnShape.Monologue => "monologue",
         StoryTurnShape.Silent => "silent",
+        StoryTurnShape.SilentMonologue => "silent monologue",
         _ => turnShape.ToString().ToLowerInvariant()
     };
 
