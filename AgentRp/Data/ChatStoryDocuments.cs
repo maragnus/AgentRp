@@ -177,7 +177,9 @@ public sealed record StoryCharacterDocument(
     StoryCharacterModelSheetDocument? ModelSheet,
     int UserSheetRevision,
     int? ModelSheetReviewedAgainstRevision,
-    bool IsArchived)
+    bool IsArchived,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    Guid? PrimaryImageId = null)
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Summary { get; init; }
@@ -203,7 +205,9 @@ public sealed record StoryLocationDocument(
     string Name,
     string Summary,
     string Details,
-    bool IsArchived);
+    bool IsArchived,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    Guid? PrimaryImageId = null);
 
 public sealed record StoryItemDocument(
     Guid Id,
@@ -212,7 +216,9 @@ public sealed record StoryItemDocument(
     string Details,
     Guid? OwnerCharacterId,
     Guid? LocationId,
-    bool IsArchived);
+    bool IsArchived,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    Guid? PrimaryImageId = null);
 
 public sealed record StoryHistoryFactDocument(
     Guid Id,
@@ -338,7 +344,8 @@ public static class StoryDocumentNormalizer
         Normalize(document?.ModelSheet),
         NormalizeUserSheetRevision(document),
         NormalizeModelSheetReviewedAgainstRevision(document),
-        document?.IsArchived ?? false);
+        document?.IsArchived ?? false,
+        document?.PrimaryImageId);
 
     private static StoryCharacterUserSheetDocument Normalize(
         StoryCharacterUserSheetDocument? document,
@@ -393,7 +400,8 @@ public static class StoryDocumentNormalizer
         NormalizeText(document?.Name),
         NormalizeText(document?.Summary),
         NormalizeText(document?.Details),
-        document?.IsArchived ?? false);
+        document?.IsArchived ?? false,
+        document?.PrimaryImageId);
 
     private static StoryItemDocument Normalize(StoryItemDocument? document) => new(
         document?.Id ?? Guid.Empty,
@@ -402,7 +410,8 @@ public static class StoryDocumentNormalizer
         NormalizeText(document?.Details),
         document?.OwnerCharacterId,
         document?.LocationId,
-        document?.IsArchived ?? false);
+        document?.IsArchived ?? false,
+        document?.PrimaryImageId);
 
     private static StoryHistoryFactDocument Normalize(StoryHistoryFactDocument? document) => new(
         document?.Id ?? Guid.Empty,

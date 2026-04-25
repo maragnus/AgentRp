@@ -1,0 +1,191 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JSRuntime
+@inject IStoryImageService StoryImageService
+@inject ILogger<StoryImageCropModal> Logger
+
+<AppModal IsOpen="IsOpen"
+          Title="@Title"
+          DialogClass="modal-lg modal-dialog-centered modal-fullscreen-sm-down"
+          OnClose="CloseAsync"
+          CloseDisabled="@_isSaving">
+    <ChildContent>
+        @if (Image is not null)
+        {
+            <div class="d-flex flex-column gap-3">
+                <InlineAlert Message="@_errorMessage" />
+                <div class="app-image-crop-workspace"
+                     @ref="_workspaceElement"
+                     tabindex="0"
+                     aria-label="@($"Crop {Image.Title}")">
+                    <img src="@Image.ImageUrl" class="app-image-crop-image" alt="@Image.Title" @onload="InitializeCropAsync" />
+                    <div class="app-image-crop-snap-guide app-image-crop-snap-guide-x"></div>
+                    <div class="app-image-crop-snap-guide app-image-crop-snap-guide-y"></div>
+                    <div class="app-image-crop-circle" @ref="_circleElement">
+                        <span class="app-image-crop-handle app-image-crop-handle-nw" data-crop-handle="nw" aria-hidden="true"></span>
+                        <span class="app-image-crop-handle app-image-crop-handle-ne" data-crop-handle="ne" aria-hidden="true"></span>
+                        <span class="app-image-crop-handle app-image-crop-handle-se" data-crop-handle="se" aria-hidden="true"></span>
+                        <span class="app-image-crop-handle app-image-crop-handle-sw" data-crop-handle="sw" aria-hidden="true"></span>
+                    </div>
+                </div>
+                <div class="small text-body-secondary">Drag the circle to choose the avatar focus. Resize from a corner to zoom.</div>
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <button type="button" class="btn btn-outline-secondary" disabled="@_isSaving" @onclick="CloseAsync">Cancel</button>
+        <button type="button" class="btn btn-outline-secondary" disabled="@_isSaving" @onclick="ClearCropAsync">
+            <i class="fa-regular fa-rotate-left me-2" aria-hidden="true"></i>
+            Clear Crop
+        </button>
+        <BusyButton Class="btn btn-primary"
+                    IsBusy="_isSaving"
+                    Disabled="@(Image is null)"
+                    BusyText="Saving..."
+                    OnClick="SaveAsync">
+            <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+            Save Crop
+        </BusyButton>
+    </FooterContent>
+</AppModal>
+
+@code {
+    [Parameter]
+    public Guid ThreadId { get; set; }
+
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public StoryImageReferenceView? Image { get; set; }
+
+    [Parameter]
+    public EventCallback<StoryImageReferenceView> OnSaved { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    private ElementReference _workspaceElement;
+    private ElementReference _circleElement;
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<StoryImageCropModal>? _dotNetReference;
+    private Guid? _initializedImageId;
+    private int _focusXPercent = StoryImageAvatarCropView.Default.FocusXPercent;
+    private int _focusYPercent = StoryImageAvatarCropView.Default.FocusYPercent;
+    private int _zoomPercent = StoryImageAvatarCropView.Default.ZoomPercent;
+    private bool _isSaving;
+    private string? _errorMessage;
+
+    private string Title => Image is null ? "Crop Image" : $"Crop {Image.Title}";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!IsOpen || Image is null)
+        {
+            _initializedImageId = null;
+            return;
+        }
+
+        if (_initializedImageId == Image.ImageId)
+            return;
+
+        _initializedImageId = Image.ImageId;
+        SetDraftCrop(Image.AvatarCrop);
+        _errorMessage = null;
+        await DisposeCropAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (IsOpen && Image is not null)
+            await InitializeCropAsync();
+    }
+
+    private async Task InitializeCropAsync()
+    {
+        if (!IsOpen || Image is null)
+            return;
+
+        _module ??= await JSRuntime.InvokeAsync<IJSObjectReference>("import", "./Components/Shared/StoryImageCropModal.razor.js");
+        _dotNetReference ??= DotNetObjectReference.Create(this);
+        await _module.InvokeVoidAsync(
+            "initialize",
+            _workspaceElement,
+            _circleElement,
+            _dotNetReference,
+            _focusXPercent,
+            _focusYPercent,
+            _zoomPercent);
+    }
+
+    private async Task ClearCropAsync()
+    {
+        SetDraftCrop(StoryImageAvatarCropView.Default);
+        await ApplyDraftToJsAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (Image is null)
+            return;
+
+        _isSaving = true;
+        _errorMessage = null;
+        try
+        {
+            var saved = await StoryImageService.UpdateCropAsync(
+                new UpdateStoryImageCrop(ThreadId, Image.ImageId, _focusXPercent, _focusYPercent, _zoomPercent),
+                CancellationToken.None);
+
+            if (OnSaved.HasDelegate)
+                await OnSaved.InvokeAsync(saved);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving image crop failed for image {ImageId}.", Image.ImageId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Saving the crop for '{Image.Title}' failed.", exception);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private Task CloseAsync() => _isSaving ? Task.CompletedTask : OnClose.InvokeAsync();
+
+    [JSInvokable]
+    public void UpdateDraftCrop(int focusXPercent, int focusYPercent, int zoomPercent)
+    {
+        _focusXPercent = Math.Clamp(focusXPercent, 0, 100);
+        _focusYPercent = Math.Clamp(focusYPercent, 0, 100);
+        _zoomPercent = Math.Clamp(zoomPercent, 100, 300);
+    }
+
+    private void SetDraftCrop(StoryImageAvatarCropView crop)
+    {
+        _focusXPercent = crop.FocusXPercent;
+        _focusYPercent = crop.FocusYPercent;
+        _zoomPercent = crop.ZoomPercent;
+    }
+
+    private async Task ApplyDraftToJsAsync()
+    {
+        if (_module is null)
+            return;
+
+        await _module.InvokeVoidAsync("setCrop", _workspaceElement, _focusXPercent, _focusYPercent, _zoomPercent);
+    }
+
+    private async Task DisposeCropAsync()
+    {
+        if (_module is not null)
+            await _module.InvokeVoidAsync("dispose", _workspaceElement);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await DisposeCropAsync();
+        _dotNetReference?.Dispose();
+        if (_module is not null)
+            await _module.DisposeAsync();
+    }
+}

@@ -6,7 +6,7 @@
     <div class="toast-container position-fixed top-0 end-0 p-3 app-toast-stack">
         @foreach (var toast in UserFeedbackService.Messages)
         {
-            <div class="toast show border-0 shadow-sm mb-2" role="status" aria-live="polite">
+            <div @key="toast.Id" class="toast show border-0 shadow-sm mb-2" role="status" aria-live="polite">
                 <div class="toast-header @GetHeaderClass(toast.Intent)">
                     <strong class="me-auto">@toast.Title</strong>
                     <small>@toast.CreatedUtc.ToShorthandDateWithRelativeDays()</small>

@@ -15,12 +15,14 @@ namespace AgentRp.Services;
 
 public sealed record AgentProviderOptionView(
     Guid ModelId,
+    Guid ProviderId,
     string Name,
     string ProviderName,
     AiProviderKind ProviderKind);
 
 public sealed record ConfiguredAgent(
     Guid ModelId,
+    Guid ProviderId,
     string Name,
     string ProviderName,
     string EndPoint,
@@ -41,6 +43,8 @@ public interface IAgentCatalog
     bool HasEnabledAgents { get; }
 
     IReadOnlyList<AgentProviderOptionView> GetEnabledAgents();
+
+    IReadOnlyList<AgentProviderOptionView> GetEnabledImageModels();
 
     IReadOnlyList<ConfiguredAgent> GetConfiguredAgents();
 
@@ -72,25 +76,33 @@ public sealed class AgentCatalog(
     IDbContextFactory<DbAppContext> dbContextFactory,
     IServiceProvider serviceProvider) : IAgentCatalog
 {
-    public bool HasEnabledAgents => GetEnabledModelRows().Count > 0;
+    public bool HasEnabledAgents => GetEnabledModelRows().Any(x => x.IsTextModelEnabled);
 
     public IReadOnlyList<AgentProviderOptionView> GetEnabledAgents() =>
         GetEnabledModelRows()
-            .Select(x => new AgentProviderOptionView(x.ModelId, x.Name, x.ProviderName, x.ProviderKind))
+            .Where(x => x.IsTextModelEnabled)
+            .Select(x => new AgentProviderOptionView(x.ModelId, x.ProviderId, x.Name, x.ProviderName, x.ProviderKind))
+            .ToList();
+
+    public IReadOnlyList<AgentProviderOptionView> GetEnabledImageModels() =>
+        GetEnabledModelRows()
+            .Where(x => x.IsImageModelEnabled)
+            .Select(x => new AgentProviderOptionView(x.ModelId, x.ProviderId, x.Name, x.ProviderName, x.ProviderKind))
             .ToList();
 
     public IReadOnlyList<ConfiguredAgent> GetConfiguredAgents() =>
         GetEnabledModelRows()
+            .Where(x => x.IsTextModelEnabled)
             .Select(BuildConfiguredAgent)
             .ToList();
 
-    public Guid? GetDefaultModelId() => GetEnabledModelRows().FirstOrDefault()?.ModelId;
+    public Guid? GetDefaultModelId() => GetEnabledModelRows().FirstOrDefault(x => x.IsTextModelEnabled)?.ModelId;
 
-    public string? GetDefaultAgentName() => GetEnabledModelRows().FirstOrDefault()?.Name;
+    public string? GetDefaultAgentName() => GetEnabledModelRows().FirstOrDefault(x => x.IsTextModelEnabled)?.Name;
 
     public Guid? NormalizeSelectedModelId(Guid? selectedModelId)
     {
-        var models = GetEnabledModelRows();
+        var models = GetEnabledModelRows().Where(x => x.IsTextModelEnabled).ToList();
         if (models.Count == 0)
             return null;
 
@@ -102,7 +114,7 @@ public sealed class AgentCatalog(
 
     public string? NormalizeSelectedAgentName(string? selectedAgentName)
     {
-        var models = GetEnabledModelRows();
+        var models = GetEnabledModelRows().Where(x => x.IsTextModelEnabled).ToList();
         if (models.Count == 0)
             return null;
 
@@ -147,6 +159,7 @@ public sealed class AgentCatalog(
             .Where(x => x.IsEnabled && x.Provider.IsEnabled)
             .Select(x => new EnabledModelRow(
                 x.Id,
+                x.ProviderId,
                 x.DisplayName,
                 x.Provider.Name,
                 x.Provider.ProviderKind,
@@ -155,7 +168,9 @@ public sealed class AgentCatalog(
                 x.Endpoint ?? x.Provider.BaseEndpoint,
                 x.Provider.ApiKey,
                 x.ProviderModelId,
-                x.UseJsonSchemaResponseFormat))
+                x.UseJsonSchemaResponseFormat,
+                x.IsTextModelEnabled,
+                x.IsImageModelEnabled))
             .ToList();
 
         return rows
@@ -170,6 +185,7 @@ public sealed class AgentCatalog(
         ValidateEnabledModel(model);
         return new ConfiguredAgent(
             model.ModelId,
+            model.ProviderId,
             model.Name,
             model.ProviderName,
             model.Endpoint,
@@ -254,6 +270,7 @@ public sealed class AgentCatalog(
 
     private sealed record EnabledModelRow(
         Guid ModelId,
+        Guid ProviderId,
         string Name,
         string ProviderName,
         AiProviderKind ProviderKind,
@@ -262,7 +279,9 @@ public sealed class AgentCatalog(
         string Endpoint,
         string ApiKey,
         string ProviderModelId,
-        bool UseJsonSchemaResponseFormat);
+        bool UseJsonSchemaResponseFormat,
+        bool IsTextModelEnabled,
+        bool IsImageModelEnabled);
 
     private sealed class EnabledModelRowComparer : IComparer<EnabledModelRow>
     {

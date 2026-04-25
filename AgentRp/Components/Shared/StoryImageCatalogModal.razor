@@ -1,0 +1,327 @@
+@inject IStoryImageService StoryImageService
+@inject ILogger<StoryImageCatalogModal> Logger
+
+<AppModal IsOpen="IsOpen"
+          Title="@Title"
+          DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down"
+          OnClose="CloseAsync">
+    <ChildContent>
+        <div class="d-flex flex-column gap-3">
+            <InlineAlert Message="@_errorMessage" />
+
+            <div>
+                <label class="form-label" for="@_searchInputId">Search</label>
+                <input id="@_searchInputId"
+                       class="form-control"
+                       value="@_searchText"
+                       disabled="@IsBusy"
+                       @oninput="HandleSearchChangedAsync" />
+            </div>
+
+            @if (_isLoading)
+            {
+                <div class="d-flex align-items-center gap-2 text-body-secondary">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <span>Loading images...</span>
+                </div>
+            }
+            else
+            {
+                <div class="row row-cols-2 row-cols-md-4 row-cols-xl-5 g-2">
+                    @if (!GalleryMode)
+                    {
+                        <div class="col">
+                            <label class="card app-image-catalog-tile app-image-catalog-action mb-0 @(IsBusy ? "disabled" : string.Empty)"
+                                   for="@_fileInputId"
+                                   aria-disabled="@IsBusy">
+                                <span class="d-flex h-100 flex-column align-items-center justify-content-center gap-2 text-body-secondary">
+                                    <i class="fa-regular fa-arrow-up-from-bracket fs-4" aria-hidden="true"></i>
+                                    <span class="small fw-semibold">Upload</span>
+                                </span>
+                            </label>
+                            <InputFile @key="_fileInputKey"
+                                       id="@_fileInputId"
+                                       class="d-none"
+                                       accept="image/png,image/jpeg,image/webp"
+                                       disabled="@IsBusy"
+                                       OnChange="UploadAsync" />
+                        </div>
+                    }
+
+                    <div class="col">
+                        <button type="button"
+                                class="card app-image-catalog-tile app-image-catalog-action w-100"
+                                disabled="@IsBusy"
+                                @onclick="OpenGeneration">
+                            <span class="d-flex h-100 flex-column align-items-center justify-content-center gap-2 text-body-secondary">
+                                <i class="fa-regular fa-image fs-4" aria-hidden="true"></i>
+                                <span class="small fw-semibold">Generate</span>
+                            </span>
+                        </button>
+                    </div>
+
+                    @foreach (var image in _catalog?.Images ?? [])
+                    {
+                        <div @key="image.ImageId" class="col">
+                            <button type="button"
+                                    class="card app-image-catalog-tile w-100 text-start"
+                                    title="@image.Title"
+                                    disabled="@IsBusy"
+                                    @onclick="() => HandleImageClickedAsync(image)">
+                                <img src="@image.ImageUrl" class="card-img-top app-story-image-thumb" alt="@image.Title" />
+                                <span class="card-body p-2">
+                                    <span class="small fw-semibold text-truncate d-block">@image.Title</span>
+                                    <span class="small text-body-secondary">@image.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
+                                </span>
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </ChildContent>
+    <FooterContent>
+        <button type="button" class="btn btn-outline-secondary" disabled="@IsBusy" @onclick="CloseAsync">Close</button>
+    </FooterContent>
+</AppModal>
+
+<StoryImageGenerationModal ThreadId="ThreadId"
+                           IsOpen="_isGenerationOpen"
+                           InitialEntityKind="EntityKind"
+                           InitialEntityId="EntityId"
+                           InitialPrompt="@BuildInitialPrompt()"
+                           InitialSize="@BuildInitialSize()"
+                           IncludePrimaryReference="true"
+                           PickerMode="true"
+                           GalleryMode="GalleryMode"
+                           OnImageSaved="HandleGeneratedImageSavedAsync"
+                           OnClose="CloseGenerationAsync" />
+
+<AppModal IsOpen="@(_previewImage is not null)"
+          Title="@(_previewImage?.Title ?? "Image")"
+          DialogClass="modal-lg modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down"
+          OnClose="ClosePreviewAsync">
+    <ChildContent>
+        @if (_previewImage is not null)
+        {
+            <div class="d-flex flex-column gap-3">
+                <img src="@_previewImage.ImageUrl" class="img-fluid rounded" alt="@_previewImage.Title" />
+                <div class="small text-body-secondary">@_previewImage.CreatedUtc.ToShorthandDateWithRelativeDays()</div>
+                @RenderDetailSection("User Prompt", _previewImage.UserPrompt)
+                @RenderDetailSection("Prompt", _previewImage.FinalPrompt)
+                @RenderDetailSection("Rationale", _previewImage.GenerationRationale)
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <button type="button" class="btn btn-outline-secondary" @onclick="ClosePreviewAsync">Close</button>
+    </FooterContent>
+</AppModal>
+
+@code {
+    [Parameter]
+    public Guid ThreadId { get; set; }
+
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public StoryEntityKind EntityKind { get; set; }
+
+    [Parameter]
+    public Guid? EntityId { get; set; }
+
+    [Parameter]
+    public string EntityName { get; set; } = string.Empty;
+
+    [Parameter]
+    public bool GalleryMode { get; set; }
+
+    [Parameter]
+    public EventCallback<StoryImageReferenceView> OnSelected { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    private readonly string _fileInputId = $"story-image-catalog-upload-{Guid.NewGuid():N}";
+    private readonly string _searchInputId = $"story-image-catalog-search-{Guid.NewGuid():N}";
+    private bool _wasOpen;
+    private bool _isLoading;
+    private bool _isUploading;
+    private bool _isSelecting;
+    private bool _isGenerationOpen;
+    private int _fileInputKey;
+    private string _searchText = string.Empty;
+    private string? _errorMessage;
+    private StoryImageCatalogView? _catalog;
+    private StoryImageReferenceView? _previewImage;
+
+    private bool IsBusy => _isLoading || _isUploading || _isSelecting;
+
+    private string Title => GalleryMode ? "Image Gallery" : "Image Catalog";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!IsOpen)
+        {
+            _wasOpen = false;
+            return;
+        }
+
+        if (_wasOpen)
+            return;
+
+        _wasOpen = true;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _isLoading = true;
+        _errorMessage = null;
+        try
+        {
+            _catalog = await StoryImageService.GetCatalogAsync(ThreadId, _searchText, 20, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Loading image catalog failed for chat {ThreadId}.", ThreadId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Loading the image catalog failed.", exception);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task HandleSearchChangedAsync(ChangeEventArgs args)
+    {
+        _searchText = args.Value?.ToString() ?? string.Empty;
+        await LoadAsync();
+    }
+
+    private async Task UploadAsync(InputFileChangeEventArgs args)
+    {
+        if (!EntityId.HasValue || args.File is null)
+            return;
+
+        _isUploading = true;
+        _errorMessage = null;
+        try
+        {
+            var file = args.File;
+            await using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            using var memory = new MemoryStream();
+            await stream.CopyToAsync(memory);
+            var image = await StoryImageService.UploadAsync(
+                new UploadStoryImage(ThreadId, EntityKind, EntityId.Value, file.Name, file.ContentType, memory.ToArray(), false),
+                CancellationToken.None);
+            await NotifySelectedAsync(image);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Uploading catalog image failed for {EntityKind} {EntityId}.", EntityKind, EntityId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Uploading an image for '{BuildEntityDisplayName()}' failed.", exception);
+        }
+        finally
+        {
+            _isUploading = false;
+            _fileInputKey++;
+        }
+    }
+
+    private async Task SelectImageAsync(StoryImageReferenceView image)
+    {
+        if (!EntityId.HasValue)
+            return;
+
+        _isSelecting = true;
+        _errorMessage = null;
+        try
+        {
+            await NotifySelectedAsync(image);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Selecting catalog image {ImageId} failed for {EntityKind} {EntityId}.", image.ImageId, EntityKind, EntityId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Selecting an image for '{BuildEntityDisplayName()}' failed.", exception);
+        }
+        finally
+        {
+            _isSelecting = false;
+        }
+    }
+
+    private Task HandleImageClickedAsync(StoryImageReferenceView image)
+    {
+        if (GalleryMode)
+        {
+            _previewImage = image;
+            return Task.CompletedTask;
+        }
+
+        return SelectImageAsync(image);
+    }
+
+    private void OpenGeneration() => _isGenerationOpen = true;
+
+    private Task CloseGenerationAsync()
+    {
+        _isGenerationOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleGeneratedImageSavedAsync(StoryImageReferenceView image)
+    {
+        _isGenerationOpen = false;
+        if (GalleryMode)
+        {
+            await LoadAsync();
+            _previewImage = image;
+            return;
+        }
+
+        await NotifySelectedAsync(image);
+    }
+
+    private async Task NotifySelectedAsync(StoryImageReferenceView image)
+    {
+        if (OnSelected.HasDelegate)
+            await OnSelected.InvokeAsync(image);
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private Task ClosePreviewAsync()
+    {
+        _previewImage = null;
+        return Task.CompletedTask;
+    }
+
+    private string BuildInitialPrompt() => GalleryMode
+        ? "Create a vivid image for the current roleplaying scene."
+        : StoryImagePromptBuilder.BuildReferencePrompt(EntityKind, EntityName);
+
+    private string BuildInitialSize() => GalleryMode
+        ? "1536x1024"
+        : StoryImagePromptBuilder.BuildReferenceSize(EntityKind);
+
+    private string BuildEntityDisplayName() => string.IsNullOrWhiteSpace(EntityName) ? EntityKind.ToString() : EntityName.Trim();
+
+    private static RenderFragment RenderDetailSection(string title, string? value) => builder =>
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+
+        builder.OpenElement(0, "div");
+        builder.OpenElement(1, "div");
+        builder.AddAttribute(2, "class", "fw-semibold mb-1");
+        builder.AddContent(3, title);
+        builder.CloseElement();
+        builder.OpenElement(4, "div");
+        builder.AddAttribute(5, "class", "small text-break");
+        builder.AddContent(6, value);
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+}

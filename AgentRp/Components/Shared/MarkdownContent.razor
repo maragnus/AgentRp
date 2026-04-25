@@ -69,7 +69,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Copying {CopyLabel} markdown source failed.", CopyLabel);
-            UserFeedbackService.ShowBackgroundError($"Copying the {CopyLabel} markdown source failed.", "Copy Failed");
+            UserFeedbackService.ShowBackgroundError(exception, $"Copying the {CopyLabel} markdown source failed.", "Copy Failed");
         }
         finally
         {

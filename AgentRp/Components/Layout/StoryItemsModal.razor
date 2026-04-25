@@ -3,6 +3,7 @@
 @inject ILogger<StoryItemsModal> Logger
 
 <AppModal IsOpen="IsOpen" Title="Items" OnClose="CloseAsync">
+    <ChildContent>
     @if (_isLoading)
     {
         <div class="d-flex align-items-center gap-3 py-3">
@@ -38,7 +39,10 @@
                             var isSelected = _selectedItemId == item.ItemId;
 
                             <StoryEntitySelectorListItem Name="@item.Name"
+                                                         @key="item.ItemId"
                                                          Summary="@item.Summary"
+                                                         ImageUrl="@item.PrimaryImageUrl"
+                                                         ImageCrop="@item.PrimaryImageCrop"
                                                          IsSelected="@isSelected"
                                                          OnClick="() => SelectItem(item.ItemId)">
                                 <StatusContent>
@@ -56,19 +60,29 @@
                 <div class="d-flex flex-column gap-3">
                     <InlineAlert Message="@_errorMessage" />
 
-                    <div>
-                        <div class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="form-label mb-0" for="story-item-name">Name</label>
-                            <button type="button"
-                                    class="btn btn-outline-secondary btn-sm"
-                                    title="Edit name guidance"
-                                    aria-label="Edit name guidance"
-                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.Name)'>
-                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                            </button>
+                    <div class="d-flex align-items-start gap-3">
+                        <StoryEntityImagePicker ThreadId="ThreadId"
+                                                EntityKind="StoryEntityKind.Item"
+                                                EntityId="_selectedItemId"
+                                                EntityName="@BuildDisplayName()"
+                                                PrimaryImageId="@SelectedItemPrimaryImageId"
+                                                PrimaryImageUrl="@SelectedItemPrimaryImageUrl"
+                                                PrimaryImageCrop="@SelectedItemPrimaryImageCrop"
+                                                OnChanged="HandleImageChangedAsync" />
+                        <div class="flex-grow-1 min-w-0">
+                            <div class="d-flex align-items-center justify-content-between gap-2">
+                                <label class="form-label mb-0" for="story-item-name">Name</label>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit name guidance"
+                                        aria-label="Edit name guidance"
+                                        @onclick='() => OpenGuidance(StoryEntityFieldKey.Name)'>
+                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                            <input id="story-item-name" class="form-control" @bind="_name" />
+                            @RenderGuidanceSummary(StoryEntityFieldKey.Name)
                         </div>
-                        <input id="story-item-name" class="form-control" @bind="_name" />
-                        @RenderGuidanceSummary(StoryEntityFieldKey.Name)
                     </div>
 
                     <div>
@@ -108,7 +122,7 @@
                                 <option value="">No owner</option>
                                 @foreach (var character in _characters)
                                 {
-                                    <option value="@character.CharacterId">@character.Name</option>
+                                    <option @key="character.CharacterId" value="@character.CharacterId">@character.Name</option>
                                 }
                             </select>
                         </div>
@@ -119,7 +133,7 @@
                                 <option value="">No location</option>
                                 @foreach (var location in _locations)
                                 {
-                                    <option value="@location.LocationId">@location.Name</option>
+                                    <option @key="location.LocationId" value="@location.LocationId">@location.Name</option>
                                 }
                             </select>
                         </div>
@@ -130,44 +144,54 @@
                         <label class="form-check-label" for="story-item-presence">Currently in the scene</label>
                     </div>
 
-                    <div class="d-flex flex-wrap justify-content-between gap-2 border-top pt-3">
-                        <div class="d-flex gap-2">
-                            @if (_selectedItemId.HasValue)
-                            {
-                                <BusyButton Class="btn btn-outline-danger"
-                                            IsBusy="_isDeleting"
-                                            Disabled="@(_isSaving || _isDeleting)"
-                                            BusyText="Deleting..."
-                                            OnClick="DeleteAsync">
-                                    <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
-                                    Delete
-                                </BusyButton>
-                            }
-                        </div>
-
-                        <div class="d-flex gap-2">
-                            <button type="button"
-                                    class="btn btn-outline-primary"
-                                    title="@BuildAiButtonTitle()"
-                                    aria-label="@BuildAiButtonTitle()"
-                                    @onclick="OpenAiAssist">
-                                <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
-                            </button>
-                            <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
-                            <BusyButton Class="btn btn-primary"
-                                        IsBusy="_isSaving"
-                                        Disabled="@(_isSaving || _isDeleting)"
-                                        BusyText="Saving..."
-                                        OnClick="SaveAsync">
-                                <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
-                                Save
-                            </BusyButton>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
     }
+    </ChildContent>
+    <FooterContent>
+        @if (!_isLoading)
+        {
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 w-100">
+                <div class="d-flex gap-2">
+                    @if (_selectedItemId.HasValue)
+                    {
+                        <BusyButton Class="btn btn-outline-danger"
+                                    IsBusy="_isDeleting"
+                                    Disabled="@(_isSaving || _isDeleting)"
+                                    BusyText="Deleting..."
+                                    OnClick="DeleteAsync">
+                            <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
+                            Delete
+                        </BusyButton>
+                    }
+                </div>
+
+                <div class="d-flex flex-wrap justify-content-end gap-2">
+                    <button type="button"
+                            class="btn btn-outline-primary"
+                            title="@BuildAiButtonTitle()"
+                            aria-label="@BuildAiButtonTitle()"
+                            @onclick="OpenAiAssist">
+                        <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+                    <BusyButton Class="btn btn-primary"
+                                IsBusy="_isSaving"
+                                Disabled="@(_isSaving || _isDeleting)"
+                                BusyText="Saving..."
+                                OnClick="SaveAsync">
+                        <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                        Save
+                    </BusyButton>
+                </div>
+            </div>
+        }
+        else
+        {
+            <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+        }
+    </FooterContent>
 </AppModal>
 
 <StoryEntityAiAssistModal ThreadId="ThreadId"
@@ -321,7 +345,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving item {ItemName} failed for chat {ChatId}.", _name, ThreadId);
-            _errorMessage = $"Saving item '{BuildDisplayName()}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Saving item '{BuildDisplayName()}' failed.", exception);
         }
         finally
         {
@@ -346,7 +370,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Deleting item {ItemId} failed for chat {ChatId}.", _selectedItemId.Value, ThreadId);
-            _errorMessage = $"Deleting item '{displayName}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Deleting item '{displayName}' failed.", exception);
         }
         finally
         {
@@ -358,6 +382,12 @@
     {
         if (OnChanged.HasDelegate)
             await OnChanged.InvokeAsync();
+    }
+
+    private async Task HandleImageChangedAsync()
+    {
+        await LoadAsync(_selectedItemId);
+        await NotifyChangedAsync();
     }
 
     private void OpenAiAssist() => _isAiAssistOpen = true;
@@ -411,6 +441,21 @@
             : null;
 
     private string BuildDisplayName() => string.IsNullOrWhiteSpace(_name) ? "Untitled Item" : _name.Trim();
+
+    private Guid? SelectedItemPrimaryImageId =>
+        _selectedItemId.HasValue
+            ? _items.FirstOrDefault(x => x.ItemId == _selectedItemId.Value)?.PrimaryImageId
+            : null;
+
+    private string? SelectedItemPrimaryImageUrl =>
+        _selectedItemId.HasValue
+            ? _items.FirstOrDefault(x => x.ItemId == _selectedItemId.Value)?.PrimaryImageUrl
+            : null;
+
+    private StoryImageAvatarCropView SelectedItemPrimaryImageCrop =>
+        _selectedItemId.HasValue
+            ? _items.FirstOrDefault(x => x.ItemId == _selectedItemId.Value)?.PrimaryImageCrop ?? StoryImageAvatarCropView.Default
+            : StoryImageAvatarCropView.Default;
 
     private RenderFragment RenderGuidanceSummary(StoryEntityFieldKey fieldKey) => builder =>
     {

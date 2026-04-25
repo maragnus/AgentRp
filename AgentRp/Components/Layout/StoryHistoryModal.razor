@@ -149,6 +149,7 @@
                                 var isSelected = _selectedFactId == fact.FactId;
 
                                 <button type="button"
+                                        @key="fact.FactId"
                                         class="list-group-item list-group-item-action @(isSelected ? "active" : string.Empty)"
                                         @onclick="() => SelectFact(fact.FactId)">
                                     <div class="d-flex align-items-start justify-content-between gap-2">
@@ -225,7 +226,7 @@
                                 {
                                     @foreach (var character in _characters)
                                     {
-                                        <div class="form-check">
+                                        <div @key="character.CharacterId" class="form-check">
                                             <input id="@($"fact-character-{character.CharacterId}")"
                                                    class="form-check-input"
                                                    type="checkbox"
@@ -247,7 +248,7 @@
                                 {
                                     @foreach (var location in _locations)
                                     {
-                                        <div class="form-check">
+                                        <div @key="location.LocationId" class="form-check">
                                             <input id="@($"fact-location-{location.LocationId}")"
                                                    class="form-check-input"
                                                    type="checkbox"
@@ -269,7 +270,7 @@
                                 {
                                     @foreach (var item in _items)
                                     {
-                                        <div class="form-check">
+                                        <div @key="item.ItemId" class="form-check">
                                             <input id="@($"fact-item-{item.ItemId}")"
                                                    class="form-check-input"
                                                    type="checkbox"
@@ -350,6 +351,7 @@
                                 var isSelected = _selectedTimelineEntryId == entry.TimelineEntryId;
 
                                 <button type="button"
+                                        @key="entry.TimelineEntryId"
                                         class="list-group-item list-group-item-action @(isSelected ? "active" : string.Empty)"
                                         @onclick="() => SelectTimelineEntry(entry.TimelineEntryId)">
                                     <div class="d-flex flex-column text-start gap-1">
@@ -452,7 +454,7 @@
                                 {
                                     @foreach (var character in _characters)
                                     {
-                                        <div class="form-check">
+                                        <div @key="character.CharacterId" class="form-check">
                                             <input id="@($"timeline-character-{character.CharacterId}")"
                                                    class="form-check-input"
                                                    type="checkbox"
@@ -474,7 +476,7 @@
                                 {
                                     @foreach (var location in _locations)
                                     {
-                                        <div class="form-check">
+                                        <div @key="location.LocationId" class="form-check">
                                             <input id="@($"timeline-location-{location.LocationId}")"
                                                    class="form-check-input"
                                                    type="checkbox"
@@ -496,7 +498,7 @@
                                 {
                                     @foreach (var item in _items)
                                     {
-                                        <div class="form-check">
+                                        <div @key="item.ItemId" class="form-check">
                                             <input id="@($"timeline-item-{item.ItemId}")"
                                                    class="form-check-input"
                                                    type="checkbox"
@@ -823,7 +825,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving story context failed for chat {ChatId}.", ThreadId);
-            _errorMessage = "Saving story context failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Saving story context failed.", exception);
         }
         finally
         {
@@ -855,7 +857,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving history fact {FactTitle} failed for chat {ChatId}.", _factTitle, ThreadId);
-            _errorMessage = $"Saving history fact '{BuildFactDisplayName()}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Saving history fact '{BuildFactDisplayName()}' failed.", exception);
         }
         finally
         {
@@ -880,7 +882,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Deleting history fact {FactId} failed for chat {ChatId}.", _selectedFactId.Value, ThreadId);
-            _errorMessage = $"Deleting history fact '{displayName}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Deleting history fact '{displayName}' failed.", exception);
         }
         finally
         {
@@ -914,7 +916,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving timeline entry {TimelineTitle} failed for chat {ChatId}.", _timelineTitle, ThreadId);
-            _errorMessage = $"Saving timeline entry '{BuildTimelineDisplayName()}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Saving timeline entry '{BuildTimelineDisplayName()}' failed.", exception);
         }
         finally
         {
@@ -939,7 +941,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Deleting timeline entry {TimelineEntryId} failed for chat {ChatId}.", _selectedTimelineEntryId.Value, ThreadId);
-            _errorMessage = $"Deleting timeline entry '{displayName}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Deleting timeline entry '{displayName}' failed.", exception);
         }
         finally
         {

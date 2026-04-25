@@ -198,7 +198,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Reading chat import file {FileName} failed.", file.Name);
-            _importErrorMessage = $"Reading chat export file \"{file.Name}\" failed.";
+            _importErrorMessage = UserFacingErrorMessageBuilder.Build($"Reading chat export file \"{file.Name}\" failed.", exception);
         }
         finally
         {
@@ -237,7 +237,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Importing chat from {FileName} failed.", _importFileName);
-            _importErrorMessage = $"Importing chat from \"{_importFileName ?? "the selected file"}\" failed.";
+            _importErrorMessage = UserFacingErrorMessageBuilder.Build($"Importing chat from \"{_importFileName ?? "the selected file"}\" failed.", exception);
         }
         finally
         {

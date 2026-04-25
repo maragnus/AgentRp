@@ -10,6 +10,8 @@ public sealed class ChatStoryService(
     IAgentEndpointManagementService agentEndpointManagementService,
     ILogger<ChatStoryService> logger) : IChatStoryService
 {
+    private const string ImageSettingsKey = "story-image-generation-settings";
+
     public async Task<ChatStorySidebarView?> GetSidebarAsync(Guid threadId, CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -22,25 +24,14 @@ public sealed class ChatStoryService(
         var story = await GetOrCreateStoryAsync(dbContext, threadId, cancellationToken);
         if (story is null)
             return null;
-        var providerWidgets = await dbContext.AiProviders
-            .AsNoTracking()
-            .Include(x => x.Models)
-            .Include(x => x.Metrics)
-            .OrderBy(x => x.SortOrder)
-            .ThenBy(x => x.Name)
-            .Select(x => new AiProviderSidebarWidgetView(
-                x.Id,
-                x.Name,
-                x.ProviderKind,
-                x.Models.Count,
-                x.Models.Count(model => model.IsEnabled),
-                x.LastMetricsRefreshUtc,
-                x.LastMetricsError,
-                x.Metrics
-                    .OrderBy(metric => metric.Label)
-                    .Select(metric => new AiProviderMetricView(metric.MetricKind, metric.Label, metric.Value, metric.Detail, metric.RefreshedUtc))
-                    .ToList()))
-            .ToListAsync(cancellationToken);
+
+        var availableAgents = agentCatalog.GetEnabledAgents();
+        var imageModels = agentCatalog.GetEnabledImageModels();
+        var selectedModelId = agentCatalog.NormalizeSelectedModelId(thread.SelectedAiModelId);
+        var selectedAgent = availableAgents.FirstOrDefault(x => x.ModelId == selectedModelId);
+        var selectedProvider = selectedAgent is null
+            ? null
+            : await LoadSelectedProviderAsync(dbContext, threadId, selectedAgent, cancellationToken);
 
         IReadOnlyList<AgentEndpointStatusView> managedAgentEndpoints = [];
         string? managedAgentEndpointsErrorMessage = null;
@@ -54,15 +45,21 @@ public sealed class ChatStoryService(
             managedAgentEndpointsErrorMessage = UserFacingErrorMessageBuilder.Build("Loading Hugging Face endpoint status failed.", exception);
         }
 
+        var primaryImages = await LoadPrimaryImagesAsync(dbContext, story, cancellationToken);
+        var imageSettings = await LoadImageSettingsAsync(dbContext, imageModels, cancellationToken);
+
         return MapSidebarView(
             story,
             thread.SelectedSpeakerCharacterId,
-            agentCatalog.GetEnabledAgents().FirstOrDefault(x => x.ModelId == agentCatalog.NormalizeSelectedModelId(thread.SelectedAiModelId))?.Name,
-            agentCatalog.NormalizeSelectedModelId(thread.SelectedAiModelId),
-            agentCatalog.GetEnabledAgents(),
-            providerWidgets,
+            selectedAgent?.Name,
+            selectedModelId,
+            availableAgents,
+            selectedProvider,
             managedAgentEndpoints,
-            managedAgentEndpointsErrorMessage);
+            managedAgentEndpointsErrorMessage,
+            imageSettings,
+            imageModels,
+            primaryImages);
     }
 
     public async Task<IReadOnlyList<StoryCharacterEditorView>> GetCharactersAsync(Guid threadId, CancellationToken cancellationToken)
@@ -71,7 +68,8 @@ public sealed class ChatStoryService(
         var story = await GetOrCreateStoryAsync(dbContext, threadId, cancellationToken)
             ?? throw new InvalidOperationException("The selected chat story could not be found.");
 
-        return MapCharacters(story);
+        var primaryImages = await LoadPrimaryImagesAsync(dbContext, story, cancellationToken);
+        return MapCharacters(story, primaryImages);
     }
 
     public async Task<IReadOnlyList<StoryLocationListItemView>> GetLocationsAsync(Guid threadId, CancellationToken cancellationToken)
@@ -80,7 +78,8 @@ public sealed class ChatStoryService(
         var story = await GetOrCreateStoryAsync(dbContext, threadId, cancellationToken)
             ?? throw new InvalidOperationException("The selected chat story could not be found.");
 
-        return MapLocationList(story);
+        var primaryImages = await LoadPrimaryImagesAsync(dbContext, story, cancellationToken);
+        return MapLocationList(story, primaryImages);
     }
 
     public async Task<IReadOnlyList<StoryLocationEditorView>> GetLocationEditorsAsync(Guid threadId, CancellationToken cancellationToken)
@@ -89,7 +88,8 @@ public sealed class ChatStoryService(
         var story = await GetOrCreateStoryAsync(dbContext, threadId, cancellationToken)
             ?? throw new InvalidOperationException("The selected chat story could not be found.");
 
-        return MapLocationEditors(story);
+        var primaryImages = await LoadPrimaryImagesAsync(dbContext, story, cancellationToken);
+        return MapLocationEditors(story, primaryImages);
     }
 
     public async Task<IReadOnlyList<StoryItemEditorView>> GetItemsAsync(Guid threadId, CancellationToken cancellationToken)
@@ -98,7 +98,8 @@ public sealed class ChatStoryService(
         var story = await GetOrCreateStoryAsync(dbContext, threadId, cancellationToken)
             ?? throw new InvalidOperationException("The selected chat story could not be found.");
 
-        return MapItems(story);
+        var primaryImages = await LoadPrimaryImagesAsync(dbContext, story, cancellationToken);
+        return MapItems(story, primaryImages);
     }
 
     public async Task<StoryContextView?> GetStoryContextAsync(Guid threadId, CancellationToken cancellationToken)
@@ -135,7 +136,8 @@ public sealed class ChatStoryService(
             existingDocument?.ModelSheet ?? StoryCharacterModelSheetDocument.Empty,
             nextUserSheetRevision,
             existingDocument?.ModelSheetReviewedAgainstRevision,
-            command.IsArchived);
+            command.IsArchived,
+            existingDocument?.PrimaryImageId);
 
         ReplaceOrAdd(documents, document, x => x.Id);
         story.Characters = new ChatStoryCharactersDocument(documents);
@@ -144,7 +146,7 @@ public sealed class ChatStoryService(
             : story.Scene with { PresentCharacterIds = RemoveId(story.Scene.PresentCharacterIds, characterId) };
 
         await SaveStoryAsync(dbContext, story, cancellationToken);
-        return MapCharacter(story, document);
+        return MapCharacter(story, document, new Dictionary<Guid, PrimaryImageData>());
     }
 
     public async Task<StoryCharacterEditorView> SaveCharacterModelSheetAsync(SaveStoryCharacterModelSheet command, CancellationToken cancellationToken)
@@ -170,7 +172,7 @@ public sealed class ChatStoryService(
         story.Characters = new ChatStoryCharactersDocument(documents);
 
         await SaveStoryAsync(dbContext, story, cancellationToken);
-        return MapCharacter(story, updatedDocument);
+        return MapCharacter(story, updatedDocument, new Dictionary<Guid, PrimaryImageData>());
     }
 
     public async Task DeleteCharacterAsync(DeleteCharacter command, CancellationToken cancellationToken)
@@ -216,13 +218,14 @@ public sealed class ChatStoryService(
         var summary = NormalizeOptionalValue(command.Summary);
         var details = NormalizeOptionalValue(command.Details);
         var locationId = command.LocationId ?? Guid.NewGuid();
-        var document = new StoryLocationDocument(locationId, name, summary, details, command.IsArchived);
         var documents = story.Locations.Entries.ToList();
+        var existingDocument = documents.FirstOrDefault(x => x.Id == locationId);
+        var document = new StoryLocationDocument(locationId, name, summary, details, command.IsArchived, existingDocument?.PrimaryImageId);
         ReplaceOrAdd(documents, document, x => x.Id);
         story.Locations = new ChatStoryLocationsDocument(documents);
 
         await SaveStoryAsync(dbContext, story, cancellationToken);
-        return MapLocation(story, document);
+        return MapLocation(story, document, new Dictionary<Guid, PrimaryImageData>());
     }
 
     public async Task DeleteLocationAsync(DeleteLocation command, CancellationToken cancellationToken)
@@ -283,8 +286,9 @@ public sealed class ChatStoryService(
         var ownerCharacterId = NormalizeOptionalReference(command.OwnerCharacterId, story.Characters.Entries.Select(x => x.Id));
         var locationId = NormalizeOptionalReference(command.LocationId, story.Locations.Entries.Select(x => x.Id));
         var itemId = command.ItemId ?? Guid.NewGuid();
-        var document = new StoryItemDocument(itemId, name, summary, details, ownerCharacterId, locationId, command.IsArchived);
         var documents = story.Items.Entries.ToList();
+        var existingDocument = documents.FirstOrDefault(x => x.Id == itemId);
+        var document = new StoryItemDocument(itemId, name, summary, details, ownerCharacterId, locationId, command.IsArchived, existingDocument?.PrimaryImageId);
         ReplaceOrAdd(documents, document, x => x.Id);
         story.Items = new ChatStoryItemsDocument(documents);
         story.Scene = command.IsPresentInScene
@@ -292,7 +296,7 @@ public sealed class ChatStoryService(
             : story.Scene with { PresentItemIds = RemoveId(story.Scene.PresentItemIds, itemId) };
 
         await SaveStoryAsync(dbContext, story, cancellationToken);
-        return MapItem(story, document);
+        return MapItem(story, document, new Dictionary<Guid, PrimaryImageData>());
     }
 
     public async Task DeleteItemAsync(DeleteItem command, CancellationToken cancellationToken)
@@ -514,9 +518,12 @@ public sealed class ChatStoryService(
         string? selectedAgentName,
         Guid? selectedModelId,
         IReadOnlyList<AgentProviderOptionView> availableAgents,
-        IReadOnlyList<AiProviderSidebarWidgetView> providerWidgets,
+        SelectedAiProviderSidebarView? selectedProvider,
         IReadOnlyList<AgentEndpointStatusView> managedAgentEndpoints,
-        string? managedAgentEndpointsErrorMessage)
+        string? managedAgentEndpointsErrorMessage,
+        ImageGenerationModelSettingsView imageGenerationSettings,
+        IReadOnlyList<AgentProviderOptionView> imageModels,
+        IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages)
     {
         var locations = story.Locations.Entries
             .Where(x => !x.IsArchived)
@@ -528,31 +535,46 @@ public sealed class ChatStoryService(
         var selectedSpeakerId = selectedSpeakerCharacterId.HasValue && characters.Any(x => x.Id == selectedSpeakerCharacterId.Value)
             ? selectedSpeakerCharacterId
             : null;
-        var currentLocationName = story.Scene.CurrentLocationId.HasValue
-            && locations.TryGetValue(story.Scene.CurrentLocationId.Value, out var currentLocation)
-                ? currentLocation.Name
+        var currentLocation = story.Scene.CurrentLocationId.HasValue
+            && locations.TryGetValue(story.Scene.CurrentLocationId.Value, out var resolvedCurrentLocation)
+                ? resolvedCurrentLocation
                 : null;
+        var currentLocationName = currentLocation?.Name;
+        var currentLocationPrimaryImageId = currentLocation?.PrimaryImageId;
         var sceneItemIds = story.Scene.PresentItemIds.ToHashSet();
         var items = story.Items.Entries
             .Where(x => !x.IsArchived && sceneItemIds.Contains(x.Id))
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(x => new StoryItemListItemView(x.Id, x.Name, x.Summary))
+            .Select(x => new StoryItemListItemView(
+                x.Id,
+                x.Name,
+                x.Summary,
+                x.PrimaryImageId,
+                GetPrimaryImageUrl(primaryImages, x.PrimaryImageId),
+                GetPrimaryImageCrop(primaryImages, x.PrimaryImageId)))
             .ToList();
 
         return new ChatStorySidebarView(
             story.ChatThreadId,
+            currentLocation?.Id,
             currentLocationName,
+            currentLocationPrimaryImageId,
+            GetPrimaryImageUrl(primaryImages, currentLocationPrimaryImageId),
+            GetPrimaryImageCrop(primaryImages, currentLocationPrimaryImageId),
             selectedSpeakerId.HasValue
                 ? characters.First(x => x.Id == selectedSpeakerId.Value).Name
                 : "Narrator",
-            BuildSidebarSpeakers(story, characters, selectedSpeakerId),
+            BuildSidebarSpeakers(story, characters, selectedSpeakerId, primaryImages),
             characters
                 .Select(x => new StoryCharacterListItemView(
                     x.Id,
                     x.Name,
                     StoryCharacterModelSheetSupport.GetUserSheet(x).Summary,
                     story.Scene.PresentCharacterIds.Contains(x.Id),
-                    selectedSpeakerId == x.Id))
+                    selectedSpeakerId == x.Id,
+                    x.PrimaryImageId,
+                    GetPrimaryImageUrl(primaryImages, x.PrimaryImageId),
+                    GetPrimaryImageCrop(primaryImages, x.PrimaryImageId)))
                 .ToList(),
             items,
             story.History.Facts.Count,
@@ -561,15 +583,120 @@ public sealed class ChatStoryService(
             selectedModelId,
             availableAgents,
             availableAgents.Count > 0,
-            providerWidgets,
+            selectedProvider,
             managedAgentEndpoints,
-            managedAgentEndpointsErrorMessage);
+            managedAgentEndpointsErrorMessage,
+            imageGenerationSettings,
+            imageModels);
     }
+
+    private static async Task<SelectedAiProviderSidebarView?> LoadSelectedProviderAsync(
+        AgentRp.Data.AppContext dbContext,
+        Guid threadId,
+        AgentProviderOptionView selectedAgent,
+        CancellationToken cancellationToken)
+    {
+        var provider = await dbContext.AiProviders
+            .AsNoTracking()
+            .Include(x => x.Metrics)
+            .FirstOrDefaultAsync(x => x.Id == selectedAgent.ProviderId, cancellationToken);
+        if (provider is null)
+            return null;
+
+        var tokenUsage = await dbContext.ProcessSteps
+            .AsNoTracking()
+            .Where(x => x.Run.ThreadId == threadId && x.Run.AiProviderId == selectedAgent.ProviderId)
+            .GroupBy(x => 1)
+            .Select(x => new
+            {
+                InputTokenCount = x.Sum(step => step.InputTokenCount ?? 0),
+                OutputTokenCount = x.Sum(step => step.OutputTokenCount ?? 0),
+                TotalTokenCount = x.Sum(step => step.TotalTokenCount ?? 0)
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return new SelectedAiProviderSidebarView(
+            provider.Id,
+            provider.Name,
+            provider.ProviderKind,
+            provider.LastMetricsRefreshUtc,
+            provider.LastMetricsError,
+            provider.Metrics
+                .Where(IsSidebarProviderMetric)
+                .OrderBy(x => x.Label)
+                .Select(x => new AiProviderMetricView(x.MetricKind, x.Label, x.Value, x.Detail, x.RefreshedUtc))
+                .ToList(),
+            new AiProviderTokenUsageView(
+                tokenUsage?.InputTokenCount ?? 0,
+                tokenUsage?.OutputTokenCount ?? 0,
+                tokenUsage?.TotalTokenCount ?? 0));
+    }
+
+    private static async Task<Dictionary<Guid, PrimaryImageData>> LoadPrimaryImagesAsync(
+        AgentRp.Data.AppContext dbContext,
+        ChatStory story,
+        CancellationToken cancellationToken)
+    {
+        var imageIds = story.Characters.Entries.Select(x => x.PrimaryImageId)
+            .Concat(story.Locations.Entries.Select(x => x.PrimaryImageId))
+            .Concat(story.Items.Entries.Select(x => x.PrimaryImageId))
+            .Where(x => x.HasValue)
+            .Select(x => x!.Value)
+            .Distinct()
+            .ToList();
+        if (imageIds.Count == 0)
+            return [];
+
+        return await dbContext.StoryImageAssets
+            .AsNoTracking()
+            .Where(x => imageIds.Contains(x.Id))
+            .ToDictionaryAsync(
+                x => x.Id,
+                x => new PrimaryImageData(StoryImageUrlBuilder.Build(x.Id), BuildCrop(x)),
+                cancellationToken);
+    }
+
+    private static async Task<ImageGenerationModelSettingsView> LoadImageSettingsAsync(
+        AgentRp.Data.AppContext dbContext,
+        IReadOnlyList<AgentProviderOptionView> imageModels,
+        CancellationToken cancellationToken)
+    {
+        var setting = await dbContext.AppSettings
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Key == ImageSettingsKey, cancellationToken);
+        var saved = ChatStoryJson.Deserialize(setting?.JsonValue, StoryImageGenerationSettingsDocument.Default);
+        var selectedModelId = saved.SelectedModelId.HasValue && imageModels.Any(x => x.ModelId == saved.SelectedModelId.Value)
+            ? saved.SelectedModelId
+            : imageModels.FirstOrDefault()?.ModelId;
+
+        return new ImageGenerationModelSettingsView(
+            selectedModelId,
+            string.IsNullOrWhiteSpace(saved.Size) ? StoryImageGenerationSettingsDocument.Default.Size : saved.Size,
+            string.IsNullOrWhiteSpace(saved.Quality) ? StoryImageGenerationSettingsDocument.Default.Quality : saved.Quality,
+            string.IsNullOrWhiteSpace(saved.ReferenceFidelity) ? StoryImageGenerationSettingsDocument.Default.ReferenceFidelity : saved.ReferenceFidelity);
+    }
+
+    private static string? GetPrimaryImageUrl(IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages, Guid? imageId) =>
+        imageId.HasValue && primaryImages.TryGetValue(imageId.Value, out var data) ? data.ImageUrl : null;
+
+    private static StoryImageAvatarCropView GetPrimaryImageCrop(IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages, Guid? imageId) =>
+        imageId.HasValue && primaryImages.TryGetValue(imageId.Value, out var data) ? data.Crop : StoryImageAvatarCropView.Default;
+
+    private static StoryImageAvatarCropView BuildCrop(StoryImageAsset image) =>
+        new(
+            Math.Clamp(image.AvatarFocusXPercent ?? StoryImageAvatarCropView.Default.FocusXPercent, 0, 100),
+            Math.Clamp(image.AvatarFocusYPercent ?? StoryImageAvatarCropView.Default.FocusYPercent, 0, 100),
+            Math.Clamp(image.AvatarZoomPercent ?? StoryImageAvatarCropView.Default.ZoomPercent, 100, 300));
+
+    private static bool IsSidebarProviderMetric(AiProviderMetric metric) =>
+        !string.Equals(metric.MetricKind, "models", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(metric.MetricKind, "connection", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<StorySidebarSpeakerView> BuildSidebarSpeakers(
         ChatStory story,
         IReadOnlyList<StoryCharacterDocument> characters,
-        Guid? selectedSpeakerId)
+        Guid? selectedSpeakerId,
+        IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages)
     {
         var speakers = new List<StorySidebarSpeakerView>
         {
@@ -579,7 +706,10 @@ public sealed class ChatStoryService(
                 "Injects scene facts and framing details.",
                 true,
                 true,
-                !selectedSpeakerId.HasValue)
+                !selectedSpeakerId.HasValue,
+                null,
+                null,
+                StoryImageAvatarCropView.Default)
         };
 
         speakers.AddRange(characters.Select(character => new StorySidebarSpeakerView(
@@ -588,28 +718,34 @@ public sealed class ChatStoryService(
             StoryCharacterModelSheetSupport.GetUserSheet(character).Summary,
             false,
             story.Scene.PresentCharacterIds.Contains(character.Id),
-            selectedSpeakerId == character.Id)));
+            selectedSpeakerId == character.Id,
+            character.PrimaryImageId,
+            GetPrimaryImageUrl(primaryImages, character.PrimaryImageId),
+            GetPrimaryImageCrop(primaryImages, character.PrimaryImageId))));
 
         return speakers;
     }
 
-    private static IReadOnlyList<StoryCharacterEditorView> MapCharacters(ChatStory story) =>
+    private static IReadOnlyList<StoryCharacterEditorView> MapCharacters(ChatStory story, IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages) =>
         story.Characters.Entries
             .Where(x => !x.IsArchived)
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(x => MapCharacter(story, x))
+            .Select(x => MapCharacter(story, x, primaryImages))
             .ToList();
 
-    private static StoryCharacterEditorView MapCharacter(ChatStory story, StoryCharacterDocument document) => new(
+    private static StoryCharacterEditorView MapCharacter(ChatStory story, StoryCharacterDocument document, IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages) => new(
         document.Id,
         document.Name,
         MapUserSheetView(StoryCharacterModelSheetSupport.GetUserSheet(document)),
         MapModelSheetView(StoryCharacterModelSheetSupport.GetModelSheet(document)),
         StoryCharacterModelSheetSupport.GetStatus(document),
         StoryCharacterModelSheetSupport.IsReady(document),
-        story.Scene.PresentCharacterIds.Contains(document.Id));
+        story.Scene.PresentCharacterIds.Contains(document.Id),
+        document.PrimaryImageId,
+        GetPrimaryImageUrl(primaryImages, document.PrimaryImageId),
+        GetPrimaryImageCrop(primaryImages, document.PrimaryImageId));
 
-    private static IReadOnlyList<StoryLocationListItemView> MapLocationList(ChatStory story) =>
+    private static IReadOnlyList<StoryLocationListItemView> MapLocationList(ChatStory story, IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages) =>
         story.Locations.Entries
             .Where(x => !x.IsArchived)
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
@@ -617,38 +753,47 @@ public sealed class ChatStoryService(
                 x.Id,
                 x.Name,
                 x.Summary,
-                story.Scene.CurrentLocationId == x.Id))
+                story.Scene.CurrentLocationId == x.Id,
+                x.PrimaryImageId,
+                GetPrimaryImageUrl(primaryImages, x.PrimaryImageId),
+                GetPrimaryImageCrop(primaryImages, x.PrimaryImageId)))
             .ToList();
 
-    private static IReadOnlyList<StoryLocationEditorView> MapLocationEditors(ChatStory story) =>
+    private static IReadOnlyList<StoryLocationEditorView> MapLocationEditors(ChatStory story, IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages) =>
         story.Locations.Entries
             .Where(x => !x.IsArchived)
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(x => MapLocation(story, x))
+            .Select(x => MapLocation(story, x, primaryImages))
             .ToList();
 
-    private static StoryLocationEditorView MapLocation(ChatStory story, StoryLocationDocument document) => new(
+    private static StoryLocationEditorView MapLocation(ChatStory story, StoryLocationDocument document, IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages) => new(
         document.Id,
         document.Name,
         document.Summary,
         document.Details,
-        story.Scene.CurrentLocationId == document.Id);
+        story.Scene.CurrentLocationId == document.Id,
+        document.PrimaryImageId,
+        GetPrimaryImageUrl(primaryImages, document.PrimaryImageId),
+        GetPrimaryImageCrop(primaryImages, document.PrimaryImageId));
 
-    private static IReadOnlyList<StoryItemEditorView> MapItems(ChatStory story) =>
+    private static IReadOnlyList<StoryItemEditorView> MapItems(ChatStory story, IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages) =>
         story.Items.Entries
             .Where(x => !x.IsArchived)
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(x => MapItem(story, x))
+            .Select(x => MapItem(story, x, primaryImages))
             .ToList();
 
-    private static StoryItemEditorView MapItem(ChatStory story, StoryItemDocument document) => new(
+    private static StoryItemEditorView MapItem(ChatStory story, StoryItemDocument document, IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages) => new(
         document.Id,
         document.Name,
         document.Summary,
         document.Details,
         document.OwnerCharacterId,
         document.LocationId,
-        story.Scene.PresentItemIds.Contains(document.Id));
+        story.Scene.PresentItemIds.Contains(document.Id),
+        document.PrimaryImageId,
+        GetPrimaryImageUrl(primaryImages, document.PrimaryImageId),
+        GetPrimaryImageCrop(primaryImages, document.PrimaryImageId));
 
     private static StoryContextView MapStoryContext(ChatStory story) => new(
         MapNarrativeSettings(story.StoryContext),
@@ -866,4 +1011,6 @@ public sealed class ChatStoryService(
         else
             documents.Add(document);
     }
+
+    private sealed record PrimaryImageData(string ImageUrl, StoryImageAvatarCropView Crop);
 }

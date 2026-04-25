@@ -41,6 +41,7 @@
                             var hasGeneratedStep = _generatedSteps.ContainsKey(item.MessageId);
                             var hasSavedStep = HasSavedAppearance(item);
                             <button type="button"
+                                    @key="item.MessageId"
                                     class="list-group-item list-group-item-action @(isSelected ? "active" : string.Empty)"
                                     disabled="@(IsSaving || _isGenerating)"
                                     @onclick="() => SelectItem(item.MessageId)">
@@ -105,7 +106,7 @@
                             {
                                 @foreach (var character in displayCharacters)
                                 {
-                                    <div>
+                                    <div @key="character.CharacterId">
                                         <label class="form-label" for="@GetEditorId(selectedItem.MessageId, character.CharacterId)">@character.CharacterName</label>
                                         <textarea id="@GetEditorId(selectedItem.MessageId, character.CharacterId)"
                                                   class="form-control"
@@ -121,7 +122,7 @@
                                 <div class="d-flex flex-column gap-3">
                                     @foreach (var character in displayCharacters)
                                     {
-                                        <div class="border-top pt-3">
+                                        <div @key="character.CharacterId" class="border-top pt-3">
                                             <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
                                                 <div class="fw-semibold">@character.CharacterName</div>
                                                 <span class="badge @(character.Changed ? "text-bg-primary" : "text-bg-light border text-body-secondary")">

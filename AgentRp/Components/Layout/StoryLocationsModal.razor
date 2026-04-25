@@ -3,6 +3,7 @@
 @inject ILogger<StoryLocationsModal> Logger
 
 <AppModal IsOpen="IsOpen" Title="Locations" OnClose="CloseAsync">
+    <ChildContent>
     @if (_isLoading)
     {
         <div class="d-flex align-items-center gap-3 py-3">
@@ -38,7 +39,10 @@
                             var isSelected = _selectedLocationId == location.LocationId;
 
                             <StoryEntitySelectorListItem Name="@location.Name"
+                                                         @key="location.LocationId"
                                                          Summary="@location.Summary"
+                                                         ImageUrl="@location.PrimaryImageUrl"
+                                                         ImageCrop="@location.PrimaryImageCrop"
                                                          IsSelected="@isSelected"
                                                          OnClick="() => SelectLocation(location.LocationId)" />
                         }
@@ -50,19 +54,29 @@
                 <div class="d-flex flex-column gap-3">
                     <InlineAlert Message="@_errorMessage" />
 
-                    <div>
-                        <div class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="form-label mb-0" for="story-location-name">Name</label>
-                            <button type="button"
-                                    class="btn btn-outline-secondary btn-sm"
-                                    title="Edit name guidance"
-                                    aria-label="Edit name guidance"
-                                    @onclick='() => OpenGuidance(StoryEntityFieldKey.Name)'>
-                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                            </button>
+                    <div class="d-flex align-items-start gap-3">
+                        <StoryEntityImagePicker ThreadId="ThreadId"
+                                                EntityKind="StoryEntityKind.Location"
+                                                EntityId="_selectedLocationId"
+                                                EntityName="@BuildDisplayName()"
+                                                PrimaryImageId="@SelectedLocationPrimaryImageId"
+                                                PrimaryImageUrl="@SelectedLocationPrimaryImageUrl"
+                                                PrimaryImageCrop="@SelectedLocationPrimaryImageCrop"
+                                                OnChanged="HandleImageChangedAsync" />
+                        <div class="flex-grow-1 min-w-0">
+                            <div class="d-flex align-items-center justify-content-between gap-2">
+                                <label class="form-label mb-0" for="story-location-name">Name</label>
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit name guidance"
+                                        aria-label="Edit name guidance"
+                                        @onclick='() => OpenGuidance(StoryEntityFieldKey.Name)'>
+                                    <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                            <input id="story-location-name" class="form-control" @bind="_name" />
+                            @RenderGuidanceSummary(StoryEntityFieldKey.Name)
                         </div>
-                        <input id="story-location-name" class="form-control" @bind="_name" />
-                        @RenderGuidanceSummary(StoryEntityFieldKey.Name)
                     </div>
 
                     <div>
@@ -100,56 +114,66 @@
                         <label class="form-check-label" for="story-location-current">Current location</label>
                     </div>
 
-                    <div class="d-flex flex-wrap justify-content-between gap-2 border-top pt-3">
-                        <div class="d-flex gap-2">
-                            @if (_selectedLocationId.HasValue)
-                            {
-                                <BusyButton Class="btn btn-outline-danger"
-                                            IsBusy="_isDeleting"
-                                            Disabled="@(_isSaving || _isDeleting)"
-                                            BusyText="Deleting..."
-                                            OnClick="DeleteAsync">
-                                    <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
-                                    Delete
-                                </BusyButton>
-                            }
-                        </div>
-
-                        <div class="d-flex gap-2">
-                            @if (_selectedLocationId.HasValue && _wasCurrentLocation && !_isCurrentLocation)
-                            {
-                                <BusyButton Class="btn btn-outline-secondary"
-                                            IsBusy="_isClearingCurrent"
-                                            Disabled="@(_isSaving || _isDeleting || _isClearingCurrent)"
-                                            BusyText="Clearing..."
-                                            OnClick="ClearCurrentAsync">
-                                    <i class="fa-regular fa-location-slash me-2" aria-hidden="true"></i>
-                                    Clear Current
-                                </BusyButton>
-                            }
-
-                            <button type="button"
-                                    class="btn btn-outline-primary"
-                                    title="@BuildAiButtonTitle()"
-                                    aria-label="@BuildAiButtonTitle()"
-                                    @onclick="OpenAiAssist">
-                                <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
-                            </button>
-                            <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
-                            <BusyButton Class="btn btn-primary"
-                                        IsBusy="_isSaving"
-                                        Disabled="@(_isSaving || _isDeleting || _isClearingCurrent)"
-                                        BusyText="Saving..."
-                                        OnClick="SaveAsync">
-                                <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
-                                Save
-                            </BusyButton>
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
     }
+    </ChildContent>
+    <FooterContent>
+        @if (!_isLoading)
+        {
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 w-100">
+                <div class="d-flex gap-2">
+                    @if (_selectedLocationId.HasValue)
+                    {
+                        <BusyButton Class="btn btn-outline-danger"
+                                    IsBusy="_isDeleting"
+                                    Disabled="@(_isSaving || _isDeleting)"
+                                    BusyText="Deleting..."
+                                    OnClick="DeleteAsync">
+                            <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
+                            Delete
+                        </BusyButton>
+                    }
+                </div>
+
+                <div class="d-flex flex-wrap justify-content-end gap-2">
+                    @if (_selectedLocationId.HasValue && _wasCurrentLocation && !_isCurrentLocation)
+                    {
+                        <BusyButton Class="btn btn-outline-secondary"
+                                    IsBusy="_isClearingCurrent"
+                                    Disabled="@(_isSaving || _isDeleting || _isClearingCurrent)"
+                                    BusyText="Clearing..."
+                                    OnClick="ClearCurrentAsync">
+                            <i class="fa-regular fa-location-slash me-2" aria-hidden="true"></i>
+                            Clear Current
+                        </BusyButton>
+                    }
+
+                    <button type="button"
+                            class="btn btn-outline-primary"
+                            title="@BuildAiButtonTitle()"
+                            aria-label="@BuildAiButtonTitle()"
+                            @onclick="OpenAiAssist">
+                        <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+                    <BusyButton Class="btn btn-primary"
+                                IsBusy="_isSaving"
+                                Disabled="@(_isSaving || _isDeleting || _isClearingCurrent)"
+                                BusyText="Saving..."
+                                OnClick="SaveAsync">
+                        <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                        Save
+                    </BusyButton>
+                </div>
+            </div>
+        }
+        else
+        {
+            <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+        }
+    </FooterContent>
 </AppModal>
 
 <StoryEntityAiAssistModal ThreadId="ThreadId"
@@ -170,6 +194,9 @@
 
     [Parameter]
     public bool IsOpen { get; set; }
+
+    [Parameter]
+    public Guid? InitialLocationId { get; set; }
 
     [Parameter]
     public EventCallback OnClose { get; set; }
@@ -226,6 +253,7 @@
 
             var targetLocationId = selectedLocationId
                 ?? _selectedLocationId
+                ?? InitialLocationId
                 ?? _locations.FirstOrDefault()?.LocationId;
             if (targetLocationId.HasValue)
                 SelectLocation(targetLocationId.Value);
@@ -288,7 +316,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving location {LocationName} failed for chat {ChatId}.", _name, ThreadId);
-            _errorMessage = $"Saving location '{BuildDisplayName()}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Saving location '{BuildDisplayName()}' failed.", exception);
         }
         finally
         {
@@ -313,7 +341,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Deleting location {LocationId} failed for chat {ChatId}.", _selectedLocationId.Value, ThreadId);
-            _errorMessage = $"Deleting location '{displayName}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Deleting location '{displayName}' failed.", exception);
         }
         finally
         {
@@ -334,7 +362,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Clearing current location failed for chat {ChatId}.", ThreadId);
-            _errorMessage = "Clearing the current location failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Clearing the current location failed.", exception);
         }
         finally
         {
@@ -346,6 +374,12 @@
     {
         if (OnChanged.HasDelegate)
             await OnChanged.InvokeAsync();
+    }
+
+    private async Task HandleImageChangedAsync()
+    {
+        await LoadAsync(_selectedLocationId);
+        await NotifyChangedAsync();
     }
 
     private void OpenAiAssist() => _isAiAssistOpen = true;
@@ -394,6 +428,21 @@
         : "New location from prompt";
 
     private string BuildDisplayName() => string.IsNullOrWhiteSpace(_name) ? "Untitled Location" : _name.Trim();
+
+    private Guid? SelectedLocationPrimaryImageId =>
+        _selectedLocationId.HasValue
+            ? _locations.FirstOrDefault(x => x.LocationId == _selectedLocationId.Value)?.PrimaryImageId
+            : null;
+
+    private string? SelectedLocationPrimaryImageUrl =>
+        _selectedLocationId.HasValue
+            ? _locations.FirstOrDefault(x => x.LocationId == _selectedLocationId.Value)?.PrimaryImageUrl
+            : null;
+
+    private StoryImageAvatarCropView SelectedLocationPrimaryImageCrop =>
+        _selectedLocationId.HasValue
+            ? _locations.FirstOrDefault(x => x.LocationId == _selectedLocationId.Value)?.PrimaryImageCrop ?? StoryImageAvatarCropView.Default
+            : StoryImageAvatarCropView.Default;
 
     private RenderFragment RenderGuidanceSummary(StoryEntityFieldKey fieldKey) => builder =>
     {

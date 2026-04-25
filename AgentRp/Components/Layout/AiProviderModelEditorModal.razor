@@ -39,6 +39,7 @@
                                 @foreach (var provider in _catalog.Providers)
                                 {
                                     <button type="button"
+                                            @key="provider.ProviderId"
                                             class="list-group-item list-group-item-action @(provider.ProviderId == _selectedProviderId ? "active" : string.Empty)"
                                             @onclick="() => SelectProvider(provider.ProviderId)">
                                         <div class="d-flex justify-content-between gap-2">
@@ -117,7 +118,7 @@
                     <div class="list-group">
                         @foreach (var model in EnabledCopyTargets)
                         {
-                            <div class="list-group-item">
+                            <div @key="model.ModelId" class="list-group-item">
                                 <div class="d-flex align-items-center justify-content-between gap-2">
                                     <div class="min-w-0">
                                         <div class="fw-semibold text-truncate">@model.Name</div>
@@ -266,7 +267,7 @@
             <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-3">
                 @foreach (var kind in GetOnboardingProviderKinds())
                 {
-                    <div class="col">
+                    <div @key="kind" class="col">
                         <button type="button"
                                 class="btn btn-outline-primary h-100 w-100 text-start p-3"
                                 @onclick="() => SelectOnboardingProvider(kind)">
@@ -334,7 +335,7 @@
                     @for (var index = 0; index < _draftModels.Count; index++)
                     {
                         var model = _draftModels[index];
-                        <label class="list-group-item d-flex align-items-start gap-3">
+                        <label @key="model.ProviderModelId" class="list-group-item d-flex align-items-start gap-3">
                             <input class="form-check-input mt-1" type="checkbox" checked="@model.IsEnabled" disabled="@IsOnboardingBusy" @onchange="args => ToggleDraftModel(model.ProviderModelId, args)" />
                             <span class="min-w-0">
                                 <span class="fw-semibold d-block text-truncate">@model.DisplayName</span>
@@ -400,7 +401,9 @@
             <div>
                 <div class="small text-uppercase text-body-secondary">@DescribeProviderKind(provider.ProviderKind)</div>
                 <h5 class="mb-1">@provider.Name</h5>
-                <div class="small text-body-secondary">@provider.Models.Count(x => x.IsEnabled) of @provider.Models.Count models enabled</div>
+                <div class="small text-body-secondary">
+                    @provider.Models.Count(x => x.IsTextModelEnabled && x.IsEnabled) text, @provider.Models.Count(x => x.IsImageModelEnabled && x.IsEnabled) image
+                </div>
             </div>
             <div class="form-check form-switch">
                 <input id="@_providerEnabledInputId" class="form-check-input" type="checkbox" @bind="_providerIsEnabled" />
@@ -488,7 +491,7 @@
                 <div class="row g-2">
                     @foreach (var metric in provider.Metrics)
                     {
-                        <div class="col-md-6">
+                        <div @key="metric.MetricKind" class="col-md-6">
                             <div class="border rounded p-3 h-100">
                                 <div class="small text-uppercase text-body-secondary">@metric.Label</div>
                                 <div class="fw-semibold">@metric.Value</div>
@@ -514,7 +517,7 @@
                 <div class="list-group">
                     @foreach (var model in provider.Models)
                     {
-                        <div class="list-group-item">
+                        <div @key="model.ModelId" class="list-group-item">
                             <div class="d-flex align-items-start justify-content-between gap-2">
                                 <div class="min-w-0">
                                     <div class="fw-semibold text-truncate">@model.DisplayName</div>
@@ -523,13 +526,24 @@
                                         <div class="small text-body-secondary text-truncate">@model.ProviderModelId</div>
                                     }
                                 </div>
-                                <div class="d-flex align-items-center gap-2">
-                                    <div class="form-check form-switch mb-0">
-                                        <input class="form-check-input" type="checkbox" checked="@model.IsEnabled" @onchange="args => ToggleModelAsync(model, args)" />
+                                <div class="d-flex flex-wrap align-items-center justify-content-end gap-2">
+                                    <div class="form-check form-switch mb-0" title="Enable this model record">
+                                        <input class="form-check-input" type="checkbox" checked="@model.IsEnabled" @onchange="args => ToggleModelEnabledAsync(model, args)" />
                                     </div>
-                                    <button type="button" class="btn btn-outline-secondary btn-sm" title="Edit model settings" aria-label="Edit model settings" @onclick="() => EditModel(model)">
-                                        <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                                    </button>
+                                    <div class="form-check form-check-inline mb-0">
+                                        <input id="@($"text-model-{model.ModelId}")" class="form-check-input" type="checkbox" checked="@model.IsTextModelEnabled" disabled="@(!model.IsEnabled)" @onchange="args => ToggleTextModelAsync(model, args)" />
+                                        <label class="form-check-label small" for="@($"text-model-{model.ModelId}")">Text</label>
+                                    </div>
+                                    <div class="form-check form-check-inline mb-0">
+                                        <input id="@($"image-model-{model.ModelId}")" class="form-check-input" type="checkbox" checked="@model.IsImageModelEnabled" disabled="@(!model.IsEnabled)" @onchange="args => ToggleImageModelAsync(model, args)" />
+                                        <label class="form-check-label small" for="@($"image-model-{model.ModelId}")">Image</label>
+                                    </div>
+                                    @if (model.IsEnabled || model.HasCustomGenerationSettings)
+                                    {
+                                        <button type="button" class="btn btn-outline-secondary btn-sm" title="Edit model settings" aria-label="Edit model settings" @onclick="() => EditModel(model)">
+                                            <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                        </button>
+                                    }
                                 </div>
                             </div>
                         </div>
@@ -567,7 +581,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Loading AI providers failed.");
-            _errorMessage = "Loading AI providers failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Loading AI providers failed.", exception);
         }
         finally
         {
@@ -895,13 +909,30 @@
         }
     }
 
-    private async Task ToggleModelAsync(AiModelEditorView model, ChangeEventArgs args)
+    private async Task ToggleModelEnabledAsync(AiModelEditorView model, ChangeEventArgs args)
     {
         var isEnabled = args.Value is bool value && value;
+        await SaveModelTogglesAsync(model, isEnabled, model.IsTextModelEnabled, model.IsImageModelEnabled);
+    }
+
+    private async Task ToggleTextModelAsync(AiModelEditorView model, ChangeEventArgs args)
+    {
+        var isTextModelEnabled = args.Value is bool value && value;
+        await SaveModelTogglesAsync(model, model.IsEnabled, isTextModelEnabled, model.IsImageModelEnabled);
+    }
+
+    private async Task ToggleImageModelAsync(AiModelEditorView model, ChangeEventArgs args)
+    {
+        var isImageModelEnabled = args.Value is bool value && value;
+        await SaveModelTogglesAsync(model, model.IsEnabled, model.IsTextModelEnabled, isImageModelEnabled);
+    }
+
+    private async Task SaveModelTogglesAsync(AiModelEditorView model, bool isEnabled, bool isTextModelEnabled, bool isImageModelEnabled)
+    {
         try
         {
             await ProviderCatalogService.SaveModelAsync(
-                new SaveAiModel(model.ModelId, model.DisplayName, model.Endpoint, isEnabled, model.UseJsonSchemaResponseFormat),
+                new SaveAiModel(model.ModelId, model.DisplayName, model.Endpoint, isEnabled, isTextModelEnabled, isImageModelEnabled, model.UseJsonSchemaResponseFormat),
                 CancellationToken.None);
             await LoadAsync();
             await OnChanged.InvokeAsync();

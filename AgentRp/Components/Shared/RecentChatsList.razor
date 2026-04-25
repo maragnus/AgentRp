@@ -21,7 +21,7 @@ else
             var isRenaming = _renamingThreadId == thread.Id;
             var isStarring = _starringThreadIds.Contains(thread.Id);
 
-            <div class="@BuildThreadItemClass(isActive)">
+            <div @key="thread.Id" class="@BuildThreadItemClass(isActive)">
                 <div class="d-flex align-items-start justify-content-between gap-3">
                     @if (isEditing)
                     {
@@ -257,6 +257,7 @@ else
         {
             Logger.LogError(exception, "Renaming chat {ChatId} failed.", thread.Id);
             UserFeedbackService.ShowBackgroundError(
+                exception,
                 $"Saving the new title for \"{thread.Title}\" failed.",
                 "Rename Failed");
             _renamingThreadId = null;
@@ -278,6 +279,7 @@ else
         {
             Logger.LogError(exception, "Updating the star state for chat {ChatId} failed.", thread.Id);
             UserFeedbackService.ShowBackgroundError(
+                exception,
                 $"Updating the star for \"{thread.Title}\" failed.",
                 "Star Update Failed");
         }
@@ -328,14 +330,11 @@ else
 
         try
         {
-            var package = await ChatTransferService.BuildPackageAsync(_transferThread.Id, _transferSelection, CancellationToken.None);
-
             if (_transferMode == ChatTransferDialogMode.Duplicate)
             {
-                var result = await ChatTransferService.ApplyPackageAsync(
-                    package,
+                var result = await ChatTransferService.DuplicateThreadAsync(
+                    _transferThread.Id,
                     _transferSelection,
-                    ChatTransferApplyMode.Duplicate,
                     CancellationToken.None);
                 ResetTransferModal();
                 NavigationManager.NavigateTo($"/chat/{result.ThreadId}");
@@ -346,6 +345,7 @@ else
                 return;
             }
 
+            var package = await ChatTransferService.BuildPackageAsync(_transferThread.Id, _transferSelection, CancellationToken.None);
             var packageJson = ChatTransferService.SerializePackage(package);
             await JSRuntime.InvokeVoidAsync("chatTransfer.downloadJson", ChatTransferService.BuildExportFileName(package), packageJson);
             ResetTransferModal();
@@ -353,9 +353,10 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "{TransferMode} failed for chat {ChatId}.", _transferMode, _transferThread.Id);
-            _transferErrorMessage = _transferMode == ChatTransferDialogMode.Duplicate
+            var fallbackMessage = _transferMode == ChatTransferDialogMode.Duplicate
                 ? $"Duplicating \"{_transferThread.Title}\" failed."
                 : $"Exporting \"{_transferThread.Title}\" failed.";
+            _transferErrorMessage = UserFacingErrorMessageBuilder.Build(fallbackMessage, exception);
         }
         finally
         {

@@ -1,0 +1,46 @@
+<button type="button"
+        class="app-story-avatar-button"
+        title="@Title"
+        aria-label="@Title"
+        disabled="@(Disabled || !CanEdit)"
+        @onclick="OnClick">
+    @if (!string.IsNullOrWhiteSpace(ImageUrl))
+    {
+        <StoryAvatar Name="@Name"
+                     ImageUrl="@ImageUrl"
+                     Crop="@Crop"
+                     Class="app-story-avatar-image" />
+    }
+    else
+    {
+        <span class="app-story-avatar-initials">@StoryAvatarInitials.Build(Name)</span>
+    }
+    @if (CanEdit)
+    {
+        <span class="app-story-avatar-overlay">
+            <i class="fa-regular fa-pen" aria-hidden="true"></i>
+        </span>
+    }
+</button>
+
+@code {
+    [Parameter]
+    public string Name { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? ImageUrl { get; set; }
+
+    [Parameter]
+    public StoryImageAvatarCropView Crop { get; set; } = StoryImageAvatarCropView.Default;
+
+    [Parameter]
+    public bool CanEdit { get; set; } = true;
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    [Parameter]
+    public EventCallback OnClick { get; set; }
+
+    private string Title => CanEdit ? "Edit image" : "Image";
+}

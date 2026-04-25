@@ -26,7 +26,7 @@
                         <select id="@_formatInputId" class="form-select" @bind="_guidanceFormat">
                             @foreach (var option in Enum.GetValues<StoryFieldGuidanceFormat>())
                             {
-                                <option value="@option">@FormatGuidanceFormat(option)</option>
+                                <option @key="option" value="@option">@FormatGuidanceFormat(option)</option>
                             }
                         </select>
                     </div>
@@ -36,7 +36,7 @@
                         <select id="@_detailInputId" class="form-select" @bind="_detailLevel">
                             @foreach (var option in Enum.GetValues<StoryFieldGuidanceDetailLevel>())
                             {
-                                <option value="@option">@FormatDetailLevel(option)</option>
+                                <option @key="option" value="@option">@FormatDetailLevel(option)</option>
                             }
                         </select>
                     </div>
@@ -174,7 +174,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving field guidance failed for {EntityKind} {FieldKey}.", EntityKind, FieldKey);
-            _errorMessage = $"Saving guidance for '{_fieldLabel}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Saving guidance for '{_fieldLabel}' failed.", exception);
         }
         finally
         {

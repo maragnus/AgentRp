@@ -2,6 +2,11 @@
         class="@ButtonClass"
         @onclick="HandleClickAsync">
     <div class="d-flex align-items-start justify-content-between gap-2">
+        <StoryAvatar Name="@Name"
+                     ImageUrl="@ImageUrl"
+                     Crop="@ImageCrop"
+                     Class="app-story-avatar-list-item flex-shrink-0" />
+
         <div class="text-start flex-grow-1 overflow-hidden">
             <div class="fw-semibold text-truncate">@Name</div>
 
@@ -26,6 +31,12 @@
 
     [Parameter]
     public string Summary { get; set; } = string.Empty;
+
+    [Parameter]
+    public string? ImageUrl { get; set; }
+
+    [Parameter]
+    public StoryImageAvatarCropView ImageCrop { get; set; } = StoryImageAvatarCropView.Default;
 
     [Parameter]
     public bool IsSelected { get; set; }

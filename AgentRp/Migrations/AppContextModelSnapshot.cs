@@ -17,7 +17,7 @@ namespace AgentRp.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.6")
+                .HasAnnotation("ProductVersion", "10.0.7")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -41,6 +41,12 @@ namespace AgentRp.Migrations
                         .HasColumnType("nvarchar(1000)");
 
                     b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsImageModelEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsTextModelEnabled")
                         .HasColumnType("bit");
 
                     b.Property<string>("PlanningSettingsJson")
@@ -358,6 +364,16 @@ namespace AgentRp.Migrations
                     b.Property<Guid?>("ActorCharacterId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("AiModelId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("AiProviderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AiProviderKind")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
                     b.Property<Guid?>("AssistantMessageId")
                         .HasColumnType("uniqueidentifier");
 
@@ -403,6 +419,8 @@ namespace AgentRp.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ThreadId", "AiProviderId");
 
                     b.HasIndex("ThreadId", "TargetMessageId");
 
@@ -552,6 +570,174 @@ namespace AgentRp.Migrations
                     b.ToTable("StoryChatSnapshots");
                 });
 
+            modelBuilder.Entity("AgentRp.Data.StoryImageAsset", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("AiModelId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AiModelName")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<Guid?>("AiProviderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AiProviderKind")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("AiProviderName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int?>("AvatarFocusXPercent")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("AvatarFocusYPercent")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("AvatarZoomPercent")
+                        .HasColumnType("int");
+
+                    b.Property<byte[]>("Bytes")
+                        .IsRequired()
+                        .HasColumnType("varbinary(max)");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("FileName")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("FinalPrompt")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("GenerationRationale")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("Height")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsTransient")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("OptimizationAttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("OptimizationLastAttemptUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("OptimizationLastError")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("OptimizationQueuedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("OptimizedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ProviderModelId")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("SourceKind")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<Guid>("ThreadId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("TransientExpiresUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("TransientSessionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("UserPrompt")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("Width")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedUtc");
+
+                    b.HasIndex("IsTransient", "TransientExpiresUtc");
+
+                    b.HasIndex("ThreadId", "CreatedUtc");
+
+                    b.HasIndex("ThreadId", "TransientSessionId");
+
+                    b.HasIndex("OptimizedUtc", "OptimizationQueuedUtc", "OptimizationAttemptCount");
+
+                    b.ToTable("StoryImageAssets");
+                });
+
+            modelBuilder.Entity("AgentRp.Data.StoryImageLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EntityId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("EntityKind")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<Guid>("ImageId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("MessageId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ProcessRunId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<Guid>("ThreadId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ImageId");
+
+                    b.HasIndex("MessageId");
+
+                    b.HasIndex("ProcessRunId");
+
+                    b.HasIndex("ThreadId", "ImageId");
+
+                    b.HasIndex("ThreadId", "EntityKind", "EntityId");
+
+                    b.ToTable("StoryImageLinks");
+                });
+
             modelBuilder.Entity("AgentRp.Data.AiModel", b =>
                 {
                     b.HasOne("AgentRp.Data.AiProvider", "Provider")
@@ -650,6 +836,25 @@ namespace AgentRp.Migrations
                     b.Navigation("Thread");
                 });
 
+            modelBuilder.Entity("AgentRp.Data.StoryImageLink", b =>
+                {
+                    b.HasOne("AgentRp.Data.StoryImageAsset", "Image")
+                        .WithMany("Links")
+                        .HasForeignKey("ImageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("AgentRp.Data.ChatThread", "Thread")
+                        .WithMany("ImageLinks")
+                        .HasForeignKey("ThreadId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Image");
+
+                    b.Navigation("Thread");
+                });
+
             modelBuilder.Entity("AgentRp.Data.AiProvider", b =>
                 {
                     b.Navigation("Metrics");
@@ -660,6 +865,8 @@ namespace AgentRp.Migrations
             modelBuilder.Entity("AgentRp.Data.ChatThread", b =>
                 {
                     b.Navigation("AppearanceEntries");
+
+                    b.Navigation("ImageLinks");
 
                     b.Navigation("Messages");
 
@@ -673,6 +880,11 @@ namespace AgentRp.Migrations
             modelBuilder.Entity("AgentRp.Data.ProcessRun", b =>
                 {
                     b.Navigation("Steps");
+                });
+
+            modelBuilder.Entity("AgentRp.Data.StoryImageAsset", b =>
+                {
+                    b.Navigation("Links");
                 });
 #pragma warning restore 612, 618
         }

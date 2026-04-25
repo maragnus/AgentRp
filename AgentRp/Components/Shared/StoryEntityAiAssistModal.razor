@@ -53,7 +53,7 @@
                 <div class="d-flex flex-column gap-3 border-top pt-3">
                     @foreach (var field in GetDraftFields())
                     {
-                        <div>
+                        <div @key="field.Label">
                             <ReadOnlyTextField Label="@field.Label"
                                                Value="@field.Value"
                                                IsMultiline="@field.IsMultiline"

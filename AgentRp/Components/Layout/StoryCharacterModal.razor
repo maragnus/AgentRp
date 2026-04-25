@@ -5,6 +5,7 @@
 @inject ILogger<StoryCharacterModal> Logger
 
 <AppModal IsOpen="IsOpen" Title="Characters" OnClose="CloseAsync" DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down">
+    <ChildContent>
     @if (_isLoading)
     {
         <div class="d-flex align-items-center gap-3 py-3">
@@ -40,7 +41,10 @@
                             var isSelected = _selectedCharacterId == character.CharacterId;
 
                             <StoryEntitySelectorListItem Name="@character.Name"
+                                                         @key="character.CharacterId"
                                                          Summary="@character.UserSheet.Summary"
+                                                         ImageUrl="@character.PrimaryImageUrl"
+                                                         ImageCrop="@character.PrimaryImageCrop"
                                                          IsSelected="@isSelected"
                                                          OnClick="() => SelectCharacter(character.CharacterId)">
                                 <StatusContent>
@@ -80,19 +84,29 @@
                     @if (_activeTab == StoryCharacterEditorTab.UserFriendly)
                     {
                         <div class="d-flex flex-column gap-3">
-                            <div>
-                                <div class="d-flex align-items-center justify-content-between gap-2">
-                                    <label class="form-label mb-0" for="story-character-name">Name</label>
-                                    <button type="button"
-                                            class="btn btn-outline-secondary btn-sm"
-                                            title="Edit name guidance"
-                                            aria-label="Edit name guidance"
-                                            @onclick='() => OpenGuidance(StoryEntityFieldKey.Name)'>
-                                        <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                                    </button>
+                            <div class="d-flex align-items-start gap-3">
+                                <StoryEntityImagePicker ThreadId="ThreadId"
+                                                        EntityKind="StoryEntityKind.Character"
+                                                        EntityId="_selectedCharacterId"
+                                                        EntityName="@BuildDisplayName()"
+                                                        PrimaryImageId="@SelectedCharacterPrimaryImageId"
+                                                        PrimaryImageUrl="@SelectedCharacterPrimaryImageUrl"
+                                                        PrimaryImageCrop="@SelectedCharacterPrimaryImageCrop"
+                                                        OnChanged="HandleImageChangedAsync" />
+                                <div class="flex-grow-1 min-w-0">
+                                    <div class="d-flex align-items-center justify-content-between gap-2">
+                                        <label class="form-label mb-0" for="story-character-name">Name</label>
+                                        <button type="button"
+                                                class="btn btn-outline-secondary btn-sm"
+                                                title="Edit name guidance"
+                                                aria-label="Edit name guidance"
+                                                @onclick='() => OpenGuidance(StoryEntityFieldKey.Name)'>
+                                            <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                    <input id="story-character-name" class="form-control" @bind="_name" />
+                                    @RenderGuidanceSummary(StoryEntityFieldKey.Name)
                                 </div>
-                                <input id="story-character-name" class="form-control" @bind="_name" />
-                                @RenderGuidanceSummary(StoryEntityFieldKey.Name)
                             </div>
 
                             <div>
@@ -199,41 +213,6 @@
                                 <label class="form-check-label" for="story-character-presence">Currently in the scene</label>
                             </div>
 
-                            <div class="d-flex flex-wrap justify-content-between gap-2 border-top pt-3">
-                                <div class="d-flex gap-2">
-                                    @if (_selectedCharacterId.HasValue)
-                                    {
-                                        <BusyButton Class="btn btn-outline-danger"
-                                                    IsBusy="_isDeleting"
-                                                    Disabled="@(_isSavingUserSheet || _isDeleting || IsModelOperationBusy)"
-                                                    BusyText="Deleting..."
-                                                    OnClick="DeleteAsync">
-                                            <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
-                                            Delete
-                                        </BusyButton>
-                                    }
-                                </div>
-
-                                <div class="d-flex gap-2">
-                                    <button type="button"
-                                            class="btn btn-outline-primary"
-                                            title="@BuildAiButtonTitle()"
-                                            aria-label="@BuildAiButtonTitle()"
-                                            disabled="@IsModelOperationBusy"
-                                            @onclick="OpenAiAssist">
-                                        <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
-                                    </button>
-                                    <button type="button" class="btn btn-outline-secondary" disabled="@IsAnyBusy" @onclick="CloseAsync">Close</button>
-                                    <BusyButton Class="btn btn-primary"
-                                                IsBusy="_isSavingUserSheet"
-                                                Disabled="@IsAnyBusy"
-                                                BusyText="Saving..."
-                                                OnClick="SaveUserFriendlyAsync">
-                                        <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
-                                        Save User-Friendly
-                                    </BusyButton>
-                                </div>
-                            </div>
                         </div>
                     }
                     else
@@ -243,25 +222,6 @@
                                 <div class="d-flex align-items-center gap-2">
                                     <span class="@BuildModelSheetBadgePillClass(_modelSheetStatus)">@BuildModelSheetStatusText(_modelSheetStatus)</span>
                                     <span class="small text-body-secondary">AI uses only the saved model-ready sheet.</span>
-                                </div>
-
-                                <div class="d-flex gap-2">
-                                    <BusyButton Class="btn btn-outline-primary btn-sm"
-                                                IsBusy="_isGeneratingModelSheet"
-                                                Disabled="@(!_selectedCharacterId.HasValue || IsAnyBusy)"
-                                                BusyText="Generating..."
-                                                OnClick="GenerateModelSheetAsync">
-                                        <i class="fa-regular fa-wand-magic-sparkles me-2" aria-hidden="true"></i>
-                                        @(_modelSheetStatus == StoryCharacterModelSheetStatus.Missing ? "Generate" : "Regenerate")
-                                    </BusyButton>
-                                    <BusyButton Class="btn btn-primary btn-sm"
-                                                IsBusy="_isSavingModelSheet"
-                                                Disabled="@(!_selectedCharacterId.HasValue || IsAnyBusy)"
-                                                BusyText="Saving..."
-                                                OnClick="SaveModelReadyAsync">
-                                        <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
-                                        Save Model-Ready
-                                    </BusyButton>
                                 </div>
                             </div>
 
@@ -334,16 +294,80 @@
                                 <label class="form-label" for="story-character-model-private">Private Motivations</label>
                                 <textarea id="story-character-model-private" class="form-control" rows="3" @bind="_modelPrivateMotivations"></textarea>
                             </div>
-
-                            <div class="d-flex justify-content-end gap-2 border-top pt-3">
-                                <button type="button" class="btn btn-outline-secondary" disabled="@IsAnyBusy" @onclick="CloseAsync">Close</button>
-                            </div>
                         </div>
                     }
                 </div>
             </div>
         </div>
     }
+    </ChildContent>
+    <FooterContent>
+        @if (!_isLoading)
+        {
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 w-100">
+                <div class="d-flex gap-2">
+                    @if (_selectedCharacterId.HasValue)
+                    {
+                        <BusyButton Class="btn btn-outline-danger"
+                                    IsBusy="_isDeleting"
+                                    Disabled="@(_isSavingUserSheet || _isDeleting || IsModelOperationBusy)"
+                                    BusyText="Deleting..."
+                                    OnClick="DeleteAsync">
+                            <i class="fa-regular fa-trash me-2" aria-hidden="true"></i>
+                            Delete
+                        </BusyButton>
+                    }
+                </div>
+
+                <div class="d-flex flex-wrap justify-content-end gap-2">
+                    @if (_activeTab == StoryCharacterEditorTab.UserFriendly)
+                    {
+                        <button type="button"
+                                class="btn btn-outline-primary"
+                                title="@BuildAiButtonTitle()"
+                                aria-label="@BuildAiButtonTitle()"
+                                disabled="@IsModelOperationBusy"
+                                @onclick="OpenAiAssist">
+                            <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" disabled="@IsAnyBusy" @onclick="CloseAsync">Close</button>
+                        <BusyButton Class="btn btn-primary"
+                                    IsBusy="_isSavingUserSheet"
+                                    Disabled="@IsAnyBusy"
+                                    BusyText="Saving..."
+                                    OnClick="SaveUserFriendlyAsync">
+                            <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                            Save User-Friendly
+                        </BusyButton>
+                    }
+                    else
+                    {
+                        <BusyButton Class="btn btn-outline-primary"
+                                    IsBusy="_isGeneratingModelSheet"
+                                    Disabled="@(!_selectedCharacterId.HasValue || IsAnyBusy)"
+                                    BusyText="Generating..."
+                                    OnClick="GenerateModelSheetAsync">
+                            <i class="fa-regular fa-wand-magic-sparkles me-2" aria-hidden="true"></i>
+                            @(_modelSheetStatus == StoryCharacterModelSheetStatus.Missing ? "Generate" : "Regenerate")
+                        </BusyButton>
+                        <BusyButton Class="btn btn-primary"
+                                    IsBusy="_isSavingModelSheet"
+                                    Disabled="@(!_selectedCharacterId.HasValue || IsAnyBusy)"
+                                    BusyText="Saving..."
+                                    OnClick="SaveModelReadyAsync">
+                            <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+                            Save Model-Ready
+                        </BusyButton>
+                        <button type="button" class="btn btn-outline-secondary" disabled="@IsAnyBusy" @onclick="CloseAsync">Close</button>
+                    }
+                </div>
+            </div>
+        }
+        else
+        {
+            <button type="button" class="btn btn-outline-secondary" @onclick="CloseAsync">Close</button>
+        }
+    </FooterContent>
 </AppModal>
 
 <StoryEntityAiAssistModal ThreadId="ThreadId"
@@ -629,7 +653,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Deleting character {CharacterId} failed for chat {ChatId}.", _selectedCharacterId.Value, ThreadId);
-            _errorMessage = $"Deleting character '{displayName}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Deleting character '{displayName}' failed.", exception);
         }
         finally
         {
@@ -641,6 +665,12 @@
     {
         if (OnChanged.HasDelegate)
             await OnChanged.InvokeAsync();
+    }
+
+    private async Task HandleImageChangedAsync()
+    {
+        await LoadAsync(_selectedCharacterId);
+        await NotifyChangedAsync();
     }
 
     private void OpenAiAssist() => _isAiAssistOpen = true;
@@ -691,6 +721,21 @@
     private Task CloseAsync() => IsAnyBusy ? Task.CompletedTask : OnClose.InvokeAsync();
 
     private string BuildDisplayName() => string.IsNullOrWhiteSpace(_name) ? "Untitled Character" : _name.Trim();
+
+    private Guid? SelectedCharacterPrimaryImageId =>
+        _selectedCharacterId.HasValue
+            ? _characters.FirstOrDefault(x => x.CharacterId == _selectedCharacterId.Value)?.PrimaryImageId
+            : null;
+
+    private string? SelectedCharacterPrimaryImageUrl =>
+        _selectedCharacterId.HasValue
+            ? _characters.FirstOrDefault(x => x.CharacterId == _selectedCharacterId.Value)?.PrimaryImageUrl
+            : null;
+
+    private StoryImageAvatarCropView SelectedCharacterPrimaryImageCrop =>
+        _selectedCharacterId.HasValue
+            ? _characters.FirstOrDefault(x => x.CharacterId == _selectedCharacterId.Value)?.PrimaryImageCrop ?? StoryImageAvatarCropView.Default
+            : StoryImageAvatarCropView.Default;
 
     private string BuildCreateButtonTitle() => IsCreatingCharacter
         ? "Already creating a new character"

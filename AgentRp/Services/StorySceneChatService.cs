@@ -57,9 +57,10 @@ public sealed class StorySceneChatService(
             .Where(x => !x.IsArchived)
             .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var primaryImages = await LoadPrimaryImagesAsync(dbContext, story, cancellationToken);
 
         var selectedSpeakerId = ResolveSelectedSpeakerId(thread.SelectedSpeakerCharacterId, characters);
-        var speakers = BuildSpeakers(story, characters, selectedSpeakerId);
+        var speakers = BuildSpeakers(story, characters, selectedSpeakerId, primaryImages);
         var selectedSpeaker = speakers.First(x => x.IsSelected);
         var processStatusMap = runs
             .Where(x => x.TargetMessageId.HasValue)
@@ -88,7 +89,7 @@ public sealed class StorySceneChatService(
             .OrderBy(x => x.CreatedUtc)
             .ToLookup(x => x.ParentMessageId);
         var descendantCounts = BuildDescendantCounts(messages);
-        var transcript = BuildTranscript(path, messages, childrenLookup, descendantCounts, selectedSpeakerId, characters, processMap, snapshotCandidateMessageIds, snapshots, appearanceEntries);
+        var transcript = BuildTranscript(path, messages, childrenLookup, descendantCounts, selectedSpeakerId, characters, primaryImages, processMap, snapshotCandidateMessageIds, snapshots, appearanceEntries);
 
         var currentLocationName = story.Scene.CurrentLocationId.HasValue
             ? story.Locations.Entries.FirstOrDefault(x => x.Id == story.Scene.CurrentLocationId.Value)?.Name
@@ -373,6 +374,9 @@ public sealed class StorySceneChatService(
                 AssistantMessageId = targetMessage.Id,
                 TargetMessageId = targetMessage.Id,
                 ActorCharacterId = sourceMessage.SpeakerCharacterId,
+                AiModelId = agent.ModelId,
+                AiProviderId = agent.ProviderId,
+                AiProviderKind = agent.ProviderKind,
                 Summary = $"Regenerating prose from the saved plan as {sourceSpeakerName}.",
                 Stage = "Writing",
                 ContextJson = SerializeContext(new StoryMessageProcessContext(
@@ -781,6 +785,9 @@ public sealed class StorySceneChatService(
                 AssistantMessageId = targetMessage.Id,
                 TargetMessageId = targetMessage.Id,
                 ActorCharacterId = IsRespondMode(request.Mode) ? null : request.SpeakerCharacterId,
+                AiModelId = agent.ModelId,
+                AiProviderId = agent.ProviderId,
+                AiProviderKind = agent.ProviderKind,
                 Summary = BuildInitialRunSummary(request.Mode, actor),
                 Stage = "Appearance",
                 ContextJson = SerializeContext(processContext),
@@ -1580,8 +1587,8 @@ public sealed class StorySceneChatService(
                 string.Empty,
                 string.Empty,
                 "Speak in concise descriptive prose. Introduce or clarify facts without inventing contradictions.",
-                BuildNarratorHiddenKnowledge(characters));
-        }
+            BuildNarratorHiddenKnowledge(characters));
+    }
 
         var character = characters.FirstOrDefault(x => x.Id == speakerCharacterId.Value)
             ?? throw new InvalidOperationException("Building the scene context failed because the selected speaker could not be found.");
@@ -1604,6 +1611,41 @@ public sealed class StorySceneChatService(
             string.Empty);
     }
 
+    private static async Task<Dictionary<Guid, PrimaryImageData>> LoadPrimaryImagesAsync(
+        DbAppContext dbContext,
+        ChatStory story,
+        CancellationToken cancellationToken)
+    {
+        var imageIds = story.Characters.Entries
+            .Select(x => x.PrimaryImageId)
+            .Where(x => x.HasValue)
+            .Select(x => x!.Value)
+            .Distinct()
+            .ToList();
+        if (imageIds.Count == 0)
+            return [];
+
+        return await dbContext.StoryImageAssets
+            .AsNoTracking()
+            .Where(x => imageIds.Contains(x.Id))
+            .ToDictionaryAsync(
+                x => x.Id,
+                x => new PrimaryImageData(StoryImageUrlBuilder.Build(x.Id), BuildCrop(x)),
+                cancellationToken);
+    }
+
+    private static string? GetPrimaryImageUrl(IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages, Guid? imageId) =>
+        imageId.HasValue && primaryImages.TryGetValue(imageId.Value, out var data) ? data.ImageUrl : null;
+
+    private static StoryImageAvatarCropView GetPrimaryImageCrop(IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages, Guid? imageId) =>
+        imageId.HasValue && primaryImages.TryGetValue(imageId.Value, out var data) ? data.Crop : StoryImageAvatarCropView.Default;
+
+    private static StoryImageAvatarCropView BuildCrop(StoryImageAsset image) =>
+        new(
+            Math.Clamp(image.AvatarFocusXPercent ?? StoryImageAvatarCropView.Default.FocusXPercent, 0, 100),
+            Math.Clamp(image.AvatarFocusYPercent ?? StoryImageAvatarCropView.Default.FocusYPercent, 0, 100),
+            Math.Clamp(image.AvatarZoomPercent ?? StoryImageAvatarCropView.Default.ZoomPercent, 100, 300));
+
     private static string BuildNarratorHiddenKnowledge(IReadOnlyList<StoryCharacterDocument> characters)
     {
         var hiddenDetails = characters
@@ -1624,7 +1666,8 @@ public sealed class StorySceneChatService(
     private static IReadOnlyList<StorySceneSpeakerView> BuildSpeakers(
         ChatStory story,
         IReadOnlyList<StoryCharacterDocument> characters,
-        Guid? selectedSpeakerId)
+        Guid? selectedSpeakerId,
+        IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages)
     {
         var speakers = new List<StorySceneSpeakerView>
         {
@@ -1634,7 +1677,10 @@ public sealed class StorySceneChatService(
                 "Injects scene facts and framing details.",
                 true,
                 true,
-                !selectedSpeakerId.HasValue)
+                !selectedSpeakerId.HasValue,
+                null,
+                null,
+                StoryImageAvatarCropView.Default)
         };
 
         speakers.AddRange(characters.Select(character => new StorySceneSpeakerView(
@@ -1643,7 +1689,10 @@ public sealed class StorySceneChatService(
             StoryCharacterModelSheetSupport.GetUserSheet(character).Summary,
             false,
             story.Scene.PresentCharacterIds.Contains(character.Id),
-            selectedSpeakerId == character.Id)));
+            selectedSpeakerId == character.Id,
+            character.PrimaryImageId,
+            GetPrimaryImageUrl(primaryImages, character.PrimaryImageId),
+            GetPrimaryImageCrop(primaryImages, character.PrimaryImageId))));
 
         return speakers;
     }
@@ -1654,11 +1703,15 @@ public sealed class StorySceneChatService(
         int descendantCount,
         Guid? selectedSpeakerId,
         IReadOnlyList<StoryCharacterDocument> characters,
+        IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages,
         IReadOnlyDictionary<Guid, StorySceneMessageProcessView> processMap,
         IReadOnlySet<Guid> snapshotCandidateMessageIds,
         StorySceneBranchNavigatorView? branchNavigator)
     {
         var process = message.SourceProcessRunId.HasValue && processMap.TryGetValue(message.Id, out var mappedProcess) ? mappedProcess : null;
+        var speaker = message.SpeakerCharacterId.HasValue
+            ? characters.FirstOrDefault(x => x.Id == message.SpeakerCharacterId.Value)
+            : null;
         var canonicalSpeakerName = ResolveMessageSpeakerName(message, characters, process);
         var isSelectedSpeaker = selectedSpeakerId == message.SpeakerCharacterId
             || (!selectedSpeakerId.HasValue && message.MessageKind == ChatMessageKind.Narration);
@@ -1674,6 +1727,9 @@ public sealed class StorySceneChatService(
             canonicalSpeakerName,
             isSelectedSpeaker ? "You" : canonicalSpeakerName,
             message.MessageKind == ChatMessageKind.Narration,
+            speaker?.PrimaryImageId,
+            GetPrimaryImageUrl(primaryImages, speaker?.PrimaryImageId),
+            GetPrimaryImageCrop(primaryImages, speaker?.PrimaryImageId),
             isSelectedSpeaker,
             canSaveInPlace,
             canSaveInPlace,
@@ -1693,6 +1749,7 @@ public sealed class StorySceneChatService(
         IReadOnlyDictionary<Guid, int> descendantCounts,
         Guid? selectedSpeakerId,
         IReadOnlyList<StoryCharacterDocument> characters,
+        IReadOnlyDictionary<Guid, PrimaryImageData> primaryImages,
         IReadOnlyDictionary<Guid, StorySceneMessageProcessView> processMap,
         IReadOnlySet<Guid> snapshotCandidateMessageIds,
         IReadOnlyList<StorySceneSnapshotView> snapshots,
@@ -1731,6 +1788,7 @@ public sealed class StorySceneChatService(
                     descendantCounts.GetValueOrDefault(message.Id),
                     selectedSpeakerId,
                     characters,
+                    primaryImages,
                     processMap,
                     snapshotCandidateMessageIds,
                     branchNavigator),
@@ -2254,6 +2312,9 @@ public sealed class StorySceneChatService(
             AssistantMessageId = targetMessageId,
             TargetMessageId = targetMessageId,
             ActorCharacterId = speakerCharacterId,
+            AiModelId = sourceRun.AiModelId,
+            AiProviderId = sourceRun.AiProviderId,
+            AiProviderKind = sourceRun.AiProviderKind,
             Summary = sourceRun.Summary,
             Stage = sourceRun.Stage,
             ContextJson = sourceRun.ContextJson,
@@ -3224,6 +3285,8 @@ public sealed class StorySceneChatService(
 
         public string WhyThisCharacter { get; set; } = string.Empty;
     }
+
+    private sealed record PrimaryImageData(string ImageUrl, StoryImageAvatarCropView Crop);
 
     private static StoryTurnShape NormalizeTurnShape(string? value)
     {

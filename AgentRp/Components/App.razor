@@ -11,12 +11,12 @@
     <link rel="stylesheet" href="@Assets["AgentRp.styles.css"]" />
     <link rel="stylesheet" href="https://kit.fontawesome.com/18a0b0524b.css" crossorigin="anonymous">
     <ImportMap />
-    <link rel="icon" type="image/png" href="favicon.png" />
-    <HeadOutlet @rendermode="InteractiveServer" />
+    <link rel="icon" type="image/png" href="@Assets["agentrp-icon.png"]" />
+    <HeadOutlet @rendermode="new InteractiveServerRenderMode(prerender: false)" />
 </head>
 
 <body>
-    <Routes @rendermode="InteractiveServer" />
+    <Routes @rendermode="new InteractiveServerRenderMode(prerender: false)" />
     <ReconnectModal />
     <script src="@Assets["_framework/blazor.web.js"]"></script>
     <script src="@Assets["lib/bootstrap/dist/js/bootstrap.bundle.min.js"]"></script>

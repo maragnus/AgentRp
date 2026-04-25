@@ -18,6 +18,10 @@ public sealed class AppContext(DbContextOptions<AppContext> options) : DbContext
 
     public DbSet<StoryChatAppearanceEntry> StoryChatAppearanceEntries => Set<StoryChatAppearanceEntry>();
 
+    public DbSet<StoryImageAsset> StoryImageAssets => Set<StoryImageAsset>();
+
+    public DbSet<StoryImageLink> StoryImageLinks => Set<StoryImageLink>();
+
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
 
     public DbSet<AiProvider> AiProviders => Set<AiProvider>();
@@ -60,6 +64,10 @@ public sealed class AppContext(DbContextOptions<AppContext> options) : DbContext
                 .WithOne(x => x.Thread)
                 .HasForeignKey(x => x.ThreadId)
                 .OnDelete(DeleteBehavior.Cascade);
+            builder.HasMany(x => x.ImageLinks)
+                .WithOne(x => x.Thread)
+                .HasForeignKey(x => x.ThreadId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ChatStory>(builder =>
@@ -99,8 +107,10 @@ public sealed class AppContext(DbContextOptions<AppContext> options) : DbContext
             builder.Property(x => x.Summary).HasColumnType("nvarchar(max)");
             builder.Property(x => x.Stage).HasColumnType("nvarchar(max)");
             builder.Property(x => x.ContextJson).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.AiProviderKind).HasConversion<string>().HasMaxLength(80);
             builder.HasIndex(x => new { x.ThreadId, x.UserMessageId });
             builder.HasIndex(x => new { x.ThreadId, x.TargetMessageId });
+            builder.HasIndex(x => new { x.ThreadId, x.AiProviderId });
             builder.HasMany(x => x.Steps)
                 .WithOne(x => x.Run)
                 .HasForeignKey(x => x.ProcessRunId)
@@ -122,6 +132,49 @@ public sealed class AppContext(DbContextOptions<AppContext> options) : DbContext
             builder.HasKey(x => x.Key);
             builder.Property(x => x.Key).HasMaxLength(200);
             builder.Property(x => x.JsonValue).HasColumnType("nvarchar(max)");
+        });
+
+        modelBuilder.Entity<StoryImageAsset>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.ContentType).HasMaxLength(100);
+            builder.Property(x => x.FileName).HasMaxLength(500);
+            builder.Property(x => x.Title).HasMaxLength(500);
+            builder.Property(x => x.SourceKind).HasConversion<string>().HasMaxLength(80);
+            builder.Property(x => x.Bytes).HasColumnType("varbinary(max)");
+            builder.Property(x => x.UserPrompt).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.FinalPrompt).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.GenerationRationale).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.AvatarFocusXPercent);
+            builder.Property(x => x.AvatarFocusYPercent);
+            builder.Property(x => x.AvatarZoomPercent);
+            builder.Property(x => x.TransientSessionId);
+            builder.Property(x => x.TransientExpiresUtc);
+            builder.Property(x => x.AiProviderKind).HasConversion<string>().HasMaxLength(80);
+            builder.Property(x => x.AiProviderName).HasMaxLength(200);
+            builder.Property(x => x.AiModelName).HasMaxLength(500);
+            builder.Property(x => x.ProviderModelId).HasMaxLength(500);
+            builder.Property(x => x.OptimizationLastError).HasColumnType("nvarchar(max)");
+            builder.HasIndex(x => x.CreatedUtc);
+            builder.HasIndex(x => new { x.ThreadId, x.CreatedUtc });
+            builder.HasIndex(x => new { x.IsTransient, x.TransientExpiresUtc });
+            builder.HasIndex(x => new { x.ThreadId, x.TransientSessionId });
+            builder.HasIndex(x => new { x.OptimizedUtc, x.OptimizationQueuedUtc, x.OptimizationAttemptCount });
+            builder.HasMany(x => x.Links)
+                .WithOne(x => x.Image)
+                .HasForeignKey(x => x.ImageId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<StoryImageLink>(builder =>
+        {
+            builder.HasKey(x => x.Id);
+            builder.Property(x => x.EntityKind).HasConversion<string>().HasMaxLength(80);
+            builder.Property(x => x.Purpose).HasConversion<string>().HasMaxLength(80);
+            builder.HasIndex(x => new { x.ThreadId, x.EntityKind, x.EntityId });
+            builder.HasIndex(x => new { x.ThreadId, x.ImageId });
+            builder.HasIndex(x => x.MessageId);
+            builder.HasIndex(x => x.ProcessRunId);
         });
 
         modelBuilder.Entity<AiProvider>(builder =>
@@ -226,6 +279,8 @@ public sealed class ChatThread
     public List<StoryChatSnapshot> Snapshots { get; set; } = [];
 
     public List<StoryChatAppearanceEntry> AppearanceEntries { get; set; } = [];
+
+    public List<StoryImageLink> ImageLinks { get; set; } = [];
 }
 
 public sealed class ChatMessage
@@ -268,6 +323,12 @@ public sealed class ProcessRun
     public Guid? TargetMessageId { get; set; }
 
     public Guid? ActorCharacterId { get; set; }
+
+    public Guid? AiModelId { get; set; }
+
+    public Guid? AiProviderId { get; set; }
+
+    public AiProviderKind? AiProviderKind { get; set; }
 
     public required string Summary { get; set; }
 
@@ -371,6 +432,96 @@ public sealed class StoryChatAppearanceEntry
     public ChatThread Thread { get; set; } = null!;
 }
 
+public sealed class StoryImageAsset
+{
+    public Guid Id { get; set; }
+
+    public Guid ThreadId { get; set; }
+
+    public required byte[] Bytes { get; set; }
+
+    public required string ContentType { get; set; }
+
+    public string? FileName { get; set; }
+
+    public string? Title { get; set; }
+
+    public int? Width { get; set; }
+
+    public int? Height { get; set; }
+
+    public StoryImageSourceKind SourceKind { get; set; }
+
+    public string? UserPrompt { get; set; }
+
+    public string? FinalPrompt { get; set; }
+
+    public string? GenerationRationale { get; set; }
+
+    public int? AvatarFocusXPercent { get; set; }
+
+    public int? AvatarFocusYPercent { get; set; }
+
+    public int? AvatarZoomPercent { get; set; }
+
+    public bool IsTransient { get; set; }
+
+    public Guid? TransientSessionId { get; set; }
+
+    public DateTime? TransientExpiresUtc { get; set; }
+
+    public Guid? AiProviderId { get; set; }
+
+    public AiProviderKind? AiProviderKind { get; set; }
+
+    public string? AiProviderName { get; set; }
+
+    public Guid? AiModelId { get; set; }
+
+    public string? AiModelName { get; set; }
+
+    public string? ProviderModelId { get; set; }
+
+    public DateTime? OptimizedUtc { get; set; }
+
+    public DateTime? OptimizationQueuedUtc { get; set; }
+
+    public int OptimizationAttemptCount { get; set; }
+
+    public DateTime? OptimizationLastAttemptUtc { get; set; }
+
+    public string? OptimizationLastError { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+
+    public List<StoryImageLink> Links { get; set; } = [];
+}
+
+public sealed class StoryImageLink
+{
+    public Guid Id { get; set; }
+
+    public Guid ImageId { get; set; }
+
+    public Guid ThreadId { get; set; }
+
+    public StoryImageEntityKind EntityKind { get; set; }
+
+    public Guid EntityId { get; set; }
+
+    public Guid? MessageId { get; set; }
+
+    public Guid? ProcessRunId { get; set; }
+
+    public StoryImageLinkPurpose Purpose { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+
+    public StoryImageAsset Image { get; set; } = null!;
+
+    public ChatThread Thread { get; set; } = null!;
+}
+
 public sealed class AppSetting
 {
     public required string Key { get; set; }
@@ -437,6 +588,10 @@ public sealed class AiModel
 
     public bool IsEnabled { get; set; }
 
+    public bool IsTextModelEnabled { get; set; } = true;
+
+    public bool IsImageModelEnabled { get; set; }
+
     public bool UseJsonSchemaResponseFormat { get; set; } = true;
 
     public int SortOrder { get; set; }
@@ -478,6 +633,25 @@ public enum AiProviderKind
     Claude,
     HuggingFaceInferenceEndpoint,
     OpenAiCompatible
+}
+
+public enum StoryImageSourceKind
+{
+    Uploaded,
+    Generated
+}
+
+public enum StoryImageEntityKind
+{
+    Character,
+    Location,
+    Item
+}
+
+public enum StoryImageLinkPurpose
+{
+    Gallery,
+    Reference
 }
 
 public enum ChatRole

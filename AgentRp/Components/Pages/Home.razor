@@ -45,38 +45,6 @@ else
                         <span>@MessageCountText</span>
                     </div>
                 </div>
-
-                <div class="ms-lg-auto d-flex flex-wrap align-items-center gap-2">
-                    @if (!_showProcessPanels && ActiveRunningProcess is not null)
-                    {
-                        <span class="badge text-bg-light border text-body-secondary">@ActiveRunningProcess.DisplayStatusText</span>
-
-                        <StopOperationButton Class="btn btn-outline-danger btn-sm"
-                                             IsStopping="@IsStoppingRun(ActiveRunningProcess.RunId)"
-                                             Disabled="@IsStoppingRun(ActiveRunningProcess.RunId)"
-                                             Title="Stop this scene generation"
-                                             OnClick="() => StopSceneRunAsync(ActiveRunningProcess.RunId)" />
-                    }
-
-                    <button type="button"
-                            class="btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button"
-                            title="Debug appearance"
-                            aria-label="Debug appearance"
-                            disabled="@(_isAppearanceReplayLoading || _isSubmitting)"
-                            @onclick="OpenAppearanceReplayAsync">
-                        <i class="fa-regular fa-magnifying-glass-chart" aria-hidden="true"></i>
-                    </button>
-
-                    <BusyButton Class="btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button d-lg-none"
-                                OnClick="ToggleProcessPanelsAsync"
-                                IsBusy="@_isUpdatingDisplayPreferences"
-                                BusyText="Saving..."
-                                ShowBusyText="false"
-                                title="@ProcessPanelsToggleTitle"
-                                aria-label="@ProcessPanelsToggleTitle">
-                        <i class="fa-regular @ProcessPanelsToggleIconCss" aria-hidden="true"></i>
-                    </BusyButton>
-                </div>
             </div>
         </div>
 
@@ -122,7 +90,7 @@ else
                         var canEditSavedPlan = message is not null && CanEditSavedPlan(message);
                         var displayContent = message is null ? string.Empty : GetDisplayContent(message);
 
-                        <div class="d-flex flex-column gap-3">
+                        <div @key="message?.MessageId ?? snapshot?.SnapshotId ?? appearance?.AppearanceEntryId" class="d-flex flex-column gap-3">
                             @if (process is not null && _showProcessPanels)
                             {
                                 <div class="card border-0 bg-body-tertiary shadow-sm">
@@ -183,7 +151,7 @@ else
                                                             var stepDividerClass = stepIndex > 0 ? "border-top mt-2 pt-2" : string.Empty;
                                                             var headerClass = step.IsActive ? "bg-primary-subtle" : string.Empty;
 
-                                                            <section class="@stepDividerClass">
+                                                            <section @key="step.StepId" class="@stepDividerClass">
                                                                 <button type="button"
                                                                         class="btn btn-link w-100 px-0 py-2 text-start text-decoration-none text-reset @headerClass"
                                                                         @onclick="() => ToggleProcessStep(process.RunId, step.StepId)">
@@ -209,7 +177,7 @@ else
                                                                                         <div class="d-flex align-items-center gap-2 small text-body-secondary text-nowrap">
                                                                                             @for (var usageIndex = 0; usageIndex < stepTokenUsage.Count; usageIndex++)
                                                                                             {
-                                                                                                <span>@stepTokenUsage[usageIndex]</span>
+                                                                                                <span @key="stepTokenUsage[usageIndex]">@stepTokenUsage[usageIndex]</span>
 
                                                                                                 @if (usageIndex < stepTokenUsage.Count - 1)
                                                                                                 {
@@ -240,7 +208,7 @@ else
                                                                             {
                                                                                 var block = stepBlocks[blockIndex];
 
-                                                                                <div class="@(blockIndex > 0 ? "pt-3" : string.Empty)">
+                                                                                <div @key="block.Title" class="@(blockIndex > 0 ? "pt-3" : string.Empty)">
                                                                                     <div class="fw-semibold mb-2">@block.Title</div>
                                                                                     <MarkdownContent Markdown="@block.Content" CopyLabel="@block.Title" />
                                                                                 </div>
@@ -282,12 +250,20 @@ else
 
                             @if (message is not null)
                             {
-                                <div class="@cardClass"
+                                <div @key="message.MessageId"
+                                     class="@cardClass"
                                      @onclick="() => ToggleSelectedMessage(message.MessageId)">
                                     <div class="card shadow-sm">
                                         <div class="card-body d-flex flex-column gap-3">
                                             <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 small text-body-secondary">
                                                 <div class="d-flex align-items-center gap-2">
+                                                    @if (!message.IsNarrator)
+                                                    {
+                                                        <StoryAvatar Name="@message.DisplaySpeakerName"
+                                                                     ImageUrl="@message.SpeakerPrimaryImageUrl"
+                                                                     Crop="@message.SpeakerPrimaryImageCrop"
+                                                                     Class="app-story-avatar flex-shrink-0" />
+                                                    }
                                                     <span class="badge @(message.IsNarrator ? "text-bg-info" : message.IsSelectedSpeaker ? "text-bg-primary" : "text-bg-light border text-body-secondary")">
                                                         @message.DisplaySpeakerName
                                                     </span>
@@ -407,7 +383,7 @@ else
                                                                     var isBusyAuthor = _reassigningMessageId == message.MessageId && _reassigningAuthorKey == authorKey;
                                                                     var authorItemClass = $"dropdown-item d-flex align-items-center justify-content-between gap-3{(isCurrentAuthor ? " active" : string.Empty)}";
 
-                                                                    <li>
+                                                                    <li @key="authorKey">
                                                                         <BusyButton Class="@authorItemClass"
                                                                                     OnClick="() => ChangeMessageSpeakerAsync(message, author)"
                                                                                     IsBusy="@isBusyAuthor"
@@ -585,7 +561,7 @@ else
                                                             <div class="d-flex flex-column gap-3">
                                                                 @foreach (var fact in snapshot.Facts)
                                                                 {
-                                                                    <div>
+                                                                    <div @key="fact.Title">
                                                                         <div class="fw-semibold">@fact.Title</div>
                                                                         @if (!string.IsNullOrWhiteSpace(fact.Summary))
                                                                         {
@@ -615,7 +591,7 @@ else
                                                             <div class="d-flex flex-column gap-3">
                                                                 @foreach (var entry in snapshot.TimelineEntries)
                                                                 {
-                                                                    <div>
+                                                                    <div @key="entry.Title">
                                                                         <div class="fw-semibold">@entry.Title</div>
                                                                         @if (!string.IsNullOrWhiteSpace(entry.WhenText))
                                                                         {
@@ -683,7 +659,7 @@ else
                                                     {
                                                         @foreach (var character in appearance.Characters)
                                                         {
-                                                            <div>
+                                                            <div @key="character.CharacterId">
                                                                 <label class="form-label" for="@GetAppearanceEditorId(appearance.AppearanceEntryId, character.CharacterId)">@character.CharacterName</label>
                                                                 <textarea id="@GetAppearanceEditorId(appearance.AppearanceEntryId, character.CharacterId)"
                                                                           class="form-control"
@@ -715,7 +691,7 @@ else
                                                     {
                                                         @foreach (var character in appearance.Characters)
                                                         {
-                                                            <div>
+                                                            <div @key="character.CharacterId">
                                                                 <div class="fw-semibold">@character.CharacterName</div>
                                                                 @if (string.IsNullOrWhiteSpace(character.CurrentAppearance))
                                                                 {
@@ -797,6 +773,29 @@ else
                     </div>
 
                     <div class="d-flex flex-wrap justify-content-end gap-2">
+                        <BusyButton Class="btn btn-outline-secondary"
+                                    OnClick="OpenAppearanceReplayAsync"
+                                    IsBusy="@_isAppearanceReplayLoading"
+                                    BusyText="Debugging..."
+                                    Disabled="@_isSubmitting"
+                                    ShowBusyText="false"
+                                    title="Debug appearance"
+                                    aria-label="Debug appearance">
+                            <i class="fa-regular fa-shirt" aria-hidden="true"></i>
+                        </BusyButton>
+
+                        <BusyButton Class="btn btn-outline-secondary"
+                                    OnClick="ToggleProcessPanelsAsync"
+                                    IsBusy="@_isUpdatingDisplayPreferences"
+                                    BusyText="Saving..."
+                                    ShowBusyText="false"
+                                    title="@ProcessPanelsToggleTitle"
+                                    aria-label="@ProcessPanelsToggleTitle">
+                            <i class="fa-regular @ProcessPanelsToggleIconCss" aria-hidden="true"></i>
+                        </BusyButton>
+
+                        <div class="vr" aria-hidden="true"></div>
+
                         <BusyButton Class="btn btn-primary"
                                     OnClick="() => PostAsync(selectedSpeakerAiPostAction.Mode)"
                                     IsBusy="@(_submittingMode == selectedSpeakerAiPostAction.Mode && _submittingAuthorKey is null)"
@@ -830,8 +829,8 @@ else
                                         var isBusyAuthor = _submittingAuthorKey == authorKey;
                                         var authorItemClass = "dropdown-item d-flex align-items-center justify-content-between gap-3";
 
-                                        <li>
-                                            <BusyButton Class="@authorItemClass"
+                                            <li @key="authorKey">
+                                                <BusyButton Class="@authorItemClass"
                                                         OnClick="() => PostRespondAsAsync(author)"
                                                         IsBusy="@isBusyAuthor"
                                                         BusyText="Generating..."
@@ -943,7 +942,7 @@ else
                                     disabled="@_isSubmitting">
                                 @foreach (var turnShape in Enum.GetValues<StoryTurnShape>())
                                 {
-                                    <option value="@turnShape">@FormatTurnShapeOption(turnShape)</option>
+                                    <option @key="turnShape" value="@turnShape">@FormatTurnShapeOption(turnShape)</option>
                                 }
                             </select>
                         </div>
@@ -1104,7 +1103,6 @@ else
     [CascadingParameter]
     private AppShellState? ShellState { get; set; }
 
-    private RenderFragment? _desktopHeaderAction;
     private IDisposable? _workspaceSubscription;
     private const string AutoselectAuthorKey = "autoselect";
     private Guid? _appliedThreadId;
@@ -1178,20 +1176,9 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        _desktopHeaderAction = RenderDesktopHeaderAction;
-        ShellState?.SetDesktopHeaderAction(_desktopHeaderAction);
         _workspaceSubscription = ActivityNotifier.Subscribe(ActivityStreams.StoryChatWorkspace, _ => InvokeAsync(HandleWorkspaceUpdatedAsync));
         await LoadDisplayPreferencesAsync();
         await base.OnInitializedAsync();
-    }
-
-    protected override void OnParametersSet()
-    {
-        if (_desktopHeaderAction is null)
-        {
-            _desktopHeaderAction = RenderDesktopHeaderAction;
-            ShellState?.SetDesktopHeaderAction(_desktopHeaderAction);
-        }
     }
 
     protected override async Task OnParametersSetAsync()
@@ -1217,9 +1204,6 @@ else
 
     public void Dispose()
     {
-        if (_desktopHeaderAction is not null)
-            ShellState?.SetDesktopHeaderAction(null);
-
         _workspaceSubscription?.Dispose();
         _processDurationRefreshTimer?.Dispose();
         _snapshotDraftOperation?.Dispose();
@@ -1497,7 +1481,7 @@ else
         {
             Logger.LogError(exception, "Preparing retry from story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
             ClearRetryState(clearDraft: false);
-            _errorMessage = $"Preparing retry for '{message.CanonicalSpeakerName}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Preparing retry for '{message.CanonicalSpeakerName}' failed.", exception);
         }
         finally
         {
@@ -1610,7 +1594,7 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Changing the author for story scene message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
-            _errorMessage = "Changing the author for this scene message failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Changing the author for this scene message failed.", exception);
         }
         finally
         {
@@ -1722,7 +1706,7 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Updating the saved plan for message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
-            _planEditErrorMessage = "The saved plan could not be updated for the selected message.";
+            _planEditErrorMessage = UserFacingErrorMessageBuilder.Build("The saved plan could not be updated for the selected message.", exception);
         }
         finally
         {
@@ -1795,7 +1779,7 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving edited story scene message {MessageId} failed for chat {ThreadId}.", _editingMessageId, _chat.ThreadId);
-            _errorMessage = "Saving the edited message failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Saving the edited message failed.", exception);
         }
         finally
         {
@@ -1825,7 +1809,7 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Creating edited branch from message {MessageId} failed for chat {ThreadId}.", _editingMessageId, _chat.ThreadId);
-            _errorMessage = "Submitting the edited message as a new branch failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Submitting the edited message as a new branch failed.", exception);
         }
         finally
         {
@@ -1852,7 +1836,7 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Selecting branch leaf {LeafMessageId} failed for chat {ThreadId}.", leafMessageId, _chat.ThreadId);
-            _errorMessage = "Switching to the selected branch failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Switching to the selected branch failed.", exception);
         }
         finally
         {
@@ -2050,9 +2034,10 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Deleting story scene message {MessageId} failed for chat {ThreadId}.", _deleteTargetMessage?.MessageId, _chat.ThreadId);
-            _errorMessage = mode == StorySceneDeleteMode.Branch
+            var fallbackMessage = mode == StorySceneDeleteMode.Branch
                 ? "Deleting the selected branch failed."
                 : "Deleting the selected message failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build(fallbackMessage, exception);
         }
         finally
         {
@@ -2130,18 +2115,15 @@ else
             _showProcessPanels = preferences.ShowProcessPanels;
             if (!_showProcessPanels)
                 CancelAppearanceEdit();
-
-            ShellState?.RefreshDesktopHeaderAction();
         }
         catch (Exception exception)
         {
             Logger.LogError(exception, "Saving story scene chat display preferences failed.");
-            _errorMessage = "Saving the display preference for appearance and process panels failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Saving the display preference for appearance and process panels failed.", exception);
         }
         finally
         {
             _isUpdatingDisplayPreferences = false;
-            ShellState?.RefreshDesktopHeaderAction();
         }
     }
 
@@ -2156,7 +2138,7 @@ else
         catch (Exception exception)
         {
             Logger.LogError(exception, "Copying scene message text failed.");
-            _errorMessage = "Copying the scene message failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Copying the scene message failed.", exception);
         }
     }
 
@@ -2165,42 +2147,6 @@ else
 
     private string ProcessPanelsToggleIconCss =>
         "fa-gears";
-
-    private void RenderDesktopHeaderAction(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
-    {
-        builder.OpenElement(0, "div");
-        builder.AddAttribute(1, "class", "d-flex align-items-center gap-2");
-        builder.OpenElement(2, "button");
-        builder.AddAttribute(3, "type", "button");
-        builder.AddAttribute(4, "class", "btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button");
-        builder.AddAttribute(5, "title", "Debug appearance");
-        builder.AddAttribute(6, "aria-label", "Debug appearance");
-        builder.AddAttribute(7, "disabled", _isAppearanceReplayLoading || _isSubmitting);
-        builder.AddAttribute(8, "onclick", EventCallback.Factory.Create(this, OpenAppearanceReplayAsync));
-        builder.OpenElement(9, "i");
-        builder.AddAttribute(10, "class", "fa-regular fa-magnifying-glass-chart");
-        builder.AddAttribute(11, "aria-hidden", "true");
-        builder.CloseElement();
-        builder.CloseElement();
-
-        builder.OpenComponent<BusyButton>(12);
-        builder.AddAttribute(13, nameof(BusyButton.Class), "btn btn-outline-secondary btn-sm rounded-circle shadow-sm app-shell-menu-toggle-button");
-        builder.AddAttribute(14, nameof(BusyButton.OnClick), EventCallback.Factory.Create(this, ToggleProcessPanelsAsync));
-        builder.AddAttribute(15, nameof(BusyButton.IsBusy), _isUpdatingDisplayPreferences);
-        builder.AddAttribute(16, nameof(BusyButton.BusyText), "Saving...");
-        builder.AddAttribute(17, nameof(BusyButton.ShowBusyText), false);
-        builder.AddAttribute(18, "title", ProcessPanelsToggleTitle);
-        builder.AddAttribute(19, "aria-label", ProcessPanelsToggleTitle);
-        builder.AddAttribute(20, nameof(BusyButton.ChildContent), (RenderFragment)(childBuilder =>
-        {
-            childBuilder.OpenElement(0, "i");
-            childBuilder.AddAttribute(1, "class", $"fa-regular {ProcessPanelsToggleIconCss}");
-            childBuilder.AddAttribute(2, "aria-hidden", "true");
-            childBuilder.CloseElement();
-        }));
-        builder.CloseComponent();
-        builder.CloseElement();
-    }
 
     private void ToggleProcessRun(Guid runId)
     {

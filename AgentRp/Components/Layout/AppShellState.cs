@@ -1,7 +1,5 @@
 namespace AgentRp.Components.Layout;
 
-using Microsoft.AspNetCore.Components;
-
 public sealed class AppShellState
 {
     public event Action? Changed;
@@ -16,20 +14,7 @@ public sealed class AppShellState
 
     public string? MobileHeaderSubtitle { get; private set; } = "Recent chats";
 
-    public RenderFragment? DesktopHeaderAction { get; private set; }
-
     private DesktopSidebarMode LastVisibleDesktopSidebarMode { get; set; } = DesktopSidebarMode.Wide;
-
-    public void SetDesktopHeaderAction(RenderFragment? action)
-    {
-        if (ReferenceEquals(DesktopHeaderAction, action))
-            return;
-
-        DesktopHeaderAction = action;
-        Changed?.Invoke();
-    }
-
-    public void RefreshDesktopHeaderAction() => Changed?.Invoke();
 
     public void ShowSidebar()
     {

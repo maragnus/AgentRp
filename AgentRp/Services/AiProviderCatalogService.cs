@@ -11,7 +11,9 @@ namespace AgentRp.Services;
 
 public sealed record AiProviderCatalogView(
     IReadOnlyList<AiProviderEditorView> Providers,
-    IReadOnlyList<AgentProviderOptionView> EnabledModels);
+    IReadOnlyList<AgentProviderOptionView> EnabledModels,
+    IReadOnlyList<AgentProviderOptionView> EnabledImageModels,
+    ImageGenerationModelSettingsView ImageGenerationSettings);
 
 public sealed record AiProviderEditorView(
     Guid ProviderId,
@@ -43,8 +45,11 @@ public sealed record AiModelEditorView(
     string? Endpoint,
     string? Repository,
     bool IsEnabled,
+    bool IsTextModelEnabled,
+    bool IsImageModelEnabled,
     bool UseJsonSchemaResponseFormat,
     StoryGenerationSettingsView Settings,
+    bool HasCustomGenerationSettings,
     DateTime UpdatedUtc);
 
 public sealed record AiProviderMetricView(
@@ -71,6 +76,8 @@ public sealed record SaveAiModel(
     string DisplayName,
     string? Endpoint,
     bool IsEnabled,
+    bool IsTextModelEnabled,
+    bool IsImageModelEnabled,
     bool UseJsonSchemaResponseFormat);
 
 public sealed record AiProviderImportResult(
@@ -141,6 +148,7 @@ public sealed class AiProviderCatalogService(
     IHttpClientFactory httpClientFactory,
     IActivityNotifier activityNotifier) : IAiProviderCatalogService
 {
+    private const string ImageSettingsKey = "story-image-generation-settings";
     private static readonly Uri HuggingFaceWhoAmIUri = new("https://huggingface.co/api/whoami-v2");
     private static readonly Uri HuggingFaceManagementBaseUri = new("https://api.endpoints.huggingface.cloud/v2/");
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web)
@@ -162,15 +170,27 @@ public sealed class AiProviderCatalogService(
         var views = providers.Select(MapProvider).ToList();
         var enabledModels = views
             .SelectMany(provider => provider.Models
-                .Where(model => provider.IsEnabled && model.IsEnabled)
+                .Where(model => provider.IsEnabled && model.IsEnabled && model.IsTextModelEnabled)
                 .Select(model => new AgentProviderOptionView(
                     model.ModelId,
+                    provider.ProviderId,
                     model.DisplayName,
                     provider.Name,
                     provider.ProviderKind)))
             .ToList();
+        var enabledImageModels = views
+            .SelectMany(provider => provider.Models
+                .Where(model => provider.IsEnabled && model.IsEnabled && model.IsImageModelEnabled)
+                .Select(model => new AgentProviderOptionView(
+                    model.ModelId,
+                    provider.ProviderId,
+                    model.DisplayName,
+                    provider.Name,
+                    provider.ProviderKind)))
+            .ToList();
+        var imageSettings = await LoadImageSettingsAsync(dbContext, enabledImageModels, cancellationToken);
 
-        return new AiProviderCatalogView(views, enabledModels);
+        return new AiProviderCatalogView(views, enabledModels, enabledImageModels, imageSettings);
     }
 
     public async Task<AiProviderEditorView> SaveProviderAsync(SaveAiProvider command, CancellationToken cancellationToken)
@@ -258,6 +278,8 @@ public sealed class AiProviderCatalogService(
         model.DisplayName = displayName;
         model.Endpoint = endpoint;
         model.IsEnabled = command.IsEnabled;
+        model.IsTextModelEnabled = command.IsTextModelEnabled;
+        model.IsImageModelEnabled = command.IsImageModelEnabled;
         model.UseJsonSchemaResponseFormat = command.UseJsonSchemaResponseFormat;
         model.UpdatedUtc = DateTime.UtcNow;
 
@@ -278,6 +300,7 @@ public sealed class AiProviderCatalogService(
         try
         {
             var discovered = await DiscoverModelsAsync(provider, cancellationToken);
+            discovered = AddKnownImageModels(provider.ProviderKind, discovered);
             UpsertDiscoveredModels(provider, discovered);
             provider.LastDiscoveredUtc = DateTime.UtcNow;
             provider.LastDiscoveryError = null;
@@ -300,16 +323,16 @@ public sealed class AiProviderCatalogService(
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         var provider = await dbContext.AiProviders
             .Include(x => x.Models)
-            .Include(x => x.Metrics)
             .FirstOrDefaultAsync(x => x.Id == providerId, cancellationToken)
             ?? throw new InvalidOperationException("Refreshing provider metrics failed because the provider could not be found.");
 
         try
         {
             var metrics = await LoadMetricsAsync(provider, cancellationToken);
-            provider.Metrics.Clear();
-            foreach (var metric in metrics)
-                provider.Metrics.Add(metric);
+            await dbContext.AiProviderMetrics
+                .Where(x => x.ProviderId == provider.Id)
+                .ExecuteDeleteAsync(cancellationToken);
+            await dbContext.AiProviderMetrics.AddRangeAsync(metrics, cancellationToken);
 
             provider.LastMetricsRefreshUtc = DateTime.UtcNow;
             provider.LastMetricsError = null;
@@ -324,7 +347,7 @@ public sealed class AiProviderCatalogService(
 
         await dbContext.SaveChangesAsync(cancellationToken);
         PublishRefresh();
-        return MapProvider(provider);
+        return await GetProviderViewAsync(provider.Id, cancellationToken);
     }
 
     public async Task TestDraftProviderAsync(AiProviderDraft draft, CancellationToken cancellationToken)
@@ -351,6 +374,7 @@ public sealed class AiProviderCatalogService(
             var discovered = provider.ProviderKind == AiProviderKind.OpenAiCompatible
                 ? await DiscoverOpenAiCompatibleModelsAsync(provider, cancellationToken)
                 : await DiscoverModelsAsync(provider, cancellationToken);
+            discovered = AddKnownImageModels(provider.ProviderKind, discovered);
             var views = AiModelPresentation.OrderDraftModels(
                 provider.ProviderKind,
                 discovered.Select(x => new AiProviderDraftModelView(x.ProviderModelId, x.DisplayName, x.Endpoint, x.Repository)));
@@ -441,6 +465,8 @@ public sealed class AiProviderCatalogService(
                 Endpoint = NormalizeOptional(model.Endpoint),
                 Repository = NormalizeOptional(model.Repository),
                 IsEnabled = model.IsEnabled,
+                IsTextModelEnabled = true,
+                IsImageModelEnabled = IsKnownImageModel(provider.ProviderKind, providerModelId),
                 UseJsonSchemaResponseFormat = provider.ProviderKind != AiProviderKind.Claude,
                 SortOrder = provider.Models.Count,
                 PlanningSettingsJson = StoryGenerationSettingsService.CreateDefaultStageSettingsJson(StoryGenerationStage.Planning),
@@ -477,6 +503,8 @@ public sealed class AiProviderCatalogService(
                     model.Endpoint,
                     model.Repository,
                     model.IsEnabled,
+                    model.IsTextModelEnabled,
+                    model.IsImageModelEnabled,
                     model.UseJsonSchemaResponseFormat,
                     model.Settings.Planning,
                     model.Settings.Writing)).ToList())).ToList());
@@ -550,11 +578,13 @@ public sealed class AiProviderCatalogService(
                 {
                     Id = Guid.NewGuid(),
                     ProviderModelId = modelId,
-                    DisplayName = string.IsNullOrWhiteSpace(modelDocument.DisplayName) ? modelId : modelDocument.DisplayName.Trim(),
-                    Endpoint = NormalizeOptional(modelDocument.Endpoint),
-                    Repository = NormalizeOptional(modelDocument.Repository),
-                    IsEnabled = modelDocument.IsEnabled,
-                    UseJsonSchemaResponseFormat = modelDocument.UseJsonSchemaResponseFormat,
+                DisplayName = string.IsNullOrWhiteSpace(modelDocument.DisplayName) ? modelId : modelDocument.DisplayName.Trim(),
+                Endpoint = NormalizeOptional(modelDocument.Endpoint),
+                Repository = NormalizeOptional(modelDocument.Repository),
+                IsEnabled = modelDocument.IsEnabled,
+                IsTextModelEnabled = modelDocument.IsTextModelEnabled,
+                IsImageModelEnabled = modelDocument.IsImageModelEnabled,
+                UseJsonSchemaResponseFormat = modelDocument.UseJsonSchemaResponseFormat,
                     SortOrder = provider.Models.Count,
                     PlanningSettingsJson = JsonSerializer.Serialize(
                         modelDocument.Planning ?? StoryGenerationSettingsService.CreateDefaultStageSettings(StoryGenerationStage.Planning),
@@ -587,6 +617,26 @@ public sealed class AiProviderCatalogService(
             ?? throw new InvalidOperationException("Loading provider failed because the provider could not be found.");
 
         return MapProvider(provider);
+    }
+
+    private static async Task<ImageGenerationModelSettingsView> LoadImageSettingsAsync(
+        DbAppContext dbContext,
+        IReadOnlyList<AgentProviderOptionView> enabledImageModels,
+        CancellationToken cancellationToken)
+    {
+        var setting = await dbContext.AppSettings
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Key == ImageSettingsKey, cancellationToken);
+        var saved = ChatStoryJson.Deserialize(setting?.JsonValue, StoryImageGenerationSettingsDocument.Default);
+        var selectedModelId = saved.SelectedModelId.HasValue && enabledImageModels.Any(x => x.ModelId == saved.SelectedModelId.Value)
+            ? saved.SelectedModelId
+            : enabledImageModels.FirstOrDefault()?.ModelId;
+
+        return new ImageGenerationModelSettingsView(
+            selectedModelId,
+            string.IsNullOrWhiteSpace(saved.Size) ? StoryImageGenerationSettingsDocument.Default.Size : saved.Size,
+            string.IsNullOrWhiteSpace(saved.Quality) ? StoryImageGenerationSettingsDocument.Default.Quality : saved.Quality,
+            string.IsNullOrWhiteSpace(saved.ReferenceFidelity) ? StoryImageGenerationSettingsDocument.Default.ReferenceFidelity : saved.ReferenceFidelity);
     }
 
     private static AiProvider BuildDraftProvider(AiProviderDraft draft) => new()
@@ -787,6 +837,8 @@ public sealed class AiProviderCatalogService(
                 Endpoint = discovered.Endpoint,
                 Repository = discovered.Repository,
                 IsEnabled = provider.Models.Count == 0,
+                IsTextModelEnabled = !IsKnownImageModel(provider.ProviderKind, discovered.ProviderModelId),
+                IsImageModelEnabled = IsKnownImageModel(provider.ProviderKind, discovered.ProviderModelId),
                 UseJsonSchemaResponseFormat = provider.ProviderKind != AiProviderKind.Claude,
                 SortOrder = provider.Models.Count,
                 PlanningSettingsJson = StoryGenerationSettingsService.CreateDefaultStageSettingsJson(StoryGenerationStage.Planning),
@@ -795,6 +847,17 @@ public sealed class AiProviderCatalogService(
                 UpdatedUtc = now
             });
         }
+    }
+
+    private static IReadOnlyList<DiscoveredModel> AddKnownImageModels(AiProviderKind providerKind, IReadOnlyList<DiscoveredModel> discoveredModels)
+    {
+        var models = discoveredModels.ToList();
+        if (providerKind == AiProviderKind.OpenAI && models.All(x => !string.Equals(x.ProviderModelId, "gpt-image-1", StringComparison.Ordinal)))
+            models.Add(new DiscoveredModel("gpt-image-1", "GPT Image 1", null, null));
+        if (providerKind == AiProviderKind.Grok && models.All(x => !string.Equals(x.ProviderModelId, "grok-imagine-image", StringComparison.Ordinal)))
+            models.Add(new DiscoveredModel("grok-imagine-image", "Grok Imagine Image", null, null));
+
+        return models;
     }
 
     private async Task<IReadOnlyList<AiProviderMetric>> LoadMetricsAsync(AiProvider provider, CancellationToken cancellationToken)
@@ -921,7 +984,7 @@ public sealed class AiProviderCatalogService(
         provider.LastDiscoveryError,
         provider.LastMetricsRefreshUtc,
         provider.LastMetricsError,
-        AiModelPresentation.OrderEditorModels(
+        OrderProviderEditorModels(
             provider.ProviderKind,
             provider.Models.Select(model => MapModel(provider, model))),
         provider.Metrics
@@ -929,21 +992,57 @@ public sealed class AiProviderCatalogService(
             .Select(x => new AiProviderMetricView(x.MetricKind, x.Label, x.Value, x.Detail, x.RefreshedUtc))
             .ToList());
 
-    private static AiModelEditorView MapModel(AiProvider provider, AiModel model) => new(
-        model.Id,
-        provider.Id,
-        provider.Name,
-        provider.ProviderKind,
-        model.ProviderModelId,
-        model.DisplayName,
-        model.Endpoint,
-        model.Repository,
-        model.IsEnabled,
-        model.UseJsonSchemaResponseFormat,
-        new StoryGenerationSettingsView(
+    private static IReadOnlyList<AiModelEditorView> OrderProviderEditorModels(
+        AiProviderKind providerKind,
+        IEnumerable<AiModelEditorView> models) =>
+        AiModelPresentation.OrderEditorModels(providerKind, models)
+            .Select((model, index) => new { Model = model, Index = index })
+            .OrderBy(x => GetProviderModelDisplayPriority(x.Model))
+            .ThenBy(x => x.Index)
+            .Select(x => x.Model)
+            .ToList();
+
+    private static int GetProviderModelDisplayPriority(AiModelEditorView model)
+    {
+        if (model.IsEnabled)
+            return 0;
+
+        return model.HasCustomGenerationSettings ? 1 : 2;
+    }
+
+    private static AiModelEditorView MapModel(AiProvider provider, AiModel model)
+    {
+        var settings = new StoryGenerationSettingsView(
             DeserializeStage(model.PlanningSettingsJson, StoryGenerationStage.Planning),
-            DeserializeStage(model.WritingSettingsJson, StoryGenerationStage.Writing)),
-        model.UpdatedUtc);
+            DeserializeStage(model.WritingSettingsJson, StoryGenerationStage.Writing));
+
+        return new AiModelEditorView(
+            model.Id,
+            provider.Id,
+            provider.Name,
+            provider.ProviderKind,
+            model.ProviderModelId,
+            model.DisplayName,
+            model.Endpoint,
+            model.Repository,
+            model.IsEnabled,
+            model.IsTextModelEnabled,
+            model.IsImageModelEnabled,
+            model.UseJsonSchemaResponseFormat,
+            settings,
+            StoryGenerationSettingsService.HasCustomSettings(settings),
+            model.UpdatedUtc);
+    }
+
+    private static bool IsKnownImageModel(AiProviderKind providerKind, string modelId) =>
+        providerKind switch
+        {
+            AiProviderKind.OpenAI => modelId.Contains("image", StringComparison.OrdinalIgnoreCase)
+                || modelId.Contains("dall-e", StringComparison.OrdinalIgnoreCase),
+            AiProviderKind.Grok => modelId.Contains("image", StringComparison.OrdinalIgnoreCase)
+                || modelId.Contains("imagine", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
 
     private static StoryModelStageSettingsView DeserializeStage(string json, StoryGenerationStage stage)
     {
@@ -1043,6 +1142,8 @@ public sealed class AiProviderCatalogService(
         string? Endpoint,
         string? Repository,
         bool IsEnabled,
+        bool IsTextModelEnabled,
+        bool IsImageModelEnabled,
         bool UseJsonSchemaResponseFormat,
         StoryModelStageSettingsView Planning,
         StoryModelStageSettingsView Writing);

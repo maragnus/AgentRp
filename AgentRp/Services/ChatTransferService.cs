@@ -108,9 +108,9 @@ public sealed class ChatTransferService(
                 normalizedSelection.Messages ? thread.ActiveLeafMessageId : null,
                 normalizedSelection.SceneState ? thread.SelectedSpeakerCharacterId : null,
                 normalizedSelection.SceneState ? story.Scene : null,
-                normalizedSelection.Characters ? story.Characters : null,
-                normalizedSelection.Locations ? story.Locations : null,
-                normalizedSelection.Items ? story.Items : null,
+                normalizedSelection.Characters ? StripPrimaryImages(story.Characters) : null,
+                normalizedSelection.Locations ? StripPrimaryImages(story.Locations) : null,
+                normalizedSelection.Items ? StripPrimaryImages(story.Items) : null,
                 normalizedSelection.StoryContext ? story.StoryContext : null,
                 normalizedSelection.StoryContext ? story.History : null,
                 normalizedSelection.Messages
@@ -189,6 +189,50 @@ public sealed class ChatTransferService(
         ChatTransferPackage package,
         ChatTransferSelection selection,
         ChatTransferApplyMode mode,
+        CancellationToken cancellationToken)
+    {
+        return await ApplyPackageCoreAsync(package, selection, mode, null, cancellationToken);
+    }
+
+    public async Task<ChatTransferApplyResult> DuplicateThreadAsync(
+        Guid threadId,
+        ChatTransferSelection selection,
+        CancellationToken cancellationToken)
+    {
+        var package = await BuildPackageForDuplicateAsync(threadId, selection, cancellationToken);
+        return await ApplyPackageCoreAsync(package, selection, ChatTransferApplyMode.Duplicate, threadId, cancellationToken);
+    }
+
+    private async Task<ChatTransferPackage> BuildPackageForDuplicateAsync(Guid threadId, ChatTransferSelection selection, CancellationToken cancellationToken)
+    {
+        var package = await BuildPackageAsync(threadId, selection, cancellationToken);
+        var normalizedSelection = NormalizeSelection(selection, ChatTransferSelection.All);
+        if (!normalizedSelection.Characters && !normalizedSelection.Locations && !normalizedSelection.Items)
+            return package;
+
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var story = await dbContext.ChatStories
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.ChatThreadId == threadId, cancellationToken);
+        if (story is null)
+            return package;
+
+        return package with
+        {
+            Payload = package.Payload with
+            {
+                Characters = normalizedSelection.Characters ? story.Characters : package.Payload.Characters,
+                Locations = normalizedSelection.Locations ? story.Locations : package.Payload.Locations,
+                Items = normalizedSelection.Items ? story.Items : package.Payload.Items
+            }
+        };
+    }
+
+    private async Task<ChatTransferApplyResult> ApplyPackageCoreAsync(
+        ChatTransferPackage package,
+        ChatTransferSelection selection,
+        ChatTransferApplyMode mode,
+        Guid? duplicateSourceThreadId,
         CancellationToken cancellationToken)
     {
         if (package.SchemaVersion != CurrentSchemaVersion)
@@ -345,6 +389,20 @@ public sealed class ChatTransferService(
         if (appearanceClone.Count > 0)
             dbContext.StoryChatAppearanceEntries.AddRange(appearanceClone);
 
+        if (duplicateSourceThreadId.HasValue)
+        {
+            var imageLinks = await CloneImageLinksAsync(
+                dbContext,
+                duplicateSourceThreadId.Value,
+                thread.Id,
+                characterMap,
+                locationMap,
+                itemMap,
+                cancellationToken);
+            if (imageLinks.Count > 0)
+                dbContext.StoryImageLinks.AddRange(imageLinks);
+        }
+
         await dbContext.SaveChangesAsync(cancellationToken);
         PublishRefresh(thread.Id);
         return new ChatTransferApplyResult(thread.Id, thread.Title);
@@ -385,6 +443,15 @@ public sealed class ChatTransferService(
 
         return (new ChatStoryCharactersDocument(clonedEntries), map);
     }
+
+    private static ChatStoryCharactersDocument StripPrimaryImages(ChatStoryCharactersDocument document) =>
+        new(document.Entries.Select(x => x with { PrimaryImageId = null }).ToList());
+
+    private static ChatStoryLocationsDocument StripPrimaryImages(ChatStoryLocationsDocument document) =>
+        new(document.Entries.Select(x => x with { PrimaryImageId = null }).ToList());
+
+    private static ChatStoryItemsDocument StripPrimaryImages(ChatStoryItemsDocument document) =>
+        new(document.Entries.Select(x => x with { PrimaryImageId = null }).ToList());
 
     private static (ChatStoryLocationsDocument Document, Dictionary<Guid, Guid> Map) CloneLocations(ChatStoryLocationsDocument document)
     {
@@ -600,6 +667,54 @@ public sealed class ChatTransferService(
         characterMap.TryGetValue(character.CharacterId, out var mappedCharacterId)
             ? new StoryChatCharacterAppearanceDocument(mappedCharacterId, character.CurrentAppearance)
             : null;
+
+    private static async Task<IReadOnlyList<StoryImageLink>> CloneImageLinksAsync(
+        AgentRp.Data.AppContext dbContext,
+        Guid sourceThreadId,
+        Guid targetThreadId,
+        IReadOnlyDictionary<Guid, Guid> characterMap,
+        IReadOnlyDictionary<Guid, Guid> locationMap,
+        IReadOnlyDictionary<Guid, Guid> itemMap,
+        CancellationToken cancellationToken)
+    {
+        var sourceLinks = await dbContext.StoryImageLinks
+            .AsNoTracking()
+            .Where(x => x.ThreadId == sourceThreadId)
+            .ToListAsync(cancellationToken);
+        var now = DateTime.UtcNow;
+        var cloned = new List<StoryImageLink>();
+        var seen = new HashSet<(Guid ImageId, StoryImageEntityKind EntityKind, Guid EntityId, StoryImageLinkPurpose Purpose)>();
+
+        foreach (var link in sourceLinks)
+        {
+            var mappedEntityId = link.EntityKind switch
+            {
+                StoryImageEntityKind.Character => RemapOptionalId(link.EntityId, characterMap),
+                StoryImageEntityKind.Location => RemapOptionalId(link.EntityId, locationMap),
+                StoryImageEntityKind.Item => RemapOptionalId(link.EntityId, itemMap),
+                _ => null
+            };
+            if (!mappedEntityId.HasValue)
+                continue;
+
+            var key = (link.ImageId, link.EntityKind, mappedEntityId.Value, link.Purpose);
+            if (!seen.Add(key))
+                continue;
+
+            cloned.Add(new StoryImageLink
+            {
+                Id = Guid.NewGuid(),
+                ThreadId = targetThreadId,
+                ImageId = link.ImageId,
+                EntityKind = link.EntityKind,
+                EntityId = mappedEntityId.Value,
+                Purpose = link.Purpose,
+                CreatedUtc = now
+            });
+        }
+
+        return cloned;
+    }
 
     private static IReadOnlyList<Guid> RemapIds(IReadOnlyList<Guid> ids, IReadOnlyDictionary<Guid, Guid> map) =>
         ids

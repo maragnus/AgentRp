@@ -26,7 +26,7 @@ public sealed class AiProviderCatalogServiceTests
             CancellationToken.None);
 
         Assert.False(result.RequiresManualModel);
-        Assert.Equal(["gpt-5.4", "gpt-5.4-mini"], result.Models.Select(x => x.ProviderModelId).ToArray());
+        Assert.Equal(["gpt-5.4", "gpt-5.4-mini", "gpt-image-1"], result.Models.Select(x => x.ProviderModelId).ToArray());
     }
 
     [Fact]
@@ -165,6 +165,8 @@ public sealed class AiProviderCatalogServiceTests
         Assert.Equal(2, saved.Models.Count);
         Assert.Contains(saved.Models, x => x.ProviderModelId == "gpt-5.4" && x.IsEnabled);
         Assert.Contains(saved.Models, x => x.ProviderModelId == "gpt-5.4-mini" && !x.IsEnabled);
+        Assert.All(saved.Models, x => Assert.True(x.IsTextModelEnabled));
+        Assert.DoesNotContain(saved.Models, x => x.IsImageModelEnabled);
     }
 
     [Fact]

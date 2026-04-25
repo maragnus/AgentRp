@@ -1,5 +1,7 @@
 using AgentRp.Data;
 using AgentRp.Services;
+using Microsoft.EntityFrameworkCore;
+using DbAppContext = AgentRp.Data.AppContext;
 
 namespace AgentRp.Tests;
 
@@ -143,5 +145,57 @@ public sealed class StoryContextTests
         Assert.False(incompleteInspection.Source.AvailableSections.StoryContext);
     }
 
+    [Fact]
+    public async Task BuildPackageAsync_DoesNotIncludePrimaryImageReferences()
+    {
+        var factory = new TestDbContextFactory(new DbContextOptionsBuilder<DbAppContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options);
+        var threadId = Guid.NewGuid();
+        await using (var dbContext = await factory.CreateDbContextAsync())
+        {
+            var thread = new ChatThread
+            {
+                Id = threadId,
+                Title = "Story",
+                CreatedUtc = DateTime.UtcNow,
+                UpdatedUtc = DateTime.UtcNow
+            };
+            dbContext.ChatThreads.Add(thread);
+            dbContext.ChatStories.Add(new ChatStory
+            {
+                ChatThreadId = threadId,
+                Thread = thread,
+                CreatedUtc = DateTime.UtcNow,
+                UpdatedUtc = DateTime.UtcNow,
+                Characters = new ChatStoryCharactersDocument([
+                    new StoryCharacterDocument(Guid.NewGuid(), "Ava", StoryCharacterUserSheetDocument.Empty, StoryCharacterModelSheetDocument.Empty, 1, null, false, Guid.NewGuid())
+                ]),
+                Locations = new ChatStoryLocationsDocument([
+                    new StoryLocationDocument(Guid.NewGuid(), "Harbor", string.Empty, string.Empty, false, Guid.NewGuid())
+                ]),
+                Items = new ChatStoryItemsDocument([
+                    new StoryItemDocument(Guid.NewGuid(), "Key", string.Empty, string.Empty, null, null, false, Guid.NewGuid())
+                ])
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        var service = new ChatTransferService(factory, new ActivityNotifier(), null!);
+        var package = await service.BuildPackageAsync(threadId, ChatTransferSelection.All, CancellationToken.None);
+
+        var json = service.SerializePackage(package);
+
+        Assert.DoesNotContain("primaryImageId", json);
+    }
+
     private static ChatTransferService CreateTransferService() => new(null!, null!, null!);
+
+    private sealed class TestDbContextFactory(DbContextOptions<DbAppContext> options) : IDbContextFactory<DbAppContext>
+    {
+        public DbAppContext CreateDbContext() => new(options);
+
+        public Task<DbAppContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDbContext());
+    }
 }

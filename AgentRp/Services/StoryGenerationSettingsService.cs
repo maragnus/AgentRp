@@ -389,6 +389,10 @@ public sealed class StoryGenerationSettingsService(
         CreateDefaultStageSettings(StoryGenerationStage.Planning),
         CreateDefaultStageSettings(StoryGenerationStage.Writing));
 
+    internal static bool HasCustomSettings(StoryGenerationSettingsView settings) =>
+        !AreStageSettingsEqual(settings.Planning, CreateDefaultStageSettings(StoryGenerationStage.Planning))
+        || !AreStageSettingsEqual(settings.Writing, CreateDefaultStageSettings(StoryGenerationStage.Writing));
+
     internal static StoryModelStageSettingsView CreateDefaultStageSettings(StoryGenerationStage stage) => new(
         GetDefaultTemperature(stage),
         null,
@@ -411,6 +415,21 @@ public sealed class StoryGenerationSettingsService(
         StoryGenerationStage.Writing => "Writing",
         _ => stage.ToString()
     };
+
+    private static bool AreStageSettingsEqual(StoryModelStageSettingsView left, StoryModelStageSettingsView right) =>
+        AreDoublesEqual(left.Temperature, right.Temperature)
+        && AreNullableDoublesEqual(left.TopP, right.TopP)
+        && left.MaxOutputTokens == right.MaxOutputTokens
+        && left.Seed == right.Seed
+        && AreNullableDoublesEqual(left.FrequencyPenalty, right.FrequencyPenalty)
+        && AreNullableDoublesEqual(left.PresencePenalty, right.PresencePenalty)
+        && left.StopSequences.SequenceEqual(right.StopSequences, StringComparer.Ordinal);
+
+    private static bool AreDoublesEqual(double left, double right) => Math.Abs(left - right) < 0.001;
+
+    private static bool AreNullableDoublesEqual(double? left, double? right) =>
+        (!left.HasValue && !right.HasValue)
+        || (left.HasValue && right.HasValue && AreDoublesEqual(left.Value, right.Value));
 
     internal static string CreateDefaultStageSettingsJson(StoryGenerationStage stage) => Serialize(CreateDefaultStageSettings(stage));
 

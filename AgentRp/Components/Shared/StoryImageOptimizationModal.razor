@@ -1,0 +1,177 @@
+@inject IStoryImageOptimizationService ImageOptimizationService
+@inject ILogger<StoryImageOptimizationModal> Logger
+
+<AppModal IsOpen="IsOpen"
+          Title="Image Optimization"
+          DialogClass="modal-md modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down"
+          OnClose="CloseAsync"
+          CloseDisabled="@_isSaving">
+    <ChildContent>
+        @if (_isLoading)
+        {
+            <div class="d-flex align-items-center gap-3 py-3">
+                <div class="spinner-border spinner-border-sm" role="status"></div>
+                <span>Loading image optimization...</span>
+            </div>
+        }
+        else
+        {
+            <div class="d-flex flex-column gap-3">
+                <InlineAlert Message="@_errorMessage" />
+
+                <div class="@BuildStatusAlertClass()">
+                    <div class="fw-semibold">@BuildStatusTitle()</div>
+                    <div class="small">@BuildStatusDetail()</div>
+                </div>
+
+                <div>
+                    <label class="form-label" for="@_apiKeyInputId">Tinify API Key</label>
+                    <input id="@_apiKeyInputId"
+                           class="form-control"
+                           type="password"
+                           autocomplete="off"
+                           disabled="@_isSaving"
+                           @bind="_apiKey" />
+                    <div class="form-text">
+                        <a href="https://tinify.com/pricing/api" target="_blank" rel="noopener noreferrer">Get a free Tinify API key</a>
+                    </div>
+                </div>
+
+                <div class="form-check form-switch">
+                    <input id="@_enabledInputId"
+                           class="form-check-input"
+                           type="checkbox"
+                           role="switch"
+                           disabled="@_isSaving"
+                           @bind="_isEnabled" />
+                    <label class="form-check-label" for="@_enabledInputId">Optimize story images in the background</label>
+                </div>
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <button type="button" class="btn btn-outline-secondary" disabled="@_isSaving" @onclick="CloseAsync">Close</button>
+        <BusyButton Class="btn btn-primary"
+                    IsBusy="@_isSaving"
+                    Disabled="@(_isLoading || !CanSave)"
+                    BusyText="Saving..."
+                    OnClick="SaveAsync">
+            <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+            Save
+        </BusyButton>
+    </FooterContent>
+</AppModal>
+
+@code {
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
+    private readonly string _apiKeyInputId = $"tinify-api-key-{Guid.NewGuid():N}";
+    private readonly string _enabledInputId = $"tinify-enabled-{Guid.NewGuid():N}";
+    private bool _wasOpen;
+    private bool _isLoading;
+    private bool _isSaving;
+    private bool _isEnabled;
+    private string _apiKey = string.Empty;
+    private string? _errorMessage;
+    private StoryImageOptimizationSettingsView? _settings;
+
+    private bool CanSave =>
+        !_isSaving
+        && (!_isEnabled || !string.IsNullOrWhiteSpace(_apiKey))
+        && (_settings is null
+            || _settings.IsEnabled != _isEnabled
+            || !string.Equals(_settings.ApiKey, _apiKey, StringComparison.Ordinal));
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (IsOpen && !_wasOpen)
+            await LoadAsync();
+
+        _wasOpen = IsOpen;
+    }
+
+    private async Task LoadAsync()
+    {
+        _isLoading = true;
+        _errorMessage = null;
+
+        try
+        {
+            _settings = await ImageOptimizationService.GetSettingsAsync(CancellationToken.None);
+            _isEnabled = _settings.IsEnabled;
+            _apiKey = _settings.ApiKey;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Loading image optimization settings failed.");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Loading image optimization settings failed.", exception);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!CanSave)
+            return;
+
+        _isSaving = true;
+        _errorMessage = null;
+
+        try
+        {
+            _settings = await ImageOptimizationService.SaveSettingsAsync(new SaveStoryImageOptimizationSettings(_isEnabled, _apiKey), CancellationToken.None);
+            _isEnabled = _settings.IsEnabled;
+            _apiKey = _settings.ApiKey;
+            if (OnChanged.HasDelegate)
+                await OnChanged.InvokeAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving image optimization settings failed.");
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Saving image optimization settings failed.", exception);
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private Task CloseAsync()
+    {
+        if (_isSaving)
+            return Task.CompletedTask;
+
+        return OnClose.InvokeAsync();
+    }
+
+    private string BuildStatusAlertClass() =>
+        _settings?.IsEnabled == true && _settings.HasApiKey
+            ? "alert alert-success mb-0"
+            : "alert alert-light border mb-0";
+
+    private string BuildStatusTitle() =>
+        _settings?.IsEnabled == true && _settings.HasApiKey
+            ? "Tinify is configured"
+            : "Tinify is not configured";
+
+    private string BuildStatusDetail()
+    {
+        if (_settings is null)
+            return "Optimization status is unavailable.";
+
+        if (!_settings.IsEnabled || !_settings.HasApiKey)
+            return "Add a Tinify key to queue current primary images and optimize new saved images.";
+
+        return $"{_settings.QueuedImageCount} queued, {_settings.OptimizedImageCount} optimized, {_settings.FailedImageCount} failed.";
+    }
+}

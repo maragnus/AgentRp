@@ -49,6 +49,8 @@ internal static class StoryScenePlanningPromptBuilder
         Do not only restate rules, confirm the current situation, paraphrase the last line, or preserve the same tension without adding value.
         Do not repeat parts of the story, always keep it moving.
 
+        For intimate interactions, prioritize a silent monologue to detail the physical and emotional sensations in descriptive graphic explicit detail.
+
         Do not write the final message text.
         """;
 

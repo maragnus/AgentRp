@@ -1,0 +1,207 @@
+@inject IStoryImageService StoryImageService
+@inject ILogger<StoryEntityImagePicker> Logger
+
+<StoryEntityAvatarButton Name="@EntityName"
+                         ImageUrl="@PrimaryImageUrl"
+                         Crop="@PrimaryImageCrop"
+                         CanEdit="@CanEdit"
+                         Disabled="@(!EntityId.HasValue || IsBusy)"
+                         OnClick="OpenAsync" />
+
+<AppModal IsOpen="@(_previewImage is not null)"
+          Title="@(_previewImage?.Title ?? "Image")"
+          DialogClass="modal-lg modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down"
+          OnClose="ClosePreviewAsync">
+    <ChildContent>
+        @if (_previewImage is not null)
+        {
+            <div class="d-flex flex-column gap-3">
+                <InlineAlert Message="@_errorMessage" />
+                <img src="@_previewImage.ImageUrl" class="img-fluid rounded" alt="@_previewImage.Title" />
+                @if (!string.IsNullOrWhiteSpace(_previewImage.FinalPrompt))
+                {
+                    <div>
+                        <div class="fw-semibold mb-1">Prompt</div>
+                        <div class="small">@_previewImage.FinalPrompt</div>
+                    </div>
+                }
+                @if (!string.IsNullOrWhiteSpace(_previewImage.UserPrompt))
+                {
+                    <div>
+                        <div class="fw-semibold mb-1">User Prompt</div>
+                        <div class="small">@_previewImage.UserPrompt</div>
+                    </div>
+                }
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <button type="button" class="btn btn-outline-secondary" disabled="@IsBusy" @onclick="ClosePreviewAsync">Close</button>
+        <button type="button" class="btn btn-outline-primary" disabled="@IsBusy" @onclick="OpenCropFromPreview">
+            <i class="fa-regular fa-crop-simple me-2" aria-hidden="true"></i>
+            Crop
+        </button>
+        <button type="button" class="btn btn-primary" disabled="@IsBusy" @onclick="OpenCatalog">
+            <i class="fa-regular fa-images me-2" aria-hidden="true"></i>
+            Replace
+        </button>
+    </FooterContent>
+</AppModal>
+
+<StoryImageCatalogModal ThreadId="ThreadId"
+                        IsOpen="_isCatalogOpen"
+                        EntityKind="EntityKind"
+                        EntityId="EntityId"
+                        EntityName="@EntityName"
+                        OnSelected="HandleCatalogSelectedAsync"
+                        OnClose="CloseCatalogAsync" />
+
+<StoryImageCropModal ThreadId="ThreadId"
+                     IsOpen="@(_cropImage is not null)"
+                     Image="@_cropImage"
+                     OnSaved="HandleCropSavedAsync"
+                     OnClose="CloseCropAsync" />
+
+@code {
+    [Parameter]
+    public Guid ThreadId { get; set; }
+
+    [Parameter]
+    public StoryEntityKind EntityKind { get; set; }
+
+    [Parameter]
+    public Guid? EntityId { get; set; }
+
+    [Parameter]
+    public string EntityName { get; set; } = string.Empty;
+
+    [Parameter]
+    public Guid? PrimaryImageId { get; set; }
+
+    [Parameter]
+    public string? PrimaryImageUrl { get; set; }
+
+    [Parameter]
+    public StoryImageAvatarCropView PrimaryImageCrop { get; set; } = StoryImageAvatarCropView.Default;
+
+    [Parameter]
+    public bool CanEdit { get; set; } = true;
+
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
+    private bool _isLoadingPreview;
+    private bool _isCatalogOpen;
+    private string? _errorMessage;
+    private StoryImageReferenceView? _previewImage;
+    private StoryImageReferenceView? _cropImage;
+    private StoryImageReferenceView? _pendingPrimaryImage;
+
+    private bool IsBusy => _isLoadingPreview;
+
+    private async Task OpenAsync()
+    {
+        if (!EntityId.HasValue || !CanEdit)
+            return;
+
+        if (!PrimaryImageId.HasValue)
+        {
+            _isCatalogOpen = true;
+            return;
+        }
+
+        _isLoadingPreview = true;
+        _errorMessage = null;
+        try
+        {
+            _previewImage = await StoryImageService.GetImageAsync(ThreadId, PrimaryImageId.Value, CancellationToken.None);
+            if (_previewImage is null)
+                _isCatalogOpen = true;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Opening primary image {ImageId} failed for {EntityKind} {EntityId}.", PrimaryImageId.Value, EntityKind, EntityId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Opening the image for '{BuildEntityDisplayName()}' failed.", exception);
+            _isCatalogOpen = true;
+        }
+        finally
+        {
+            _isLoadingPreview = false;
+        }
+    }
+
+    private void OpenCatalog()
+    {
+        _previewImage = null;
+        _cropImage = null;
+        _pendingPrimaryImage = null;
+        _isCatalogOpen = true;
+    }
+
+    private void OpenCropFromPreview()
+    {
+        _cropImage = _previewImage;
+        _pendingPrimaryImage = null;
+        _previewImage = null;
+    }
+
+    private Task ClosePreviewAsync()
+    {
+        _previewImage = null;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseCatalogAsync()
+    {
+        _isCatalogOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private Task HandleCatalogSelectedAsync(StoryImageReferenceView image)
+    {
+        _previewImage = null;
+        _isCatalogOpen = false;
+        _pendingPrimaryImage = image;
+        _cropImage = image;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleCropSavedAsync(StoryImageReferenceView image)
+    {
+        if (_pendingPrimaryImage?.ImageId == image.ImageId)
+            await SetPendingPrimaryImageAsync(image);
+
+        _pendingPrimaryImage = null;
+        _cropImage = null;
+        _previewImage = null;
+        if (OnChanged.HasDelegate)
+            await OnChanged.InvokeAsync();
+    }
+
+    private Task CloseCropAsync()
+    {
+        _pendingPrimaryImage = null;
+        _cropImage = null;
+        return Task.CompletedTask;
+    }
+
+    private async Task SetPendingPrimaryImageAsync(StoryImageReferenceView image)
+    {
+        if (!EntityId.HasValue)
+            return;
+
+        try
+        {
+            await StoryImageService.SetPrimaryImageAsync(
+                new SetStoryEntityPrimaryImage(ThreadId, EntityKind, EntityId.Value, image.ImageId),
+                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Setting primary image {ImageId} failed for {EntityKind} {EntityId}.", image.ImageId, EntityKind, EntityId);
+            throw new InvalidOperationException($"Selecting '{image.Title}' as the primary image for '{BuildEntityDisplayName()}' failed.", exception);
+        }
+    }
+
+    private string BuildEntityDisplayName() => string.IsNullOrWhiteSpace(EntityName) ? EntityKind.ToString() : EntityName.Trim();
+}

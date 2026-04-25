@@ -197,19 +197,199 @@ public sealed record AgentEndpointStatusView(
     bool CanScaleToZero,
     string? UnlinkedReason);
 
-public sealed record AiProviderSidebarWidgetView(
+public sealed record AiProviderTokenUsageView(
+    long InputTokenCount,
+    long OutputTokenCount,
+    long TotalTokenCount);
+
+public sealed record ImageGenerationModelSettingsView(
+    Guid? SelectedModelId,
+    string Size,
+    string Quality,
+    string ReferenceFidelity);
+
+public sealed record StoryImageGenerationSettingsDocument(
+    Guid? SelectedModelId,
+    string Size,
+    string Quality,
+    string ReferenceFidelity)
+{
+    public static StoryImageGenerationSettingsDocument Default { get; } = new(null, "1024x1024", "auto", "low");
+}
+
+public sealed record StoryImageReferenceView(
+    Guid ImageId,
+    string Title,
+    string ContentType,
+    string ImageUrl,
+    int? Width,
+    int? Height,
+    StoryImageSourceKind SourceKind,
+    DateTime CreatedUtc,
+    bool IsPrimary,
+    string? UserPrompt,
+    string? FinalPrompt,
+    string? GenerationRationale,
+    StoryImageAvatarCropView AvatarCrop,
+    IReadOnlyList<StoryImageEntitySelection> LinkedEntities);
+
+public sealed record StoryImageAvatarCropView(
+    int FocusXPercent,
+    int FocusYPercent,
+    int ZoomPercent)
+{
+    public static StoryImageAvatarCropView Default { get; } = new(50, 50, 100);
+}
+
+public sealed record StoryImageCatalogView(
+    Guid ThreadId,
+    string SearchText,
+    int Take,
+    IReadOnlyList<StoryImageReferenceView> Images);
+
+public sealed record StoryImageGalleryView(
+    Guid ThreadId,
+    StoryEntityKind EntityKind,
+    Guid EntityId,
+    Guid? PrimaryImageId,
+    IReadOnlyList<StoryImageReferenceView> Images);
+
+public sealed record StoryImageEntityOptionView(
+    StoryEntityKind EntityKind,
+    Guid EntityId,
+    string Name,
+    string Description,
+    Guid? PrimaryImageId,
+    string? PrimaryImageUrl,
+    StoryImageAvatarCropView PrimaryImageCrop);
+
+public sealed record StoryImageGenerationDialogView(
+    Guid ThreadId,
+    ImageGenerationModelSettingsView Settings,
+    IReadOnlyList<AgentProviderOptionView> ImageModels,
+    IReadOnlyList<StoryImageEntityOptionView> Entities,
+    IReadOnlyList<StoryImageReferenceView> ReferenceImages);
+
+public sealed record UploadStoryImage(
+    Guid ThreadId,
+    StoryEntityKind EntityKind,
+    Guid EntityId,
+    string FileName,
+    string ContentType,
+    byte[] Bytes,
+    bool SetPrimary);
+
+public sealed record SetStoryEntityPrimaryImage(
+    Guid ThreadId,
+    StoryEntityKind EntityKind,
+    Guid EntityId,
+    Guid? ImageId);
+
+public sealed record UpdateStoryImageCrop(
+    Guid ThreadId,
+    Guid ImageId,
+    int FocusXPercent,
+    int FocusYPercent,
+    int ZoomPercent);
+
+public sealed record RemoveStoryImageLink(
+    Guid ThreadId,
+    StoryEntityKind EntityKind,
+    Guid EntityId,
+    Guid ImageId);
+
+public sealed record GenerateStoryImage(
+    Guid ThreadId,
+    string UserPrompt,
+    IReadOnlyList<StoryImageEntitySelection> Entities,
+    IReadOnlyList<Guid> ReferenceImageIds,
+    bool SetPrimaryForFirstEntity,
+    string Size,
+    string Quality,
+    string ReferenceFidelity);
+
+public sealed record GenerateStoryImagePreview(
+    Guid ThreadId,
+    Guid TransientSessionId,
+    string UserPrompt,
+    string? ReviewedFinalPrompt,
+    IReadOnlyList<StoryImageEntitySelection> Entities,
+    IReadOnlyList<Guid> ReferenceImageIds,
+    string Size,
+    string Quality,
+    string ReferenceFidelity);
+
+public sealed record SaveGeneratedStoryImage(
+    Guid ThreadId,
+    Guid ImageId,
+    Guid TransientSessionId,
+    IReadOnlyList<StoryImageEntitySelection> Entities,
+    bool SetPrimaryForFirstEntity);
+
+public sealed record StoryImageEntitySelection(
+    StoryEntityKind EntityKind,
+    Guid EntityId);
+
+public sealed record StoryImageGenerationResult(
+    Guid ImageId,
+    string ImageUrl,
+    string FinalPrompt,
+    string Rationale);
+
+public sealed record StoryImagePreviewResult(
+    Guid ImageId,
+    string ImageUrl,
+    string UserPrompt,
+    string FinalPrompt,
+    string Rationale);
+
+public sealed record StoryImageGenerationProgress(
+    string Message,
+    string? PreviewImageDataUrl,
+    int? PartialImageIndex,
+    string? FinalPrompt,
+    string? Rationale);
+
+public sealed class StoryImageGenerationBadRequestException(
+    string message,
+    string userPrompt,
+    string finalPrompt,
+    Exception innerException) : InvalidOperationException(message, innerException)
+{
+    public string UserPrompt { get; } = userPrompt;
+
+    public string FinalPrompt { get; } = finalPrompt;
+}
+
+public sealed record StoryImageOptimizationSettingsView(
+    bool IsEnabled,
+    bool HasApiKey,
+    string ApiKey,
+    DateTime? UpdatedUtc,
+    int QueuedImageCount,
+    int OptimizedImageCount,
+    int FailedImageCount);
+
+public sealed record SaveStoryImageOptimizationSettings(
+    bool IsEnabled,
+    string ApiKey);
+
+public sealed record SelectedAiProviderSidebarView(
     Guid ProviderId,
     string ProviderName,
     AiProviderKind ProviderKind,
-    int DiscoveredModelCount,
-    int EnabledModelCount,
     DateTime? RefreshedUtc,
     string? ErrorMessage,
-    IReadOnlyList<AiProviderMetricView> Metrics);
+    IReadOnlyList<AiProviderMetricView> Metrics,
+    AiProviderTokenUsageView TokenUsage);
 
 public sealed record ChatStorySidebarView(
     Guid ThreadId,
+    Guid? CurrentLocationId,
     string? CurrentLocationName,
+    Guid? CurrentLocationPrimaryImageId,
+    string? CurrentLocationPrimaryImageUrl,
+    StoryImageAvatarCropView CurrentLocationPrimaryImageCrop,
     string SelectedSpeakerName,
     IReadOnlyList<StorySidebarSpeakerView> Speakers,
     IReadOnlyList<StoryCharacterListItemView> Characters,
@@ -220,9 +400,11 @@ public sealed record ChatStorySidebarView(
     Guid? SelectedModelId,
     IReadOnlyList<AgentProviderOptionView> AvailableAgents,
     bool IsAiAvailable,
-    IReadOnlyList<AiProviderSidebarWidgetView> ProviderWidgets,
+    SelectedAiProviderSidebarView? SelectedProvider,
     IReadOnlyList<AgentEndpointStatusView> ManagedAgentEndpoints,
-    string? ManagedAgentEndpointsErrorMessage);
+    string? ManagedAgentEndpointsErrorMessage,
+    ImageGenerationModelSettingsView ImageGenerationSettings,
+    IReadOnlyList<AgentProviderOptionView> ImageModels);
 
 public sealed record StorySidebarSpeakerView(
     Guid? CharacterId,
@@ -230,25 +412,37 @@ public sealed record StorySidebarSpeakerView(
     string Summary,
     bool IsNarrator,
     bool IsPresentInScene,
-    bool IsSelected);
+    bool IsSelected,
+    Guid? PrimaryImageId,
+    string? PrimaryImageUrl,
+    StoryImageAvatarCropView PrimaryImageCrop);
 
 public sealed record StoryCharacterListItemView(
     Guid CharacterId,
     string Name,
     string Summary,
     bool IsPresentInScene,
-    bool IsSelectedSpeaker);
+    bool IsSelectedSpeaker,
+    Guid? PrimaryImageId,
+    string? PrimaryImageUrl,
+    StoryImageAvatarCropView PrimaryImageCrop);
 
 public sealed record StoryItemListItemView(
     Guid ItemId,
     string Name,
-    string Summary);
+    string Summary,
+    Guid? PrimaryImageId,
+    string? PrimaryImageUrl,
+    StoryImageAvatarCropView PrimaryImageCrop);
 
 public sealed record StoryLocationListItemView(
     Guid LocationId,
     string Name,
     string Summary,
-    bool IsCurrent);
+    bool IsCurrent,
+    Guid? PrimaryImageId,
+    string? PrimaryImageUrl,
+    StoryImageAvatarCropView PrimaryImageCrop);
 
 public sealed record StoryCharacterUserSheetView(
     string Summary,
@@ -283,14 +477,20 @@ public sealed record StoryCharacterEditorView(
     StoryCharacterModelSheetView ModelSheet,
     StoryCharacterModelSheetStatus ModelSheetStatus,
     bool IsModelSheetReady,
-    bool IsPresentInScene);
+    bool IsPresentInScene,
+    Guid? PrimaryImageId,
+    string? PrimaryImageUrl,
+    StoryImageAvatarCropView PrimaryImageCrop);
 
 public sealed record StoryLocationEditorView(
     Guid LocationId,
     string Name,
     string Summary,
     string Details,
-    bool IsCurrent);
+    bool IsCurrent,
+    Guid? PrimaryImageId,
+    string? PrimaryImageUrl,
+    StoryImageAvatarCropView PrimaryImageCrop);
 
 public sealed record StoryItemEditorView(
     Guid ItemId,
@@ -299,7 +499,10 @@ public sealed record StoryItemEditorView(
     string Details,
     Guid? OwnerCharacterId,
     Guid? LocationId,
-    bool IsPresentInScene);
+    bool IsPresentInScene,
+    Guid? PrimaryImageId,
+    string? PrimaryImageUrl,
+    StoryImageAvatarCropView PrimaryImageCrop);
 
 public sealed record StoryHistoryFactView(
     Guid FactId,
@@ -528,6 +731,8 @@ public interface IUserFeedbackService
 
     void ShowBackgroundError(string message, string title);
 
+    void ShowBackgroundError(Exception exception, string fallbackMessage, string title);
+
     void ShowBackgroundWarning(string message, string title);
 
     void Dismiss(Guid id);
@@ -628,6 +833,58 @@ public interface IChatTransferService
         ChatTransferSelection selection,
         ChatTransferApplyMode mode,
         CancellationToken cancellationToken);
+
+    Task<ChatTransferApplyResult> DuplicateThreadAsync(
+        Guid threadId,
+        ChatTransferSelection selection,
+        CancellationToken cancellationToken);
+}
+
+public interface IStoryImageService
+{
+    Task<StoryImageGenerationDialogView> GetGenerationDialogAsync(Guid threadId, CancellationToken cancellationToken);
+
+    Task<StoryImageCatalogView> GetCatalogAsync(Guid threadId, string? searchText, int take, CancellationToken cancellationToken);
+
+    Task<StoryImageGalleryView> GetGalleryAsync(Guid threadId, StoryEntityKind entityKind, Guid entityId, CancellationToken cancellationToken);
+
+    Task<StoryImageReferenceView?> GetImageAsync(Guid threadId, Guid imageId, CancellationToken cancellationToken);
+
+    Task<StoryImageReferenceView> UploadAsync(UploadStoryImage request, CancellationToken cancellationToken);
+
+    Task SetPrimaryImageAsync(SetStoryEntityPrimaryImage request, CancellationToken cancellationToken);
+
+    Task<StoryImageReferenceView> UpdateCropAsync(UpdateStoryImageCrop request, CancellationToken cancellationToken);
+
+    Task RemoveLinkAsync(RemoveStoryImageLink request, CancellationToken cancellationToken);
+
+    Task<StoryImageGenerationResult> GenerateAsync(GenerateStoryImage request, CancellationToken cancellationToken);
+
+    Task<StoryImagePreviewResult> GeneratePreviewAsync(
+        GenerateStoryImagePreview request,
+        IProgress<StoryImageGenerationProgress>? progress,
+        CancellationToken cancellationToken);
+
+    Task<StoryImageReferenceView> SaveGeneratedImageAsync(SaveGeneratedStoryImage request, CancellationToken cancellationToken);
+
+    Task DiscardTransientImagesAsync(Guid threadId, Guid transientSessionId, CancellationToken cancellationToken);
+
+    Task<ImageGenerationModelSettingsView> GetSettingsAsync(CancellationToken cancellationToken);
+
+    Task SaveSettingsAsync(ImageGenerationModelSettingsView settings, CancellationToken cancellationToken);
+}
+
+public interface IStoryImageOptimizationService
+{
+    Task<StoryImageOptimizationSettingsView> GetSettingsAsync(CancellationToken cancellationToken);
+
+    Task<StoryImageOptimizationSettingsView> SaveSettingsAsync(SaveStoryImageOptimizationSettings settings, CancellationToken cancellationToken);
+
+    Task QueueImageAsync(Guid imageId, CancellationToken cancellationToken);
+
+    Task QueuePrimaryImagesAsync(CancellationToken cancellationToken);
+
+    Task<int> ProcessQueuedImagesAsync(CancellationToken cancellationToken);
 }
 
 public sealed record StorySceneSpeakerView(
@@ -636,7 +893,10 @@ public sealed record StorySceneSpeakerView(
     string Summary,
     bool IsNarrator,
     bool IsPresentInScene,
-    bool IsSelected);
+    bool IsSelected,
+    Guid? PrimaryImageId,
+    string? PrimaryImageUrl,
+    StoryImageAvatarCropView PrimaryImageCrop);
 
 public sealed record StoryChatSnapshotSummaryView(
     Guid SnapshotId,
@@ -794,6 +1054,9 @@ public sealed record StorySceneMessageView(
     string CanonicalSpeakerName,
     string DisplaySpeakerName,
     bool IsNarrator,
+    Guid? SpeakerPrimaryImageId,
+    string? SpeakerPrimaryImageUrl,
+    StoryImageAvatarCropView SpeakerPrimaryImageCrop,
     bool IsSelectedSpeaker,
     bool CanSaveInPlace,
     bool IsSnapshotCandidate,

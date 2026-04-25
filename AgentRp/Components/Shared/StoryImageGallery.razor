@@ -1,0 +1,329 @@
+@inject IStoryImageService StoryImageService
+@inject ILogger<StoryImageGallery> Logger
+
+@if (EntityId.HasValue)
+{
+    <div class="border-top pt-3">
+        <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+            <div class="fw-semibold">Images</div>
+            <div class="d-flex align-items-center gap-2">
+                <label class="btn btn-outline-secondary btn-sm mb-0 @(_isBusy ? "disabled" : string.Empty)"
+                       for="@_fileInputId"
+                       title="Upload image"
+                       aria-label="Upload image">
+                    <i class="fa-regular fa-arrow-up-from-bracket" aria-hidden="true"></i>
+                </label>
+                <InputFile @key="_fileInputKey"
+                           id="@_fileInputId"
+                           class="d-none"
+                           accept="image/png,image/jpeg,image/webp"
+                           disabled="@_isBusy"
+                           OnChange="UploadAsync" />
+                <button type="button"
+                        class="btn btn-outline-primary btn-sm"
+                        title="Generate image"
+                        aria-label="Generate image"
+                        disabled="@_isBusy"
+                        @onclick="OpenGeneration">
+                    <i class="fa-regular fa-image" aria-hidden="true"></i>
+                </button>
+            </div>
+        </div>
+
+        <InlineAlert Message="@_errorMessage" />
+
+        @if (_isLoading)
+        {
+            <div class="d-flex align-items-center gap-2 small text-body-secondary">
+                <div class="spinner-border spinner-border-sm" role="status"></div>
+                <span>Loading images...</span>
+            </div>
+        }
+        else if (_gallery is null || _gallery.Images.Count == 0)
+        {
+            <div class="small text-body-secondary">No images yet.</div>
+        }
+        else
+        {
+            <div class="row row-cols-2 row-cols-md-3 g-2">
+                @foreach (var image in _gallery.Images)
+                {
+                    <div @key="image.ImageId" class="col">
+                        <div class="card h-100">
+                            <button type="button"
+                                    class="btn p-0 text-start"
+                                    title="@image.Title"
+                                    aria-label="@($"Preview {image.Title}")"
+                                    @onclick="() => _previewImage = image">
+                                <img src="@image.ImageUrl" class="card-img-top app-story-image-thumb" alt="@image.Title" />
+                            </button>
+                            <div class="card-body p-2">
+                                <div class="small fw-semibold text-truncate" title="@image.Title">@image.Title</div>
+                                <div class="small text-body-secondary">@image.CreatedUtc.ToShorthandDateWithRelativeDays()</div>
+                            </div>
+                            <div class="card-footer bg-body d-flex align-items-center justify-content-end gap-1 p-2">
+                                <BusyButton Class="@(image.IsPrimary ? "btn btn-primary btn-sm" : "btn btn-outline-primary btn-sm")"
+                                            IsBusy="@(_primaryImageId == image.ImageId)"
+                                            Disabled="@(_isBusy || image.IsPrimary)"
+                                            BusyText=""
+                                            ShowBusyText="false"
+                                            title="Set primary image"
+                                            aria-label="@($"Set {image.Title} as primary image")"
+                                            OnClick="() => SetPrimaryAsync(image.ImageId)">
+                                    <i class="fa-regular fa-star" aria-hidden="true"></i>
+                                </BusyButton>
+                                <BusyButton Class="btn btn-outline-danger btn-sm"
+                                            IsBusy="@(_removingImageId == image.ImageId)"
+                                            Disabled="@_isBusy"
+                                            BusyText=""
+                                            ShowBusyText="false"
+                                            title="Remove image from this entity"
+                                            aria-label="@($"Remove {image.Title} from this entity")"
+                                            OnClick="() => RemoveAsync(image.ImageId)">
+                                    <i class="fa-regular fa-link-slash" aria-hidden="true"></i>
+                                </BusyButton>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    <StoryImageGenerationModal ThreadId="ThreadId"
+                               IsOpen="_isGenerationOpen"
+                               InitialEntityKind="EntityKind"
+                               InitialEntityId="EntityId"
+                               InitialPrompt="@BuildInitialPrompt()"
+                               InitialSize="@BuildInitialSize()"
+                               IncludePrimaryReference="true"
+                               OnImageSaved="HandleGeneratedImageSavedAsync"
+                               OnClose="CloseGenerationAsync" />
+
+    <AppModal IsOpen="@(_previewImage is not null)"
+              Title="@(_previewImage?.Title ?? "Image")"
+              DialogClass="modal-lg modal-dialog-centered modal-dialog-scrollable modal-fullscreen-sm-down"
+              OnClose="ClosePreviewAsync">
+        <ChildContent>
+            @if (_previewImage is not null)
+            {
+                <div class="d-flex flex-column gap-3">
+                    <img src="@_previewImage.ImageUrl" class="img-fluid rounded" alt="@_previewImage.Title" />
+                    @if (!string.IsNullOrWhiteSpace(_previewImage.FinalPrompt))
+                    {
+                        <div>
+                            <div class="fw-semibold mb-1">Prompt</div>
+                            <div class="small">@_previewImage.FinalPrompt</div>
+                        </div>
+                    }
+                </div>
+            }
+        </ChildContent>
+        <FooterContent>
+            <button type="button" class="btn btn-outline-secondary" @onclick="ClosePreviewAsync">Close</button>
+            <button type="button" class="btn btn-outline-primary" @onclick="OpenCropFromPreview">
+                <i class="fa-regular fa-crop-simple me-2" aria-hidden="true"></i>
+                Crop
+            </button>
+        </FooterContent>
+    </AppModal>
+
+    <StoryImageCropModal ThreadId="ThreadId"
+                         IsOpen="@(_cropImage is not null)"
+                         Image="@_cropImage"
+                         OnSaved="HandleCropSavedAsync"
+                         OnClose="CloseCropAsync" />
+}
+
+@code {
+    [Parameter]
+    public Guid ThreadId { get; set; }
+
+    [Parameter]
+    public StoryEntityKind EntityKind { get; set; }
+
+    [Parameter]
+    public Guid? EntityId { get; set; }
+
+    [Parameter]
+    public string EntityName { get; set; } = string.Empty;
+
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
+    private readonly string _fileInputId = $"story-image-upload-{Guid.NewGuid():N}";
+    private int _fileInputKey;
+    private bool _isLoading;
+    private bool _isBusy;
+    private bool _isGenerationOpen;
+    private Guid? _primaryImageId;
+    private Guid? _removingImageId;
+    private string? _errorMessage;
+    private StoryImageGalleryView? _gallery;
+    private StoryImageReferenceView? _previewImage;
+    private StoryImageReferenceView? _cropImage;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (!EntityId.HasValue)
+            return;
+
+        _isLoading = true;
+        _errorMessage = null;
+        try
+        {
+            _gallery = await StoryImageService.GetGalleryAsync(ThreadId, EntityKind, EntityId.Value, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Loading image gallery failed for {EntityKind} {EntityId}.", EntityKind, EntityId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Loading images for '{BuildEntityDisplayName()}' failed.", exception);
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task UploadAsync(InputFileChangeEventArgs args)
+    {
+        if (!EntityId.HasValue || args.File is null)
+            return;
+
+        _isBusy = true;
+        _errorMessage = null;
+        try
+        {
+            var file = args.File;
+            await using var stream = file.OpenReadStream(10 * 1024 * 1024);
+            using var memory = new MemoryStream();
+            await stream.CopyToAsync(memory);
+            var shouldSetPrimary = _gallery?.Images.Count == 0;
+            var image = await StoryImageService.UploadAsync(
+                new UploadStoryImage(ThreadId, EntityKind, EntityId.Value, file.Name, file.ContentType, memory.ToArray(), shouldSetPrimary),
+                CancellationToken.None);
+            await LoadAsync();
+            await NotifyChangedAsync();
+            if (shouldSetPrimary)
+                _cropImage = image;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Uploading image failed for {EntityKind} {EntityId}.", EntityKind, EntityId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Uploading an image for '{BuildEntityDisplayName()}' failed.", exception);
+        }
+        finally
+        {
+            _isBusy = false;
+            _fileInputKey++;
+        }
+    }
+
+    private async Task SetPrimaryAsync(Guid imageId)
+    {
+        if (!EntityId.HasValue)
+            return;
+
+        _primaryImageId = imageId;
+        _errorMessage = null;
+        try
+        {
+            await StoryImageService.SetPrimaryImageAsync(new SetStoryEntityPrimaryImage(ThreadId, EntityKind, EntityId.Value, imageId), CancellationToken.None);
+            _cropImage = _gallery?.Images.FirstOrDefault(x => x.ImageId == imageId);
+            await LoadAsync();
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Setting primary image failed for {EntityKind} {EntityId}.", EntityKind, EntityId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Setting the primary image for '{BuildEntityDisplayName()}' failed.", exception);
+        }
+        finally
+        {
+            _primaryImageId = null;
+        }
+    }
+
+    private async Task RemoveAsync(Guid imageId)
+    {
+        if (!EntityId.HasValue)
+            return;
+
+        _removingImageId = imageId;
+        _errorMessage = null;
+        try
+        {
+            await StoryImageService.RemoveLinkAsync(new RemoveStoryImageLink(ThreadId, EntityKind, EntityId.Value, imageId), CancellationToken.None);
+            await LoadAsync();
+            await NotifyChangedAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Removing image link failed for {EntityKind} {EntityId}.", EntityKind, EntityId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Removing the image from '{BuildEntityDisplayName()}' failed.", exception);
+        }
+        finally
+        {
+            _removingImageId = null;
+        }
+    }
+
+    private void OpenGeneration() => _isGenerationOpen = true;
+
+    private Task CloseGenerationAsync()
+    {
+        _isGenerationOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleGeneratedImageSavedAsync(StoryImageReferenceView image)
+    {
+        _isGenerationOpen = false;
+        _cropImage = image;
+        await LoadAsync();
+        await NotifyChangedAsync();
+    }
+
+    private Task ClosePreviewAsync()
+    {
+        _previewImage = null;
+        return Task.CompletedTask;
+    }
+
+    private void OpenCropFromPreview()
+    {
+        _cropImage = _previewImage;
+        _previewImage = null;
+    }
+
+    private async Task NotifyChangedAsync()
+    {
+        if (OnChanged.HasDelegate)
+            await OnChanged.InvokeAsync();
+    }
+
+    private string BuildInitialPrompt() => StoryImagePromptBuilder.BuildReferencePrompt(EntityKind, EntityName);
+
+    private string BuildInitialSize() => StoryImagePromptBuilder.BuildReferenceSize(EntityKind);
+
+    private async Task HandleCropSavedAsync(StoryImageReferenceView image)
+    {
+        _cropImage = null;
+        _previewImage = null;
+        await LoadAsync();
+        await NotifyChangedAsync();
+    }
+
+    private Task CloseCropAsync()
+    {
+        _cropImage = null;
+        return Task.CompletedTask;
+    }
+
+    private string BuildEntityDisplayName() => string.IsNullOrWhiteSpace(EntityName) ? EntityKind.ToString() : EntityName.Trim();
+}

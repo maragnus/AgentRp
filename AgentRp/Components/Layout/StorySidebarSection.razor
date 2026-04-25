@@ -17,13 +17,31 @@
                 <div class="small text-uppercase text-body-secondary">Story</div>
             </div>
 
-            <button type="button"
-                    class="btn btn-outline-secondary btn-sm"
-                    title="Story Context"
-                    aria-label="Story Context"
-                    @onclick="OpenHistoryModal">
-                <i class="fa-regular fa-timeline" aria-hidden="true"></i>
-            </button>
+            <div class="d-flex align-items-center justify-content-end gap-2 ms-auto">
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        title="Image gallery"
+                        aria-label="Image gallery"
+                        @onclick="OpenImageGalleryModal">
+                    <i class="fa-regular fa-image" aria-hidden="true"></i>
+                </button>
+
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        title="Image optimization"
+                        aria-label="Image optimization"
+                        @onclick="OpenImageOptimizationModal">
+                    <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                </button>
+
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        title="Story Context"
+                        aria-label="Story Context"
+                        @onclick="OpenHistoryModal">
+                    <i class="fa-regular fa-timeline" aria-hidden="true"></i>
+                </button>
+            </div>
         </div>
 
         <InlineAlert Message="@_errorMessage" />
@@ -44,13 +62,62 @@
             <div>
                 <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
                     <div class="small text-uppercase text-body-secondary">AI Model</div>
-                    <button type="button"
-                            class="btn btn-outline-secondary btn-sm"
-                            title="Manage AI providers"
-                            aria-label="Manage AI providers"
-                            @onclick="OpenProviderEditor">
-                        <i class="fa-regular fa-server" aria-hidden="true"></i>
-                    </button>
+                    <div class="d-flex align-items-center gap-1 flex-shrink-0">
+                        @if (_story.AvailableAgents.Count > 0)
+                        {
+                            <div class="dropdown">
+                                <button type="button"
+                                        class="btn btn-outline-primary btn-sm dropdown-toggle"
+                                        title="Switch model"
+                                        aria-label="Switch model"
+                                        aria-expanded="@_isModelSwitcherOpen"
+                                        @onclick="ToggleModelSwitcher">
+                                    <i class="fa-regular fa-shuffle" aria-hidden="true"></i>
+                                </button>
+                                @if (_isModelSwitcherOpen)
+                                {
+                                    <div class="dropdown-menu dropdown-menu-end show app-model-switcher-menu">
+                                        @foreach (var group in AvailableAgentGroups)
+                                        {
+                                            <div @key="group.ProviderId" class="dropdown-header text-truncate" title="@group.ProviderName">@group.ProviderName</div>
+                                            @foreach (var agent in group.Agents)
+                                            {
+                                                var isSelected = _story.SelectedModelId == agent.ModelId;
+                                                var isSwitchingAgent = _switchingAgentNames.Contains(agent.Name);
+
+                                                <button type="button"
+                                                        @key="agent.ModelId"
+                                                        class="dropdown-item d-flex align-items-center justify-content-between gap-2 @(isSelected ? "active" : string.Empty)"
+                                                        disabled="@(isSwitchingAgent || isSelected)"
+                                                        title="@agent.Name"
+                                                        @onclick="() => SelectAgentAsync(agent.ModelId, agent.Name)">
+                                                    <span class="text-truncate">@agent.Name</span>
+                                                    @if (isSelected)
+                                                    {
+                                                        <i class="fa-regular fa-check flex-shrink-0" aria-hidden="true"></i>
+                                                    }
+                                                </button>
+                                            }
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            <button type="button"
+                                    class="btn btn-outline-secondary btn-sm"
+                                    title="Edit selected model settings"
+                                    aria-label="Edit selected model settings"
+                                    @onclick="OpenGenerationSettingsModal">
+                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
+                            </button>
+                        }
+                        <button type="button"
+                                class="btn btn-outline-secondary btn-sm"
+                                title="Manage AI providers"
+                                aria-label="Manage AI providers"
+                                @onclick="OpenProviderEditor">
+                            <i class="fa-regular fa-server" aria-hidden="true"></i>
+                        </button>
+                    </div>
                 </div>
 
                 @if (_story.AvailableAgents.Count == 0)
@@ -66,58 +133,10 @@
                 }
                 else
                 {
-                    <div class="d-flex align-items-center justify-content-between gap-2">
-                        <div class="min-w-0">
-                            <div class="fw-semibold text-truncate">@(_story.SelectedAgentName ?? "No model selected")</div>
-                            <div class="small text-body-secondary text-truncate">@SelectedProviderSummary</div>
-                        </div>
-                        <div class="d-flex gap-1">
-                            <button type="button"
-                                    class="btn btn-outline-primary btn-sm"
-                                    title="Switch model"
-                                    aria-label="Switch model"
-                                    @onclick="ToggleModelSwitcher">
-                                <i class="fa-regular fa-shuffle" aria-hidden="true"></i>
-                            </button>
-                            <button type="button"
-                                    class="btn btn-outline-secondary btn-sm"
-                                    title="Edit selected model settings"
-                                    aria-label="Edit selected model settings"
-                                    @onclick="OpenGenerationSettingsModal">
-                                <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                            </button>
-                        </div>
+                    <div class="min-w-0 overflow-hidden">
+                        <div class="fw-semibold text-truncate" title="@(_story.SelectedAgentName ?? "No model selected")">@(_story.SelectedAgentName ?? "No model selected")</div>
+                        <div class="small text-body-secondary text-truncate" title="@SelectedProviderSummary">@SelectedProviderSummary</div>
                     </div>
-
-                    @if (_isModelSwitcherOpen)
-                    {
-                        <div class="list-group mt-2">
-                            @foreach (var agent in _story.AvailableAgents)
-                            {
-                                var isSelected = _story.SelectedModelId == agent.ModelId;
-                                var isSwitchingAgent = _switchingAgentNames.Contains(agent.Name);
-
-                                <div class="list-group-item">
-                                    <div class="d-flex align-items-center justify-content-between gap-2">
-                                        <button type="button"
-                                                class="btn @(isSelected ? "btn-primary" : "btn-outline-primary") btn-sm flex-grow-1 text-start text-truncate"
-                                                disabled="@(isSwitchingAgent || isSelected)"
-                                                @onclick="() => SelectAgentAsync(agent.ModelId, agent.Name)">
-                                            @agent.Name
-                                        </button>
-                                        <button type="button"
-                                                class="btn btn-outline-secondary btn-sm"
-                                                title="@($"Edit {agent.Name} settings")"
-                                                aria-label="@($"Edit {agent.Name} settings")"
-                                                @onclick="() => OpenGenerationSettingsModal(agent.ModelId)">
-                                            <i class="fa-regular fa-sliders" aria-hidden="true"></i>
-                                        </button>
-                                    </div>
-                                    <div class="small text-body-secondary mt-1">@agent.ProviderName</div>
-                                </div>
-                            }
-                        </div>
-                    }
 
                     @if (_generationSettings is not null)
                     {
@@ -126,28 +145,26 @@
                         </div>
                     }
 
-                    @if (_story.ProviderWidgets.Count > 0)
+                    @if (ShouldShowSelectedProviderMetrics)
                     {
-                        <div class="border-top pt-2 mt-2">
-                            <div class="small text-uppercase text-body-secondary mb-2">Provider Widgets</div>
-                            @foreach (var widget in _story.ProviderWidgets)
+                        var provider = _story.SelectedProvider!;
+                        <div class="pt-2 mt-2">
+                            @if (!string.IsNullOrWhiteSpace(provider.ErrorMessage))
                             {
-                                <div class="border-bottom pb-2 mb-2">
-                                    <div class="d-flex align-items-center justify-content-between gap-2 small">
-                                        <span class="fw-semibold text-truncate">@widget.ProviderName</span>
-                                        <span class="text-body-secondary">@widget.EnabledModelCount/@widget.DiscoveredModelCount models</span>
-                                    </div>
-                                    @if (!string.IsNullOrWhiteSpace(widget.ErrorMessage))
-                                    {
-                                        <div class="small text-danger">@widget.ErrorMessage</div>
-                                    }
-                                    @foreach (var metric in widget.Metrics.Take(2))
-                                    {
-                                        <div class="d-flex align-items-center justify-content-between gap-2 small text-body-secondary">
-                                            <span class="text-truncate">@metric.Label</span>
-                                            <span class="text-truncate">@metric.Value</span>
-                                        </div>
-                                    }
+                                <div class="small text-danger mb-1">@provider.ErrorMessage</div>
+                            }
+                            @if (HasProviderTokenUsage(provider.TokenUsage))
+                            {
+                                <div class="d-flex align-items-center justify-content-between gap-2 small text-body-secondary">
+                                    <span class="text-truncate">Chat Tokens</span>
+                                    <span class="text-truncate">@BuildProviderTokenSummary(provider.TokenUsage)</span>
+                                </div>
+                            }
+                            @foreach (var metric in provider.Metrics.Take(3))
+                            {
+                                <div @key="metric.MetricKind" class="d-flex align-items-center justify-content-between gap-2 small text-body-secondary" title="@metric.Detail">
+                                    <span class="text-truncate">@metric.Label</span>
+                                    <span class="text-truncate">@metric.Value</span>
                                 </div>
                             }
                         </div>
@@ -381,13 +398,37 @@
                     <div class="small text-uppercase text-body-secondary">Current Location</div>
                     <button type="button"
                             class="btn btn-outline-secondary btn-sm"
-                            title="Locations"
-                            aria-label="Locations"
+                            title="Manage locations"
+                            aria-label="Manage locations"
                             @onclick="OpenLocationsModal">
                         <i class="fa-regular fa-location-dot" aria-hidden="true"></i>
                     </button>
                 </div>
-                <div class="fw-semibold">@(_story.CurrentLocationName ?? "No current location")</div>
+                <div class="list-group list-group-flush">
+                    <div class="list-group-item bg-transparent px-0 py-2">
+                        <div class="d-flex align-items-start justify-content-between gap-2">
+                            <div class="flex-grow-1 overflow-hidden">
+                                <div class="d-flex align-items-center gap-2">
+                                    <StoryAvatar Name="@(_story.CurrentLocationName ?? "No current location")"
+                                                 ImageUrl="@_story.CurrentLocationPrimaryImageUrl"
+                                                 Crop="@_story.CurrentLocationPrimaryImageCrop"
+                                                 Class="app-story-avatar-sm flex-shrink-0" />
+                                    <div class="fw-semibold text-truncate">@(_story.CurrentLocationName ?? "No current location")</div>
+                                </div>
+                            </div>
+
+                            <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        title="Edit location"
+                                        aria-label="Edit location"
+                                        @onclick="() => OpenLocationsModal(_story.CurrentLocationId)">
+                                    <i class="fa-regular fa-pen" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="border-top pt-3">
@@ -411,10 +452,19 @@
                         var speakerButtonClass = speaker.IsSelected ? "btn btn-primary btn-sm" : "btn btn-outline-primary btn-sm";
                         var speakerKey = GetSpeakerKey(speaker.CharacterId);
 
-                        <div class="@speakerRowClass">
+                        <div @key="speakerKey" class="@speakerRowClass">
                             <div class="d-flex align-items-start justify-content-between gap-2">
                                 <div class="flex-grow-1 overflow-hidden">
-                                    <div class="fw-semibold text-truncate">@speaker.Name</div>
+                                    <div class="d-flex align-items-center gap-2">
+                                        @if (!speaker.IsNarrator)
+                                        {
+                                            <StoryAvatar Name="@speaker.Name"
+                                                         ImageUrl="@speaker.PrimaryImageUrl"
+                                                         Crop="@speaker.PrimaryImageCrop"
+                                                         Class="app-story-avatar-sm flex-shrink-0" />
+                                        }
+                                        <div class="fw-semibold text-truncate">@speaker.Name</div>
+                                    </div>
                                 </div>
 
                                 <div class="d-flex align-items-center gap-2 flex-shrink-0">
@@ -483,10 +533,16 @@
                     <div class="list-group list-group-flush">
                         @foreach (var item in _story.SceneItems)
                         {
-                            <div class="list-group-item bg-transparent px-0 py-2">
+                            <div @key="item.ItemId" class="list-group-item bg-transparent px-0 py-2">
                                 <div class="d-flex align-items-start justify-content-between gap-2">
                                     <div class="flex-grow-1 overflow-hidden">
-                                        <div class="fw-semibold text-truncate">@item.Name</div>
+                                        <div class="d-flex align-items-center gap-2">
+                                            <StoryAvatar Name="@item.Name"
+                                                         ImageUrl="@item.PrimaryImageUrl"
+                                                         Crop="@item.PrimaryImageCrop"
+                                                         Class="app-story-avatar-sm flex-shrink-0" />
+                                            <div class="fw-semibold text-truncate">@item.Name</div>
+                                        </div>
                                     </div>
 
                                     <div class="d-flex align-items-center gap-2 flex-shrink-0">
@@ -528,6 +584,7 @@
                          OnChanged="HandleStoryChangedAsync" />
     <StoryLocationsModal ThreadId="_threadId.Value"
                          IsOpen="_isLocationsModalOpen"
+                         InitialLocationId="_selectedLocationIdForModal"
                          OnClose="CloseLocationsModal"
                          OnChanged="HandleStoryChangedAsync" />
     <StoryItemsModal ThreadId="_threadId.Value"
@@ -539,7 +596,15 @@
                        IsOpen="_isHistoryModalOpen"
                        OnClose="CloseHistoryModal"
                        OnChanged="HandleStoryChangedAsync" />
+    <StoryImageCatalogModal ThreadId="_threadId.Value"
+                            IsOpen="_isImageGalleryModalOpen"
+                            GalleryMode="true"
+                            OnClose="CloseImageGalleryModal" />
 }
+
+<StoryImageOptimizationModal IsOpen="_isImageOptimizationModalOpen"
+                             OnClose="CloseImageOptimizationModal"
+                             OnChanged="HandleStoryChangedAsync" />
 
 <AiProviderModelEditorModal IsOpen="_isProviderEditorOpen"
                             OnClose="CloseProviderEditor"
@@ -621,7 +686,7 @@
                 <div class="list-group">
                     @foreach (var model in _story.AvailableAgents.Where(x => x.ModelId != _generationSettingsModelId))
                     {
-                        <div class="list-group-item">
+                        <div @key="model.ModelId" class="list-group-item">
                             <div class="d-flex align-items-center justify-content-between gap-2">
                                 <div class="min-w-0">
                                     <div class="fw-semibold text-truncate">@model.Name</div>
@@ -793,6 +858,8 @@
     private bool _isLocationsModalOpen;
     private bool _isItemsModalOpen;
     private bool _isHistoryModalOpen;
+    private bool _isImageGalleryModalOpen;
+    private bool _isImageOptimizationModalOpen;
     private bool _isGenerationSettingsModalOpen;
     private bool _isProviderEditorOpen;
     private bool _isModelSwitcherOpen;
@@ -807,6 +874,7 @@
     private StoryModelStageSettingsDraft _planningGenerationSettingsDraft = new();
     private StoryModelStageSettingsDraft _writingGenerationSettingsDraft = new();
     private Guid? _selectedCharacterIdForModal;
+    private Guid? _selectedLocationIdForModal;
     private Guid? _selectedItemIdForModal;
     private bool _startCharacterModalInCreateMode;
     private string? _errorMessage;
@@ -917,7 +985,17 @@
         _isCharacterModalOpen = true;
     }
 
-    private void OpenLocationsModal() => _isLocationsModalOpen = true;
+    private void OpenLocationsModal()
+    {
+        _selectedLocationIdForModal = null;
+        _isLocationsModalOpen = true;
+    }
+
+    private void OpenLocationsModal(Guid? locationId)
+    {
+        _selectedLocationIdForModal = locationId;
+        _isLocationsModalOpen = true;
+    }
 
     private void OpenItemsModal()
     {
@@ -932,6 +1010,10 @@
     }
 
     private void OpenHistoryModal() => _isHistoryModalOpen = true;
+
+    private void OpenImageGalleryModal() => _isImageGalleryModalOpen = true;
+
+    private void OpenImageOptimizationModal() => _isImageOptimizationModalOpen = true;
 
     private void OpenProviderEditor() => _isProviderEditorOpen = true;
 
@@ -974,6 +1056,7 @@
     private Task CloseLocationsModal()
     {
         _isLocationsModalOpen = false;
+        _selectedLocationIdForModal = null;
         return Task.CompletedTask;
     }
 
@@ -987,6 +1070,18 @@
     private Task CloseHistoryModal()
     {
         _isHistoryModalOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseImageGalleryModal()
+    {
+        _isImageGalleryModalOpen = false;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseImageOptimizationModal()
+    {
+        _isImageOptimizationModalOpen = false;
         return Task.CompletedTask;
     }
 
@@ -1054,7 +1149,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Selecting speaker {SpeakerId} failed for chat {ChatId}.", speaker.CharacterId, _threadId.Value);
-            _errorMessage = $"Selecting {speaker.Name} as the active speaker failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Selecting {speaker.Name} as the active speaker failed.", exception);
         }
         finally
         {
@@ -1302,7 +1397,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Updating scene presence for character {CharacterId} failed for chat {ChatId}.", character.CharacterId, _threadId.Value);
-            _errorMessage = $"Updating scene presence for '{character.Name}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Updating scene presence for '{character.Name}' failed.", exception);
         }
         finally
         {
@@ -1348,7 +1443,7 @@
         catch (Exception exception)
         {
             Logger.LogError(exception, "Updating scene presence for item {ItemId} failed for chat {ChatId}.", item.ItemId, _threadId.Value);
-            _errorMessage = $"Updating scene presence for '{item.Name}' failed.";
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Updating scene presence for '{item.Name}' failed.", exception);
         }
         finally
         {
@@ -1367,6 +1462,38 @@
     private string SelectedProviderSummary =>
         _story?.AvailableAgents.FirstOrDefault(x => x.ModelId == _story.SelectedModelId)?.ProviderName
         ?? "Provider unavailable";
+
+    private IReadOnlyList<AgentProviderGroup> AvailableAgentGroups =>
+        _story?.AvailableAgents
+            .GroupBy(x => new { x.ProviderId, x.ProviderName })
+            .Select(x => new AgentProviderGroup(x.Key.ProviderId, x.Key.ProviderName, x.ToList()))
+            .ToList()
+        ?? [];
+
+    private bool ShouldShowSelectedProviderMetrics =>
+        _story?.SelectedProvider is { } provider
+        && provider.ProviderKind != AiProviderKind.HuggingFaceInferenceEndpoint
+        && (!string.IsNullOrWhiteSpace(provider.ErrorMessage)
+            || provider.Metrics.Count > 0
+            || HasProviderTokenUsage(provider.TokenUsage));
+
+    private static bool HasProviderTokenUsage(AiProviderTokenUsageView usage) =>
+        usage.InputTokenCount > 0
+        || usage.OutputTokenCount > 0
+        || usage.TotalTokenCount > 0;
+
+    private static string BuildProviderTokenSummary(AiProviderTokenUsageView usage)
+    {
+        var parts = new List<string>();
+        if (usage.InputTokenCount > 0)
+            parts.Add($"In {usage.InputTokenCount:N0}");
+        if (usage.OutputTokenCount > 0)
+            parts.Add($"Out {usage.OutputTokenCount:N0}");
+        if (usage.TotalTokenCount > 0)
+            parts.Add($"Total {usage.TotalTokenCount:N0}");
+
+        return string.Join(" / ", parts);
+    }
 
     private bool ShouldShowManagedEndpointError =>
         _story is not null
@@ -1694,4 +1821,9 @@
             StopSequencesText = string.Join(Environment.NewLine, settings.StopSequences)
         };
     }
+
+    private sealed record AgentProviderGroup(
+        Guid ProviderId,
+        string ProviderName,
+        IReadOnlyList<AgentProviderOptionView> Agents);
 }

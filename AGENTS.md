@@ -34,6 +34,7 @@ If you choose not to reuse a similar existing implementation, briefly state why.
 - ALWAYS write code to be testable, even if no tests exist.
 - ALWAYS use Bootstrap UI components, classes, and styles.
 - ALWAYS try to avoid custom CSS classes, custom CSS styling, component CSS, and inline styles in Blazor UI. In the event custom CSS is needed, use `app.css` so that it is globally accessible and easy to maintain.
+- ALWAYS set `@key` on Blazor components and repeated root elements created inside `.razor` `foreach` or `for` loops. Use the stable domain identifier for the item whenever one exists.
 - User-facing errors must follow the Displaying Failure Context rules so users always receive a meaningful reason for failures.
 - When working through a bug, if the root cause is unclear, add detailed debugging output and ask the user to reproduce. Don't put in failsafe checks down the line until the user confirms that the root cause search has been exhausted.
 - Do not spend effort on migrations or backwards compatibility unless the user explicitly asks for them.
@@ -63,6 +64,7 @@ If you choose not to reuse a similar existing implementation, briefly state why.
 - Avoid excessive verbosity and repetition in the UI/UX, it should feel clean, compact
 - Buttons do not need text labels when the icon is already sufficiently clear. Prefer compact icon-only buttons in those cases, but always provide accessible labels/tooltips.
 - Do not show filler, placeholder, or duplicate user-facing text in progress, status, or detail UI. Expanded content must add new information beyond the collapsed summary.
+- Do not add redundant section headers beneath an already-labeled section. Do not add sidebar widgets that summarize inventory counts unless that count directly supports a user action or decision in that spot.
 - Do not add redundant indicators when selection state, active styling, or layout already makes the current item obvious.
 - Display simple representations of complex things but enable access to details through accordians, popups, and/or dedicated detail pages.
   Example: A task list may be a checklist where the active items display real-time status, but can be expanded to display more details. And a the task list itself should have a full detail page that examples all steps in full detail.
@@ -79,7 +81,9 @@ If you choose not to reuse a similar existing implementation, briefly state why.
 
 ## Displaying Failure Context
 - Every failed async action must tell the user what failed, which item/provider/model was being processed when that matters, and the best available reason the action failed.
-- Use the shared user-facing error formatter for caught exceptions so internal and external failures are handled consistently.
+- In catch blocks that set an inline error field, call `UserFacingErrorMessageBuilder.Build(fallbackMessage, exception)` instead of assigning a hand-written generic failure string.
+- In catch blocks that only notify through a toast, call the `IUserFeedbackService.ShowBackgroundError(exception, fallbackMessage, title)` overload instead of formatting the message locally.
+- Never hand-write a generic caught-exception failure message when the exception is available; use a direct string only for validation or guard messages that already explain the exact reason.
 - If a service, domain validation, or exception chain contains a meaningful reason, show a sanitized version of that reason to the user.
 - If no structured or domain-specific reason exists, show the sanitized exception message rather than replacing it with a vague generic failure.
 - Only suppress details that are unsafe or noisy: stack traces, raw exception type names, secrets, tokens, and full raw response dumps when a useful field can be extracted.
