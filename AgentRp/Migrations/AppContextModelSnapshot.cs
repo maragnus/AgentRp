@@ -245,6 +245,9 @@ namespace AgentRp.Migrations
                     b.Property<Guid?>("ParentMessageId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("PrivateIntent")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("Role")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");

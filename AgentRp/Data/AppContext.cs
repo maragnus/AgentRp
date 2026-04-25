@@ -94,6 +94,7 @@ public sealed class AppContext(DbContextOptions<AppContext> options) : DbContext
             builder.Property(x => x.MessageKind).HasConversion<string>();
             builder.Property(x => x.GenerationMode).HasConversion<string>();
             builder.Property(x => x.Content).HasColumnType("nvarchar(max)");
+            builder.Property(x => x.PrivateIntent).HasColumnType("nvarchar(max)");
             builder.HasIndex(x => new { x.ThreadId, x.CreatedUtc });
             builder.HasIndex(x => new { x.ThreadId, x.ParentMessageId });
             builder.HasIndex(x => x.EditedFromMessageId);
@@ -294,6 +295,8 @@ public sealed class ChatMessage
     public ChatMessageKind MessageKind { get; set; }
 
     public required string Content { get; set; }
+
+    public string? PrivateIntent { get; set; }
 
     public DateTime CreatedUtc { get; set; }
 

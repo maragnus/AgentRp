@@ -300,7 +300,9 @@ public sealed class StoryChatAppearanceService(
                 message.CreatedUtc,
                 ResolveSpeakerName(message, characters),
                 message.MessageKind == ChatMessageKind.Narration,
-                message.Content))
+                message.Content,
+                message.SpeakerCharacterId,
+                null))
             .ToList();
     }
 

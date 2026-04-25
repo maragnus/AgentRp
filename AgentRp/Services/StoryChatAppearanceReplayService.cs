@@ -75,7 +75,9 @@ public sealed class StoryChatAppearanceReplayService(
                 message.CreatedUtc,
                 ResolveSpeakerName(message, context.Story.Characters.Entries),
                 message.MessageKind == ChatMessageKind.Narration,
-                message.Content))
+                message.Content,
+                message.SpeakerCharacterId,
+                null))
             .ToList();
         var response = await agent.ChatClient.GetResponseAsync<AppearanceReplayResponse>(
             [

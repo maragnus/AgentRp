@@ -80,6 +80,11 @@ public sealed record ChatMessageUpdate(
     Guid MessageId,
     string Content);
 
+public sealed record UpdateStoryScenePrivateIntent(
+    Guid ThreadId,
+    Guid MessageId,
+    string? PrivateIntent);
+
 public sealed record ChangeStorySceneMessageSpeaker(
     Guid ThreadId,
     Guid MessageId,
@@ -135,6 +140,7 @@ public sealed record ChatTransferMessageRecord(
     ChatRole Role,
     ChatMessageKind MessageKind,
     string Content,
+    string? PrivateIntent,
     DateTime CreatedUtc,
     Guid? SpeakerCharacterId,
     StoryScenePostMode GenerationMode,
@@ -1049,6 +1055,7 @@ public sealed record StorySceneMessageView(
     ChatMessageKind MessageKind,
     StoryScenePostMode GenerationMode,
     string Content,
+    string? PrivateIntent,
     DateTime CreatedUtc,
     Guid? SpeakerCharacterId,
     string CanonicalSpeakerName,
@@ -1087,7 +1094,8 @@ public sealed record PostStorySceneMessage(
     StoryScenePostMode Mode,
     string? ManualText,
     string? GuidancePrompt,
-    Guid? RetrySourceMessageId = null);
+    Guid? RetrySourceMessageId = null,
+    StoryTurnShape? RequestedTurnShape = null);
 
 public sealed record BranchStorySceneMessage(
     Guid ThreadId,
@@ -1103,7 +1111,9 @@ public sealed record StorySceneTranscriptMessage(
     DateTime CreatedUtc,
     string SpeakerName,
     bool IsNarrator,
-    string Content);
+    string Content,
+    Guid? SpeakerCharacterId,
+    string? PrivateIntent);
 
 public sealed record StorySceneActorContext(
     Guid? CharacterId,
@@ -1177,12 +1187,14 @@ public sealed record StorySceneGenerationContext(
     StoryNarrativeSettingsView StoryContext,
     string HistorySummary,
     StoryChatSnapshotSummaryView? LatestSnapshot,
-    IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceSnapshot);
+    IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceSnapshot,
+    IReadOnlyList<StorySceneTranscriptMessage>? PrivateIntentTranscript);
 
 public enum StoryTurnShape
 {
     Compact,
     Brief,
+    Extended,
     Monologue,
     Silent,
     SilentMonologue
@@ -1195,18 +1207,21 @@ public sealed record StoryMessagePlannerResult(
     string ImmediateGoal,
     string WhyNow,
     string ChangeIntroduced,
+    string PrivateIntent,
     IReadOnlyList<string> NarrativeGuardrails,
     IReadOnlyList<string> ContentGuardrails);
 
 public sealed record StoryMessageProseRequest(
     StoryScenePostMode Mode,
     string? GuidancePrompt,
+    StoryTurnShape? RequestedTurnShape,
     StorySceneGenerationContext Context,
     StoryMessagePlannerResult Planner);
 
 public sealed record StoryMessageProcessContext(
     StoryScenePostMode Mode,
     string? GuidancePrompt,
+    StoryTurnShape? RequestedTurnShape,
     StorySceneGenerationContext? GenerationContext,
     StorySceneAppearanceResolution? Appearance,
     StorySceneResponderSelectionResult? ResponderSelection,
@@ -1266,6 +1281,8 @@ public interface IStorySceneChatService
     Task<StorySceneAppearanceEntryView> SaveAppearanceReplayStepAsync(SaveStoryChatAppearanceReplayStep request, CancellationToken cancellationToken);
 
     Task UpdatePlanAsync(UpdateStoryScenePlan request, CancellationToken cancellationToken);
+
+    Task UpdatePrivateIntentAsync(UpdateStoryScenePrivateIntent request, CancellationToken cancellationToken);
 }
 
 public interface IStoryChatSnapshotService

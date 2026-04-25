@@ -65,6 +65,17 @@ internal static class StorySceneProsePromptBuilder
                     - Do not add a new topic or second emotional turn.
                     """);
                 break;
+            case StoryTurnShape.Extended:
+                builder.AppendLine(
+                    """
+                    This turn has an extended shape, fulfill the beat and expand on it.
+                    - Expand the beat into three paragraphs with detailed choreography and vivid descriptions.
+                    - Use each paragraph well to create meaningful visuals.
+                    - Dialogue, action, and narration are allowed when they serve the immediate goal.
+                    - Provide a clear landing point.
+                    - Do not ramble, recap, or drift into a second move.
+                    """);
+                break;
             case StoryTurnShape.Monologue:
                 builder.AppendLine(
                     """
@@ -143,8 +154,10 @@ internal static class StorySceneProsePromptBuilder
             3. **the immediate goal:** {request.Planner.ImmediateGoal}
             4. **the change introduced:** {request.Planner.ChangeIntroduced}
             5. **why now:** {request.Planner.WhyNow}
-            6. **narrative guardrails:** {FormatList(request.Planner.NarrativeGuardrails)}
+            6. **private intent:** {request.Planner.PrivateIntent}
+            7. **narrative guardrails:** {FormatList(request.Planner.NarrativeGuardrails)}
             - Honor why now and the guardrails.
+            - Let private intent influence the actor's subtext and choices, but do not reveal it directly unless the planned beat naturally makes some part visible.
             - Do not expand beyond them.
             - Stop early to prevent ramble, recap, or repeating yourself.
             """).AppendLine();
@@ -171,11 +184,21 @@ internal static class StorySceneProsePromptBuilder
                     - One or two short "spoken lines" separated by simple *action*.
                     """);
                 break;
+            case StoryTurnShape.Extended:
+                builder.AppendLine(
+                    """
+                    Write an extended turn with:
+                    - One to three paragraphs.
+                    - "Dialogue", *action*, and narration that all serve the same planned beat.
+                    - A clear landing point before the turn becomes a second move.
+                    """);
+                break;
             case StoryTurnShape.Monologue:
                 builder.AppendLine(
                     """
-                    Write only a very short monologue turn with:
-                    - Up to three sentences maximum of "spoken word"s with simple *action* in between.
+                    Write a brief monologue turn with:
+                    - Sentences of "spoken word"s with simple *action* in between.
+                    - Flow this into a connected move with a clear landing point.
                     - Stop before repeating.
                     """);
                 break;
@@ -220,6 +243,12 @@ internal static class StorySceneProsePromptBuilder
             - Keep the turn focused on a single beat.
             - Do not drift into explanation.
             """,
+        StoryTurnShape.Extended =>
+            """
+            - Use one to three focused paragraphs.
+            - Keep every paragraph tied to the same planned beat.
+            - Land before the narration becomes a second scene beat.
+            """,
         StoryTurnShape.Monologue =>
             """
             - A short monologue is allowed.
@@ -255,6 +284,12 @@ internal static class StorySceneProsePromptBuilder
             - Use one to two short lines total.
             - Keep any action beat brief and supportive.
             - Do not drift into explanation.
+            """,
+        StoryTurnShape.Extended =>
+            """
+            - Use one to three focused paragraphs.
+            - Mix dialogue and action only when they serve the same planned beat.
+            - Land before the turn becomes a second scene beat.
             """,
         StoryTurnShape.Monologue =>
             """

@@ -214,6 +214,7 @@ public sealed class StorySceneChatServiceTests
                 "Immediate goal",
                 "Why now",
                 "Change introduced",
+                "Private intent",
                 [],
                 []));
 
@@ -233,6 +234,7 @@ public sealed class StorySceneChatServiceTests
                 "Immediate goal",
                 "Why now",
                 "Change introduced",
+                "Private intent",
                 null!,
                 null!));
 

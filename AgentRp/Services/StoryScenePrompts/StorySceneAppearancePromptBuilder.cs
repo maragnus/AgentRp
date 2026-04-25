@@ -35,6 +35,8 @@ internal static class StorySceneAppearancePromptBuilder
         - add new visible details
         - replace changed details
         - remove contradicted details
+        - account for arms and legs, make sure only two of each are visible and they are in plausible positions
+        - prevent lingering hand/arm positions that are not plausible to still be current
 
         Write only the current snapshot.
         Do not recap actions.

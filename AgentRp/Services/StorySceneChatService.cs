@@ -163,6 +163,64 @@ public sealed class StorySceneChatService(
         PublishWorkspaceRefresh(thread.Id);
     }
 
+    public async Task UpdatePrivateIntentAsync(UpdateStoryScenePrivateIntent request, CancellationToken cancellationToken)
+    {
+        await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
+        var thread = await dbContext.ChatThreads
+            .Include(x => x.Messages)
+            .FirstOrDefaultAsync(x => x.Id == request.ThreadId, cancellationToken)
+            ?? throw new InvalidOperationException("Updating private intent failed because the selected chat could not be found.");
+        var message = thread.Messages.FirstOrDefault(x => x.Id == request.MessageId)
+            ?? throw new InvalidOperationException("Updating private intent failed because the selected message could not be found.");
+        var selectedLeafMessageId = ResolveSelectedLeafMessageId(thread.Messages, thread.ActiveLeafMessageId);
+
+        if (!IsMessageOnSelectedPath(thread.Messages, selectedLeafMessageId, message.Id))
+            throw new InvalidOperationException("Updating private intent failed because only messages in the current chat log can be edited.");
+
+        var privateIntent = NormalizeOptionalText(request.PrivateIntent);
+        message.PrivateIntent = privateIntent;
+        thread.UpdatedUtc = DateTime.UtcNow;
+
+        if (message.SourceProcessRunId.HasValue)
+        {
+            var run = await dbContext.ProcessRuns
+                .Include(x => x.Steps)
+                .FirstOrDefaultAsync(x => x.Id == message.SourceProcessRunId.Value && x.ThreadId == thread.Id, cancellationToken);
+            if (run is not null && run.Status != ProcessRunStatus.Running)
+            {
+                var processContext = DeserializeContext(run.ContextJson);
+                if (processContext is not null)
+                {
+                    var updatedPlanner = processContext.Planner is null
+                        ? null
+                        : processContext.Planner with { PrivateIntent = privateIntent ?? string.Empty };
+                    var updatedProseRequest = processContext.ProseRequest is null
+                        ? null
+                        : processContext.ProseRequest with
+                        {
+                            Planner = updatedPlanner ?? processContext.ProseRequest.Planner with { PrivateIntent = privateIntent ?? string.Empty }
+                        };
+                    var updatedContext = processContext with
+                    {
+                        Planner = updatedPlanner,
+                        ProseRequest = updatedProseRequest,
+                        StepArtifacts = UpdatePlanningArtifactsPrivateIntent(processContext.StepArtifacts, updatedPlanner)
+                    };
+
+                    run.ContextJson = SerializeContext(updatedContext);
+                    if (updatedPlanner is not null)
+                    {
+                        run.Summary = BuildPlannerSummary(updatedPlanner);
+                        UpdateStepSummaryIfPresent(run, ProcessStepKeys.Planning, BuildPlannerSummary(updatedPlanner), StorySceneSharedPromptBuilder.BuildPlannerDetail(updatedPlanner));
+                    }
+                }
+            }
+        }
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        PublishWorkspaceRefresh(thread.Id);
+    }
+
     public async Task<ChangeStorySceneMessageSpeakerResult> ChangeMessageSpeakerAsync(ChangeStorySceneMessageSpeaker request, CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
@@ -207,6 +265,7 @@ public sealed class StorySceneChatService(
         if (canSaveInPlace)
         {
             AssignMessageSpeaker(sourceMessage, request.SpeakerCharacterId);
+            sourceMessage.PrivateIntent = null;
             if (sourceRun is not null)
                 RewriteProcessRunForSpeakerChange(sourceRun, sourceMessage.Id, request.SpeakerCharacterId, updatedActor);
 
@@ -226,6 +285,7 @@ public sealed class StorySceneChatService(
             Role = sourceMessage.Role,
             MessageKind = ResolveMessageKind(request.SpeakerCharacterId),
             Content = sourceMessage.Content,
+            PrivateIntent = null,
             CreatedUtc = now,
             SpeakerCharacterId = request.SpeakerCharacterId,
             GenerationMode = sourceMessage.GenerationMode,
@@ -273,6 +333,7 @@ public sealed class StorySceneChatService(
             Role = sourceMessage.Role,
             MessageKind = sourceMessage.MessageKind,
             Content = request.Content.Trim(),
+            PrivateIntent = sourceMessage.PrivateIntent,
             CreatedUtc = now,
             SpeakerCharacterId = sourceMessage.SpeakerCharacterId,
             GenerationMode = StoryScenePostMode.Manual,
@@ -346,7 +407,7 @@ public sealed class StorySceneChatService(
             var planner = sourceContext.Planner
                 ?? throw new InvalidOperationException("Regenerating the scene prose failed because the saved planner result could not be reused.");
 
-            proseRequest = new StoryMessageProseRequest(sourceMessage.GenerationMode, sourceContext.GuidancePrompt, generationContext, planner);
+            proseRequest = new StoryMessageProseRequest(sourceMessage.GenerationMode, sourceContext.GuidancePrompt, sourceContext.RequestedTurnShape, generationContext, planner);
             sourceSpeakerName = proseRequest.Context.Actor.Name;
 
             var now = DateTime.UtcNow;
@@ -382,13 +443,14 @@ public sealed class StorySceneChatService(
                 ContextJson = SerializeContext(new StoryMessageProcessContext(
                     proseRequest.Mode,
                     proseRequest.GuidancePrompt,
+                    proseRequest.RequestedTurnShape,
                     proseRequest.Context,
                     appearance,
                     null,
                     proseRequest.Planner,
                     proseRequest,
                     null,
-                    BuildPlanningCompletedStepArtifacts(proseRequest.Mode, proseRequest.GuidancePrompt, proseRequest.Context, appearance, null, proseRequest.Planner))),
+                    BuildPlanningCompletedStepArtifacts(proseRequest.Mode, proseRequest.GuidancePrompt, proseRequest.RequestedTurnShape, proseRequest.Context, appearance, null, proseRequest.Planner))),
                 Status = ProcessRunStatus.Running,
                 StartedUtc = now,
                 PlanningStartedUtc = now,
@@ -632,6 +694,7 @@ public sealed class StorySceneChatService(
         var updatedStepArtifacts = BuildStepArtifactsForSavedPlannerEdit(
             sourceContext.Mode,
             sourceContext.GuidancePrompt,
+            sourceContext.RequestedTurnShape,
             generationContext,
             appearance,
             sourceContext.ResponderSelection,
@@ -769,6 +832,7 @@ public sealed class StorySceneChatService(
             var processContext = new StoryMessageProcessContext(
                 request.Mode,
                 trimmedGuidancePrompt,
+                request.RequestedTurnShape,
                 null,
                 null,
                 null,
@@ -825,7 +889,7 @@ public sealed class StorySceneChatService(
             sharedContext = generationBuild.Context;
             appearanceResolution = generationBuild.Appearance;
             appearanceTokenUsage = generationBuild.AppearanceTokenUsage;
-            await UpdateAppearanceCompletionAsync(request.ThreadId, runId, request.Mode, trimmedGuidancePrompt, sharedContext, appearanceResolution, appearanceTokenUsage, generationBuild.AppearanceStageSkipped, cancellationToken);
+            await UpdateAppearanceCompletionAsync(request.ThreadId, runId, request.Mode, trimmedGuidancePrompt, request.RequestedTurnShape, sharedContext, appearanceResolution, appearanceTokenUsage, generationBuild.AppearanceStageSkipped, cancellationToken);
             PublishWorkspaceRefresh(request.ThreadId);
 
             if (IsRespondMode(request.Mode))
@@ -846,6 +910,7 @@ public sealed class StorySceneChatService(
                     messageId,
                     request.Mode,
                     trimmedGuidancePrompt,
+                    request.RequestedTurnShape,
                     generationContext,
                     appearanceResolution,
                     responderSelection,
@@ -859,10 +924,10 @@ public sealed class StorySceneChatService(
 
             var plannerStage = await RunPlannerStageAsync(agent, request, generationContext, generationSettings, operation.CancellationToken);
             var planner = plannerStage.Planner;
-            await UpdatePlannerCompletionAsync(request.ThreadId, runId, planner, plannerStage.TokenUsage, generationContext, appearanceResolution, responderSelection, trimmedGuidancePrompt, request.Mode, cancellationToken);
+            await UpdatePlannerCompletionAsync(request.ThreadId, runId, planner, plannerStage.TokenUsage, generationContext, appearanceResolution, responderSelection, trimmedGuidancePrompt, request.RequestedTurnShape, request.Mode, cancellationToken);
             PublishWorkspaceRefresh(request.ThreadId);
 
-            proseRequest = new StoryMessageProseRequest(request.Mode, trimmedGuidancePrompt, generationContext, planner);
+            proseRequest = new StoryMessageProseRequest(request.Mode, trimmedGuidancePrompt, request.RequestedTurnShape, generationContext, planner);
             failedAppearanceResolution = appearanceResolution;
             var proseText = await StreamProseStageAsync(
                 agent,
@@ -961,12 +1026,13 @@ public sealed class StorySceneChatService(
 
         return new PlannerStageExecutionResult(
             new StoryMessagePlannerResult(
-                NormalizeTurnShape(planner.TurnShape),
+                request.RequestedTurnShape ?? NormalizeTurnShape(planner.TurnShape),
                 RequireValue(planner.Beat, "planner beat"),
                 RequireValue(planner.Intent, "planner intent"),
                 RequireValue(planner.ImmediateGoal, "planner immediate goal"),
                 RequireValue(planner.WhyNow, "planner why now"),
                 RequireValue(planner.ChangeIntroduced, "planner change introduced"),
+                RequireValue(planner.PrivateIntent, "planner private intent"),
                 NormalizeItems(planner.NarrativeGuardrails),
                 NormalizeItems(planner.ContentGuardrails)),
             StoryMessageTokenUsageMapper.Map(response.Usage));
@@ -1089,6 +1155,7 @@ public sealed class StorySceneChatService(
         Guid runId,
         StoryScenePostMode mode,
         string? guidancePrompt,
+        StoryTurnShape? requestedTurnShape,
         StorySceneSharedContext context,
         StorySceneAppearanceResolution appearance,
         StoryMessageTokenUsage? tokenUsage,
@@ -1108,13 +1175,14 @@ public sealed class StorySceneChatService(
         run.ContextJson = SerializeContext(new StoryMessageProcessContext(
             mode,
             guidancePrompt,
+            requestedTurnShape,
             null,
             appearance,
             null,
             null,
             null,
             null,
-            BuildAppearanceCompletedStepArtifacts(mode, context, appearance)));
+            BuildAppearanceCompletedStepArtifacts(mode, requestedTurnShape, context, appearance)));
 
         if (skipAppearanceStep)
             RemoveStepIfPresent(dbContext, run, ProcessStepKeys.Appearance);
@@ -1153,6 +1221,7 @@ public sealed class StorySceneChatService(
         Guid messageId,
         StoryScenePostMode mode,
         string? guidancePrompt,
+        StoryTurnShape? requestedTurnShape,
         StorySceneGenerationContext context,
         StorySceneAppearanceResolution appearance,
         StorySceneResponderSelectionResult responderSelection,
@@ -1173,13 +1242,14 @@ public sealed class StorySceneChatService(
         run.ContextJson = SerializeContext(new StoryMessageProcessContext(
             mode,
             guidancePrompt,
+            requestedTurnShape,
             context,
             appearance,
             responderSelection,
             null,
             null,
             null,
-            BuildResponderCompletedStepArtifacts(mode, guidancePrompt, context, appearance, responderSelection)));
+            BuildResponderCompletedStepArtifacts(mode, guidancePrompt, requestedTurnShape, context, appearance, responderSelection)));
 
         message.SpeakerCharacterId = responderSelection.CharacterId;
         message.MessageKind = ResolveMessageKind(responderSelection.CharacterId);
@@ -1213,6 +1283,7 @@ public sealed class StorySceneChatService(
         StorySceneAppearanceResolution appearance,
         StorySceneResponderSelectionResult? responderSelection,
         string? guidancePrompt,
+        StoryTurnShape? requestedTurnShape,
         StoryScenePostMode mode,
         CancellationToken cancellationToken)
     {
@@ -1229,13 +1300,14 @@ public sealed class StorySceneChatService(
         run.ContextJson = SerializeContext(new StoryMessageProcessContext(
             mode,
             guidancePrompt,
+            requestedTurnShape,
             context,
             appearance,
             responderSelection,
             planner,
             null,
             null,
-            BuildPlanningCompletedStepArtifacts(mode, guidancePrompt, context, appearance, responderSelection, planner)));
+            BuildPlanningCompletedStepArtifacts(mode, guidancePrompt, requestedTurnShape, context, appearance, responderSelection, planner)));
 
         UpdateStepSummaryIfPresent(
             run,
@@ -1276,6 +1348,7 @@ public sealed class StorySceneChatService(
         var now = DateTime.UtcNow;
 
         message.Content = finalMessage;
+        message.PrivateIntent = NormalizeOptionalText(proseRequest.Planner.PrivateIntent);
         thread.UpdatedUtc = now;
         run.Stage = null;
         run.Status = ProcessRunStatus.Completed;
@@ -1285,6 +1358,7 @@ public sealed class StorySceneChatService(
         run.ContextJson = SerializeContext(new StoryMessageProcessContext(
             proseRequest.Mode,
             proseRequest.GuidancePrompt,
+            proseRequest.RequestedTurnShape,
             proseRequest.Context,
             appearance,
             responderSelection,
@@ -1342,6 +1416,7 @@ public sealed class StorySceneChatService(
             run.ContextJson = SerializeContext(new StoryMessageProcessContext(
                 proseRequest.Mode,
                 proseRequest.GuidancePrompt,
+                proseRequest.RequestedTurnShape,
                 proseRequest.Context,
                 appearance,
                 responderSelection,
@@ -1422,6 +1497,7 @@ public sealed class StorySceneChatService(
                 run.ContextJson = SerializeContext(new StoryMessageProcessContext(
                     proseRequest.Mode,
                     proseRequest.GuidancePrompt,
+                    proseRequest.RequestedTurnShape,
                     proseRequest.Context,
                     appearance,
                     responderSelection,
@@ -1541,7 +1617,18 @@ public sealed class StorySceneChatService(
                     message.CreatedUtc,
                     ResolveSpeakerName(message, characters),
                     message.MessageKind == ChatMessageKind.Narration,
-                    message.Content))
+                    message.Content,
+                    message.SpeakerCharacterId,
+                    message.PrivateIntent))
+                .ToList(),
+            effectivePath.Select(message => new StorySceneTranscriptMessage(
+                    message.Id,
+                    message.CreatedUtc,
+                    ResolveSpeakerName(message, characters),
+                    message.MessageKind == ChatMessageKind.Narration,
+                    message.Content,
+                    message.SpeakerCharacterId,
+                    message.PrivateIntent))
                 .ToList());
 
         return new GenerationBuildResult(
@@ -1558,16 +1645,34 @@ public sealed class StorySceneChatService(
         && appearance.LatestEntry is not null
         && appearance.TranscriptSinceLatestEntry.Count == 0;
 
-    private static StorySceneGenerationContext BuildGenerationContext(StorySceneSharedContext context, Guid? speakerCharacterId) =>
-        new(
-            BuildActorContext(speakerCharacterId, context.CharacterDocuments),
+    private static StorySceneGenerationContext BuildGenerationContext(StorySceneSharedContext context, Guid? speakerCharacterId)
+    {
+        var actor = BuildActorContext(speakerCharacterId, context.CharacterDocuments);
+        return new(
+            actor,
             context.CurrentLocation,
             context.Characters,
             context.SceneObjects,
             context.StoryContext,
             context.HistorySummary,
             context.LatestSnapshot,
-            context.TranscriptSinceSnapshot);
+            FilterTranscriptPrivateIntentForActor(context.TranscriptSinceSnapshot, actor),
+            FilterTranscriptPrivateIntentForActor(context.PrivateIntentTranscript ?? context.TranscriptSinceSnapshot, actor));
+    }
+
+    private static IReadOnlyList<StorySceneTranscriptMessage> FilterTranscriptPrivateIntentForActor(
+        IReadOnlyList<StorySceneTranscriptMessage> transcript,
+        StorySceneActorContext actor) =>
+        transcript
+            .Select(message => ShouldIncludePrivateIntentForActor(message, actor)
+                ? message
+                : message with { PrivateIntent = null })
+            .ToList();
+
+    private static bool ShouldIncludePrivateIntentForActor(StorySceneTranscriptMessage message, StorySceneActorContext actor) =>
+        actor.IsNarrator
+            ? message.IsNarrator && !message.SpeakerCharacterId.HasValue
+            : message.SpeakerCharacterId == actor.CharacterId;
 
     private static StorySceneActorContext BuildActorContext(Guid? speakerCharacterId, IReadOnlyList<StoryCharacterDocument> characters)
     {
@@ -1722,6 +1827,7 @@ public sealed class StorySceneChatService(
             message.MessageKind,
             message.GenerationMode,
             message.Content,
+            message.PrivateIntent,
             message.CreatedUtc,
             message.SpeakerCharacterId,
             canonicalSpeakerName,
@@ -2087,7 +2193,8 @@ public sealed class StorySceneChatService(
         context.StoryContext,
         context.HistorySummary,
         context.LatestSnapshot,
-        context.TranscriptSinceSnapshot);
+        context.TranscriptSinceSnapshot,
+        context.PrivateIntentTranscript);
 
     private static StorySceneActorContext BuildResponderActiveSpeakerContext(
         StorySceneGenerationContext context,
@@ -2222,6 +2329,9 @@ public sealed class StorySceneChatService(
         var builder = new StringBuilder();
         if (!string.IsNullOrWhiteSpace(request.GuidancePrompt))
             builder.AppendLine($"**Guidance prompt:** {request.GuidancePrompt}");
+
+        if (request.RequestedTurnShape.HasValue)
+            builder.AppendLine($"**Requested turn shape:** {StorySceneSharedPromptBuilder.FormatTurnShape(request.RequestedTurnShape.Value)}");
 
         builder.AppendLine($"**Actor:** {request.Context.Actor.Name}");
         builder.AppendLine($"**Plan:** {BuildPlannerSummary(request.Planner)}");
@@ -2380,11 +2490,15 @@ public sealed class StorySceneChatService(
                 CharacterName = updatedActor.Name,
                 WhyThisCharacter = "The sender was reassigned after generation."
             };
+        var updatedPlanner = processContext.Planner is null
+            ? null
+            : processContext.Planner with { PrivateIntent = string.Empty };
         var updatedProseRequest = processContext.ProseRequest is null
             ? null
             : processContext.ProseRequest with
             {
-                Context = processContext.ProseRequest.Context with { Actor = updatedActor }
+                Context = processContext.ProseRequest.Context with { Actor = updatedActor },
+                Planner = updatedPlanner ?? processContext.ProseRequest.Planner with { PrivateIntent = string.Empty }
             };
 
         var updatedStepArtifacts = processContext.StepArtifacts;
@@ -2398,21 +2512,23 @@ public sealed class StorySceneChatService(
                     updatedResponderSelection,
                     processContext.FinalMessage);
             }
-            else if (processContext.Planner is not null)
+            else if (updatedPlanner is not null)
             {
                 updatedStepArtifacts = BuildPlanningCompletedStepArtifacts(
                     processContext.Mode,
                     processContext.GuidancePrompt,
+                    processContext.RequestedTurnShape,
                     updatedGenerationContext,
                     processContext.Appearance,
                     updatedResponderSelection,
-                    processContext.Planner);
+                    updatedPlanner);
             }
             else if (updatedResponderSelection is not null)
             {
                 updatedStepArtifacts = BuildResponderCompletedStepArtifacts(
                     processContext.Mode,
                     processContext.GuidancePrompt,
+                    processContext.RequestedTurnShape,
                     updatedGenerationContext,
                     processContext.Appearance,
                     updatedResponderSelection);
@@ -2421,6 +2537,7 @@ public sealed class StorySceneChatService(
             {
                 updatedStepArtifacts = BuildAppearanceCompletedStepArtifacts(
                     processContext.Mode,
+                    processContext.RequestedTurnShape,
                     CreateSharedContext(updatedGenerationContext),
                     processContext.Appearance);
             }
@@ -2430,6 +2547,7 @@ public sealed class StorySceneChatService(
         {
             GenerationContext = updatedGenerationContext,
             ResponderSelection = updatedResponderSelection,
+            Planner = updatedPlanner,
             ProseRequest = updatedProseRequest,
             StepArtifacts = updatedStepArtifacts
         };
@@ -2809,12 +2927,13 @@ public sealed class StorySceneChatService(
     private static IReadOnlyList<StoryMessageProcessStepArtifact> BuildPlanningCompletedStepArtifacts(
         StoryScenePostMode mode,
         string? guidancePrompt,
+        StoryTurnShape? requestedTurnShape,
         StorySceneGenerationContext context,
         StorySceneAppearanceResolution appearance,
         StorySceneResponderSelectionResult? responderSelection,
         StoryMessagePlannerResult planner)
     {
-        var proseRequest = new StoryMessageProseRequest(mode, guidancePrompt, context, planner);
+        var proseRequest = new StoryMessageProseRequest(mode, guidancePrompt, requestedTurnShape, context, planner);
         var stepArtifacts = new List<StoryMessageProcessStepArtifact>
         {
             new(
@@ -2842,7 +2961,7 @@ public sealed class StorySceneChatService(
             BuildPromptBlocks(
                 StoryScenePlanningPromptBuilder.BuildSystemPrompt(),
                 StoryScenePlanningPromptBuilder.BuildUserPrompt(
-                    new PostStorySceneMessage(Guid.Empty, context.Actor.CharacterId, mode, null, guidancePrompt),
+                    new PostStorySceneMessage(Guid.Empty, context.Actor.CharacterId, mode, null, guidancePrompt, RequestedTurnShape: requestedTurnShape),
                     context)),
             BuildPlanningOutputBlocks(planner)));
         stepArtifacts.Add(new(
@@ -2855,6 +2974,7 @@ public sealed class StorySceneChatService(
 
     private static IReadOnlyList<StoryMessageProcessStepArtifact> BuildAppearanceCompletedStepArtifacts(
         StoryScenePostMode mode,
+        StoryTurnShape? requestedTurnShape,
         StorySceneSharedContext context,
         StorySceneAppearanceResolution appearance)
     {
@@ -2892,6 +3012,7 @@ public sealed class StorySceneChatService(
     private static IReadOnlyList<StoryMessageProcessStepArtifact> BuildResponderCompletedStepArtifacts(
         StoryScenePostMode mode,
         string? guidancePrompt,
+        StoryTurnShape? requestedTurnShape,
         StorySceneGenerationContext context,
         StorySceneAppearanceResolution appearance,
         StorySceneResponderSelectionResult responderSelection)
@@ -2959,7 +3080,7 @@ public sealed class StorySceneChatService(
             BuildPromptBlocks(
                 StoryScenePlanningPromptBuilder.BuildSystemPrompt(),
                 StoryScenePlanningPromptBuilder.BuildUserPrompt(
-                    new PostStorySceneMessage(Guid.Empty, proseRequest.Context.Actor.CharacterId, proseRequest.Mode, null, proseRequest.GuidancePrompt),
+                    new PostStorySceneMessage(Guid.Empty, proseRequest.Context.Actor.CharacterId, proseRequest.Mode, null, proseRequest.GuidancePrompt, RequestedTurnShape: proseRequest.RequestedTurnShape),
                     proseRequest.Context)),
             BuildPlanningOutputBlocks(proseRequest.Planner)));
         stepArtifacts.Add(new(
@@ -2973,6 +3094,7 @@ public sealed class StorySceneChatService(
     private static IReadOnlyList<StoryMessageProcessStepArtifact> BuildStepArtifactsForSavedPlannerEdit(
         StoryScenePostMode mode,
         string? guidancePrompt,
+        StoryTurnShape? requestedTurnShape,
         StorySceneGenerationContext context,
         StorySceneAppearanceResolution appearance,
         StorySceneResponderSelectionResult? responderSelection,
@@ -2980,16 +3102,27 @@ public sealed class StorySceneChatService(
         StoryMessageProseRequest? proseRequest,
         string? finalMessage)
     {
-        var effectiveProseRequest = proseRequest ?? new StoryMessageProseRequest(mode, guidancePrompt, context, planner);
+        var effectiveProseRequest = proseRequest ?? new StoryMessageProseRequest(mode, guidancePrompt, requestedTurnShape, context, planner);
 
         if (!string.IsNullOrWhiteSpace(finalMessage))
             return BuildCompletedStepArtifacts(effectiveProseRequest, appearance, responderSelection, finalMessage);
 
-        return BuildPlanningCompletedStepArtifacts(mode, guidancePrompt, context, appearance, responderSelection, planner);
+        return BuildPlanningCompletedStepArtifacts(mode, guidancePrompt, effectiveProseRequest.RequestedTurnShape, context, appearance, responderSelection, planner);
     }
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildPlanningOutputBlocks(StoryMessagePlannerResult planner) =>
         [new StoryMessageProcessTextBlock("Planning Outcome", StorySceneSharedPromptBuilder.BuildPlannerDetail(planner))];
+
+    private static IReadOnlyList<StoryMessageProcessStepArtifact> UpdatePlanningArtifactsPrivateIntent(
+        IReadOnlyList<StoryMessageProcessStepArtifact> artifacts,
+        StoryMessagePlannerResult? planner) =>
+        planner is null
+            ? artifacts
+            : artifacts
+                .Select(artifact => artifact.StepKey == ProcessStepKeys.Planning
+                    ? artifact with { Outputs = BuildPlanningOutputBlocks(planner) }
+                    : artifact)
+                .ToList();
 
     private static IReadOnlyList<StoryMessageProcessTextBlock> BuildAppearanceInputBlocks(
         StoryNarrativeSettingsView storyContext,
@@ -3104,6 +3237,12 @@ public sealed class StorySceneChatService(
             .ToList()
         ?? [];
 
+    private static string? NormalizeOptionalText(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
+
     private static string RequireValue(string? value, string fieldName)
     {
         var trimmed = value?.Trim();
@@ -3120,6 +3259,7 @@ public sealed class StorySceneChatService(
         RequireEditablePlannerValue(planner.ImmediateGoal, "immediate goal"),
         RequireEditablePlannerValue(planner.WhyNow, "why now"),
         RequireEditablePlannerValue(planner.ChangeIntroduced, "change introduced"),
+        NormalizeOptionalText(planner.PrivateIntent) ?? string.Empty,
         NormalizeItems(planner.NarrativeGuardrails),
         NormalizeItems(planner.ContentGuardrails));
 
@@ -3258,7 +3398,8 @@ public sealed class StorySceneChatService(
         StoryNarrativeSettingsView StoryContext,
         string HistorySummary,
         StoryChatSnapshotSummaryView? LatestSnapshot,
-        IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceSnapshot);
+        IReadOnlyList<StorySceneTranscriptMessage> TranscriptSinceSnapshot,
+        IReadOnlyList<StorySceneTranscriptMessage>? PrivateIntentTranscript);
 
     private sealed class PlannerStageResponse
     {
@@ -3273,6 +3414,8 @@ public sealed class StorySceneChatService(
         public string WhyNow { get; set; } = string.Empty;
 
         public string ChangeIntroduced { get; set; } = string.Empty;
+
+        public string PrivateIntent { get; set; } = string.Empty;
 
         public IReadOnlyList<string>? NarrativeGuardrails { get; set; }
 
@@ -3296,6 +3439,7 @@ public sealed class StorySceneChatService(
         {
             "compact" => StoryTurnShape.Compact,
             "brief" => StoryTurnShape.Brief,
+            "extended" => StoryTurnShape.Extended,
             "monologue" => StoryTurnShape.Monologue,
             "silent" => StoryTurnShape.Silent,
             "silentmonologue" => StoryTurnShape.SilentMonologue,

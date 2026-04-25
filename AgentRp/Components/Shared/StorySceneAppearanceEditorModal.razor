@@ -1,0 +1,185 @@
+<AppModal IsOpen="@IsOpen"
+          Title="@Title"
+          DialogClass="modal-lg modal-dialog-scrollable modal-fullscreen-sm-down"
+          CloseDisabled="@IsSaving"
+          OnClose="CloseAsync">
+    <ChildContent>
+        @if (Message is not null)
+        {
+            <div class="d-flex flex-column gap-3">
+                <InlineAlert Message="@ErrorMessage" />
+
+                <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                    <div>
+                        <div class="fw-semibold">@Message.CanonicalSpeakerName</div>
+                        <div class="small text-body-secondary">@Message.CreatedUtc.ToShorthandDateWithRelativeDays()</div>
+                    </div>
+
+                    <span class="badge @(Appearance is null ? "text-bg-light border text-body-secondary" : "text-bg-success")">
+                        @(Appearance is null ? "No saved block" : "Saved block")
+                    </span>
+                </div>
+
+                @if (!_hasStartedEditing)
+                {
+                    <div class="alert alert-light border mb-0">
+                        <div class="fw-semibold mb-1">No appearance block has been saved for this message.</div>
+                        <div class="small text-body-secondary">Copy the nearest previous appearance block or start with blank fields for the present characters.</div>
+                    </div>
+
+                    <div class="d-flex flex-wrap gap-2">
+                        <button type="button"
+                                class="btn btn-outline-primary"
+                                disabled="@(IsSaving || PreviousAppearance is null)"
+                                @onclick="CopyPrevious">
+                            <i class="fa-regular fa-copy me-2" aria-hidden="true"></i>
+                            Copy Previous
+                        </button>
+
+                        <button type="button"
+                                class="btn btn-primary"
+                                disabled="@IsSaving"
+                                @onclick="StartNew">
+                            <i class="fa-regular fa-plus me-2" aria-hidden="true"></i>
+                            Start New
+                        </button>
+                    </div>
+                }
+                else if (EditableCharacters.Count == 0)
+                {
+                    <div class="alert alert-light border mb-0">No present characters are available for this appearance block.</div>
+                }
+                else
+                {
+                    @foreach (var character in EditableCharacters)
+                    {
+                        <div @key="character.CharacterId">
+                            <label class="form-label" for="@GetEditorId(character.CharacterId)">@character.CharacterName</label>
+                            <textarea id="@GetEditorId(character.CharacterId)"
+                                      class="form-control app-field-sizing-content"
+                                      rows="3"
+                                      disabled="@IsSaving"
+                                      @bind:get="GetDraft(character.CharacterId)"
+                                      @bind:set="value => SetDraft(character.CharacterId, value)"></textarea>
+                        </div>
+                    }
+                }
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <button type="button"
+                class="btn btn-outline-secondary"
+                disabled="@IsSaving"
+                @onclick="CloseAsync">
+            Cancel
+        </button>
+
+        @if (_hasStartedEditing)
+        {
+            <BusyButton Class="btn btn-primary"
+                        OnClick="SaveAsync"
+                        IsBusy="@IsSaving"
+                        BusyText="Saving..."
+                        Disabled="@(Message is null || EditableCharacters.Count == 0 || IsSaving)">
+                Save
+            </BusyButton>
+        }
+    </FooterContent>
+</AppModal>
+
+@code {
+    [Parameter]
+    public bool IsOpen { get; set; }
+
+    [Parameter]
+    public bool IsSaving { get; set; }
+
+    [Parameter]
+    public Guid ThreadId { get; set; }
+
+    [Parameter]
+    public StorySceneMessageView? Message { get; set; }
+
+    [Parameter]
+    public StorySceneAppearanceEntryView? Appearance { get; set; }
+
+    [Parameter]
+    public StorySceneAppearanceEntryView? PreviousAppearance { get; set; }
+
+    [Parameter]
+    public IReadOnlyList<StorySceneCharacterAppearanceView> EmptyCharacters { get; set; } = [];
+
+    [Parameter]
+    public string? ErrorMessage { get; set; }
+
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public EventCallback<SaveStoryChatAppearanceReplayStep> OnSave { get; set; }
+
+    private Guid? _activeMessageId;
+    private bool _hasStartedEditing;
+    private IReadOnlyList<StorySceneCharacterAppearanceView> EditableCharacters { get; set; } = [];
+    private Dictionary<Guid, string> _drafts = [];
+
+    private string Title => "Appearance";
+
+    protected override void OnParametersSet()
+    {
+        if (_activeMessageId == Message?.MessageId)
+            return;
+
+        _activeMessageId = Message?.MessageId;
+        if (Appearance is not null)
+            BeginEditing(Appearance.Characters);
+        else
+        {
+            _hasStartedEditing = false;
+            EditableCharacters = [];
+            _drafts = [];
+        }
+    }
+
+    private void CopyPrevious()
+    {
+        if (PreviousAppearance is not null)
+            BeginEditing(PreviousAppearance.Characters);
+    }
+
+    private void StartNew() => BeginEditing(EmptyCharacters);
+
+    private void BeginEditing(IReadOnlyList<StorySceneCharacterAppearanceView> characters)
+    {
+        EditableCharacters = characters;
+        _drafts = characters.ToDictionary(x => x.CharacterId, x => x.CurrentAppearance);
+        _hasStartedEditing = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (Message is null)
+            return;
+
+        var characters = EditableCharacters
+            .Select(character => new StorySceneCharacterAppearanceView(
+                character.CharacterId,
+                character.CharacterName,
+                GetDraft(character.CharacterId)))
+            .ToList();
+
+        await OnSave.InvokeAsync(new SaveStoryChatAppearanceReplayStep(ThreadId, Message.MessageId, characters));
+    }
+
+    private Task CloseAsync() => IsSaving ? Task.CompletedTask : OnClose.InvokeAsync();
+
+    private string GetDraft(Guid characterId) =>
+        _drafts.TryGetValue(characterId, out var currentAppearance) ? currentAppearance : string.Empty;
+
+    private void SetDraft(Guid characterId, string? value) =>
+        _drafts[characterId] = value ?? string.Empty;
+
+    private string GetEditorId(Guid characterId) =>
+        $"story-scene-message-appearance-{Message?.MessageId:N}-{characterId:N}";
+}

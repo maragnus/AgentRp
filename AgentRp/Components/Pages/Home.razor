@@ -1,6 +1,7 @@
 @page "/"
 @page "/chat/{ChatId:guid}"
-@implements IDisposable
+@using System.Text
+@implements IAsyncDisposable
 @inject IChatWorkspaceService ChatWorkspaceService
 @inject IStorySceneChatService StorySceneChatService
 @inject IStoryChatSnapshotService StoryChatSnapshotService
@@ -11,6 +12,7 @@
 @inject NavigationManager NavigationManager
 @inject ILogger<Home> Logger
 @inject IJSRuntime JSRuntime
+@inject IUserFeedbackService UserFeedbackService
 
 <PageTitle>Story Scene Chat</PageTitle>
 
@@ -34,8 +36,8 @@ else
     var selectedSpeakerAiPostAction = GetAdaptiveAiPostAction();
     var showRespondAsPicker = !_retrySourceMessageId.HasValue;
 
-    <div class="d-flex h-100 flex-column bg-body shadow-sm">
-        <div class="flex-shrink-0 border-bottom bg-body px-3 py-3 px-lg-4">
+    <div class="app-chat-workspace d-flex h-100 flex-column bg-body shadow-sm">
+        <div class="app-chat-header flex-shrink-0 border-bottom bg-body px-3 py-3 px-lg-4">
             <div class="d-flex flex-wrap align-items-start gap-3">
                 <div>
                     <h1 class="h5 mb-1">@_chat.Title</h1>
@@ -48,10 +50,10 @@ else
             </div>
         </div>
 
-        <div class="flex-grow-1 overflow-auto px-3 py-3 px-lg-4" @ref="_chatLogScrollContainer">
+        <div class="app-chat-transcript flex-grow-1 overflow-auto d-flex flex-column" @ref="_chatLogScrollContainer">
             @if (_chat.Transcript.Count == 0)
             {
-                <div class="d-flex h-100 align-items-center justify-content-center">
+                <div class="d-flex flex-grow-1 align-items-center justify-content-center px-3 py-3 px-lg-4">
                     <div class="col-12 col-xl-8">
                         <div class="card border-0 bg-body-tertiary shadow-sm">
                             <div class="card-body p-4 p-lg-5 text-center">
@@ -69,7 +71,7 @@ else
             }
             else
             {
-                <div class="d-flex flex-column gap-4">
+                <div class="d-flex flex-column gap-4 px-3 py-3 px-lg-4">
                     @foreach (var node in _chat.Transcript)
                     {
                         var message = node.Message;
@@ -88,6 +90,7 @@ else
                         var canRetryMessage = message is not null && CanRetryMessage(message);
                         var canRegenerateProse = message is not null && CanRegenerateProse(message);
                         var canEditSavedPlan = message is not null && CanEditSavedPlan(message);
+                        var savedPlanTurnShape = message?.Process?.Context?.Planner?.TurnShape;
                         var displayContent = message is null ? string.Empty : GetDisplayContent(message);
 
                         <div @key="message?.MessageId ?? snapshot?.SnapshotId ?? appearance?.AppearanceEntryId" class="d-flex flex-column gap-3">
@@ -150,48 +153,66 @@ else
                                                             var stepBlocks = GetProcessStepBlocks(step);
                                                             var stepDividerClass = stepIndex > 0 ? "border-top mt-2 pt-2" : string.Empty;
                                                             var headerClass = step.IsActive ? "bg-primary-subtle" : string.Empty;
+                                                            var canCopyStep = CanCopyProcessStep(step, stepBlocks);
 
                                                             <section @key="step.StepId" class="@stepDividerClass">
-                                                                <button type="button"
-                                                                        class="btn btn-link w-100 px-0 py-2 text-start text-decoration-none text-reset @headerClass"
-                                                                        @onclick="() => ToggleProcessStep(process.RunId, step.StepId)">
-                                                                    <div class="d-flex align-items-start gap-3">
-                                                                        <div class="pt-1">
-                                                                            <i class="@($"{step.IconCssClass} fa-fw text-body-secondary")" aria-hidden="true"></i>
-                                                                        </div>
-                                                                        <div class="flex-grow-1 w-100">
-                                                                            <div class="d-flex align-items-start justify-content-between gap-3">
-                                                                                <div class="w-100">
-                                                                                    <div class="fw-semibold">@step.Title</div>
-                                                                                    <div class="small text-body-secondary">@stepSubtitle</div>
-                                                                                </div>
-                                                                                <div class="d-flex align-items-center gap-3 ms-auto">
-                                                                                    @if (!string.IsNullOrWhiteSpace(stepDurationText))
-                                                                                    {
-                                                                                        <div class="small text-body-secondary text-nowrap">
-                                                                                            <i class="fa-regular fa-clock me-1" aria-hidden="true"></i>@stepDurationText
-                                                                                        </div>
-                                                                                    }
-                                                                                    @if (stepTokenUsage.Count > 0)
-                                                                                    {
-                                                                                        <div class="d-flex align-items-center gap-2 small text-body-secondary text-nowrap">
-                                                                                            @for (var usageIndex = 0; usageIndex < stepTokenUsage.Count; usageIndex++)
-                                                                                            {
-                                                                                                <span @key="stepTokenUsage[usageIndex]">@stepTokenUsage[usageIndex]</span>
-
-                                                                                                @if (usageIndex < stepTokenUsage.Count - 1)
+                                                                <div class="d-flex align-items-start gap-2 @headerClass">
+                                                                    <button type="button"
+                                                                            class="btn btn-link flex-grow-1 px-0 py-2 text-start text-decoration-none text-reset"
+                                                                            aria-expanded="@isStepExpanded"
+                                                                            @onclick="() => ToggleProcessStep(process.RunId, step.StepId)">
+                                                                        <div class="d-flex align-items-start gap-3">
+                                                                            <div class="pt-1">
+                                                                                <i class="@($"{step.IconCssClass} fa-fw text-body-secondary")" aria-hidden="true"></i>
+                                                                            </div>
+                                                                            <div class="flex-grow-1 w-100">
+                                                                                <div class="d-flex align-items-start justify-content-between gap-3">
+                                                                                    <div class="w-100">
+                                                                                        <div class="fw-semibold">@step.Title</div>
+                                                                                        <div class="small text-body-secondary">@stepSubtitle</div>
+                                                                                    </div>
+                                                                                    <div class="d-flex align-items-center gap-3 ms-auto">
+                                                                                        @if (!string.IsNullOrWhiteSpace(stepDurationText))
+                                                                                        {
+                                                                                            <div class="small text-body-secondary text-nowrap">
+                                                                                                <i class="fa-regular fa-clock me-1" aria-hidden="true"></i>@stepDurationText
+                                                                                            </div>
+                                                                                        }
+                                                                                        @if (stepTokenUsage.Count > 0)
+                                                                                        {
+                                                                                            <div class="d-flex align-items-center gap-2 small text-body-secondary text-nowrap">
+                                                                                                @for (var usageIndex = 0; usageIndex < stepTokenUsage.Count; usageIndex++)
                                                                                                 {
-                                                                                                    <span aria-hidden="true">•</span>
+                                                                                                    <span @key="stepTokenUsage[usageIndex]">@stepTokenUsage[usageIndex]</span>
+
+                                                                                                    @if (usageIndex < stepTokenUsage.Count - 1)
+                                                                                                    {
+                                                                                                        <span aria-hidden="true">•</span>
+                                                                                                    }
                                                                                                 }
-                                                                                            }
-                                                                                        </div>
-                                                                                    }
-                                                                                    <i class="fa-regular @(isStepExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                                                            </div>
+                                                                                        }
+                                                                                        <i class="fa-regular @(isStepExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                                                    </div>
                                                                                 </div>
                                                                             </div>
                                                                         </div>
-                                                                    </div>
-                                                                </button>
+                                                                    </button>
+
+                                                                    @if (isStepExpanded)
+                                                                    {
+                                                                        <BusyButton Class="btn btn-outline-secondary btn-sm mt-2 flex-shrink-0"
+                                                                                    OnClick="() => CopyProcessStepAsync(step, stepBlocks)"
+                                                                                    IsBusy="@(_copyingProcessStepId == step.StepId)"
+                                                                                    BusyText=""
+                                                                                    ShowBusyText="false"
+                                                                                    Disabled="@(!canCopyStep)"
+                                                                                    title="@($"Copy {step.Title} process step")"
+                                                                                    aria-label="@($"Copy {step.Title} process step")">
+                                                                            <i class="fa-regular @(_copiedProcessStepId == step.StepId ? "fa-check" : "fa-copy")" aria-hidden="true"></i>
+                                                                        </BusyButton>
+                                                                    }
+                                                                </div>
 
                                                                 @if (isStepExpanded)
                                                                 {
@@ -425,6 +446,24 @@ else
                                                             </BusyButton>
                                                         }
 
+                                                        <div class="btn-group btn-group-sm" role="group" aria-label="Message context actions">
+                                                            <button type="button"
+                                                                    class="btn btn-outline-secondary"
+                                                                    title="Private intent"
+                                                                    aria-label="View or edit private intent"
+                                                                    @onclick="() => OpenPrivateIntentModal(message)">
+                                                                <i class="fa-regular fa-thought-bubble" aria-hidden="true"></i>
+                                                            </button>
+
+                                                            <button type="button"
+                                                                    class="btn btn-outline-secondary"
+                                                                    title="Appearance"
+                                                                    aria-label="View or edit appearance"
+                                                                    @onclick="() => OpenMessageAppearanceModal(message)">
+                                                                <i class="fa-regular fa-shirt" aria-hidden="true"></i>
+                                                            </button>
+                                                        </div>
+
                                                         @if (canRegenerateProse || canEditSavedPlan)
                                                         {
                                                             <div class="btn-group btn-group-sm" role="group" aria-label="Saved plan actions">
@@ -442,13 +481,64 @@ else
                                                                     </BusyButton>
                                                                 }
 
+                                                                @if (canRegenerateProse && canEditSavedPlan && savedPlanTurnShape.HasValue)
+                                                                {
+                                                                    var isChangingTurnShape = _changingTurnShapeMessageId == message.MessageId;
+
+                                                                    <div class="btn-group btn-group-sm" role="group">
+                                                                        <button type="button"
+                                                                                class="btn btn-outline-primary"
+                                                                                data-bs-toggle="dropdown"
+                                                                                data-bs-auto-close="true"
+                                                                                aria-expanded="false"
+                                                                                title="@BuildTurnShapePickerTitle(savedPlanTurnShape.Value)"
+                                                                                aria-label="@BuildTurnShapePickerTitle(savedPlanTurnShape.Value)"
+                                                                                disabled="@(IsSceneInteractionLocked || _isSubmitting)">
+                                                                            @if (isChangingTurnShape)
+                                                                            {
+                                                                                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                                                            }
+                                                                            else
+                                                                            {
+                                                                                <i class="@GetTurnShapeIconCssClass(savedPlanTurnShape.Value)" aria-hidden="true"></i>
+                                                                            }
+                                                                        </button>
+                                                                        <ul class="dropdown-menu dropdown-menu-end shadow">
+                                                                            @foreach (var turnShape in Enum.GetValues<StoryTurnShape>())
+                                                                            {
+                                                                                var isCurrentTurnShape = turnShape == savedPlanTurnShape.Value;
+                                                                                var isBusyTurnShape = _changingTurnShapeMessageId == message.MessageId && _changingTurnShapeValue == turnShape;
+                                                                                var turnShapeItemClass = $"dropdown-item d-flex align-items-center justify-content-between gap-3{(isCurrentTurnShape ? " disabled text-body-secondary" : string.Empty)}";
+
+                                                                                <li @key="turnShape">
+                                                                                    <BusyButton Class="@turnShapeItemClass"
+                                                                                                OnClick="() => ChangeTurnShapeAndRegenerateAsync(message, turnShape)"
+                                                                                                IsBusy="@isBusyTurnShape"
+                                                                                                BusyText="Regenerating..."
+                                                                                                Disabled="@(isCurrentTurnShape || IsSceneInteractionLocked || (_isSubmitting && !isBusyTurnShape))"
+                                                                                                title="@BuildTurnShapeOptionTitle(turnShape, isCurrentTurnShape)"
+                                                                                                aria-label="@BuildTurnShapeOptionTitle(turnShape, isCurrentTurnShape)">
+                                                                                        <span class="d-flex align-items-center gap-2">
+                                                                                            <i class="@GetTurnShapeIconCssClass(turnShape)" aria-hidden="true"></i>
+                                                                                            <span>@FormatTurnShapeOption(turnShape)</span>
+                                                                                        </span>
+                                                                                        @if (isCurrentTurnShape)
+                                                                                        {
+                                                                                            <span class="small">Current</span>
+                                                                                        }
+                                                                                    </BusyButton>
+                                                                                </li>
+                                                                            }
+                                                                        </ul>
+                                                                    </div>
+                                                                }
+
                                                                 @if (canEditSavedPlan)
                                                                 {
                                                                     <button type="button"
                                                                             class="btn btn-outline-primary"
                                                                             title="Edit saved plan"
                                                                             aria-label="Edit saved plan"
-                                                                            disabled="@IsSceneInteractionLocked"
                                                                             @onclick="() => OpenPlanModal(message)">
                                                                         <i class="fa-regular fa-list-check" aria-hidden="true"></i>
                                                                     </button>
@@ -662,9 +752,9 @@ else
                                                             <div @key="character.CharacterId">
                                                                 <label class="form-label" for="@GetAppearanceEditorId(appearance.AppearanceEntryId, character.CharacterId)">@character.CharacterName</label>
                                                                 <textarea id="@GetAppearanceEditorId(appearance.AppearanceEntryId, character.CharacterId)"
-                                                                          class="form-control"
+                                                                          class="form-control app-field-sizing-content"
                                                                           rows="3"
-                                                                          disabled="@_isSubmitting"
+                                                                          disabled="@(_savingAppearanceEntryId == appearance.AppearanceEntryId)"
                                                                           @bind:get="GetAppearanceDraft(character.CharacterId)"
                                                                           @bind:set="value => SetAppearanceDraft(character.CharacterId, value)"></textarea>
                                                             </div>
@@ -673,16 +763,16 @@ else
                                                         <div class="d-flex justify-content-end gap-2">
                                                             <button type="button"
                                                                     class="btn btn-outline-secondary btn-sm"
-                                                                    disabled="@_isSubmitting"
+                                                                    disabled="@(_savingAppearanceEntryId == appearance.AppearanceEntryId)"
                                                                     @onclick="CancelAppearanceEdit">
                                                                 <i class="fa-regular fa-xmark" aria-hidden="true"></i>
                                                             </button>
                                                             <BusyButton Class="btn btn-primary btn-sm"
                                                                         OnClick="() => SaveAppearanceEditAsync(appearance)"
-                                                                        IsBusy="@_isSubmitting"
+                                                                        IsBusy="@(_savingAppearanceEntryId == appearance.AppearanceEntryId)"
                                                                         BusyText="Saving..."
                                                                         ShowBusyText="false"
-                                                                        Disabled="@_isSubmitting">
+                                                                        Disabled="@(_savingAppearanceEntryId.HasValue && _savingAppearanceEntryId != appearance.AppearanceEntryId)">
                                                                 <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
                                                             </BusyButton>
                                                         </div>
@@ -709,7 +799,7 @@ else
                                                             <div class="d-flex justify-content-end">
                                                                 <button type="button"
                                                                         class="btn btn-outline-secondary btn-sm"
-                                                                        disabled="@_isSubmitting"
+                                                                        disabled="@_savingAppearanceEntryId.HasValue"
                                                                         @onclick="() => BeginAppearanceEdit(appearance)">
                                                                     <i class="fa-regular fa-pen" aria-hidden="true"></i>
                                                                 </button>
@@ -726,9 +816,7 @@ else
                     }
                 </div>
             }
-        </div>
-
-        <div class="flex-shrink-0 border-top bg-body px-3 py-3 px-lg-4">
+            <div class="flex-shrink-0 border-top bg-body px-3 py-3 px-lg-4" @ref="_chatComposerFooter">
             @if (!_chat.IsAiAvailable)
             {
                 <div class="alert alert-info">Configure AI to enable chat functionality.</div>
@@ -777,7 +865,7 @@ else
                                     OnClick="OpenAppearanceReplayAsync"
                                     IsBusy="@_isAppearanceReplayLoading"
                                     BusyText="Debugging..."
-                                    Disabled="@_isSubmitting"
+                                    Disabled="@_isAppearanceReplayLoading"
                                     ShowBusyText="false"
                                     title="Debug appearance"
                                     aria-label="Debug appearance">
@@ -796,17 +884,51 @@ else
 
                         <div class="vr" aria-hidden="true"></div>
 
-                        <BusyButton Class="btn btn-primary"
-                                    OnClick="() => PostAsync(selectedSpeakerAiPostAction.Mode)"
-                                    IsBusy="@(_submittingMode == selectedSpeakerAiPostAction.Mode && _submittingAuthorKey is null)"
-                                    BusyText="Generating..."
-                                    Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && !(_submittingMode == selectedSpeakerAiPostAction.Mode && _submittingAuthorKey is null)))"
-                                    ShowBusyText="false"
-                                    title="@selectedSpeakerAiPostAction.Title"
-                                    aria-label="@selectedSpeakerAiPostAction.Title">
-                            <i class="@selectedSpeakerAiPostAction.IconCssClass" aria-hidden="true"></i>
-                            @selectedSpeakerAiPostAction.Label
-                        </BusyButton>
+                        <div class="btn-group" role="group" aria-label="@selectedSpeakerAiPostAction.GroupLabel">
+                            <BusyButton Class="btn btn-primary"
+                                        OnClick="() => PostAsync(selectedSpeakerAiPostAction.Mode)"
+                                        IsBusy="@(_submittingMode == selectedSpeakerAiPostAction.Mode && _submittingAuthorKey is null && _submittingTurnShape is null)"
+                                        BusyText="Generating..."
+                                        Disabled="@(!_chat.IsAiAvailable || (IsSceneInteractionLocked && !(_submittingMode == selectedSpeakerAiPostAction.Mode && _submittingAuthorKey is null && _submittingTurnShape is null)))"
+                                        ShowBusyText="false"
+                                        title="@selectedSpeakerAiPostAction.Title"
+                                        aria-label="@selectedSpeakerAiPostAction.Title">
+                                <i class="@selectedSpeakerAiPostAction.IconCssClass" aria-hidden="true"></i>
+                                @selectedSpeakerAiPostAction.Label
+                            </BusyButton>
+                            <button type="button"
+                                    class="btn btn-primary dropdown-toggle dropdown-toggle-split"
+                                    data-bs-toggle="dropdown"
+                                    data-bs-auto-close="true"
+                                    aria-expanded="false"
+                                    title="Choose turn shape"
+                                    aria-label="Choose turn shape"
+                                    disabled="@(!_chat.IsAiAvailable || IsSceneInteractionLocked)">
+                                <span class="visually-hidden">Choose turn shape</span>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end shadow">
+                                @foreach (var turnShape in Enum.GetValues<StoryTurnShape>())
+                                {
+                                    var isBusyTurnShape = _submittingMode == selectedSpeakerAiPostAction.Mode && _submittingAuthorKey is null && _submittingTurnShape == turnShape;
+                                    var turnShapeItemClass = "dropdown-item d-flex align-items-center justify-content-between gap-3";
+
+                                    <li @key="turnShape">
+                                        <BusyButton Class="@turnShapeItemClass"
+                                                    OnClick="() => PostAsync(selectedSpeakerAiPostAction.Mode, turnShape)"
+                                                    IsBusy="@isBusyTurnShape"
+                                                    BusyText="Generating..."
+                                                    Disabled="@(!_chat.IsAiAvailable || IsSceneInteractionLocked)"
+                                                    title="@BuildPreSubmitTurnShapeOptionTitle(turnShape)"
+                                                    aria-label="@BuildPreSubmitTurnShapeOptionTitle(turnShape)">
+                                            <span class="d-flex align-items-center gap-2">
+                                                <i class="@GetTurnShapeIconCssClass(turnShape)" aria-hidden="true"></i>
+                                                <span>@FormatTurnShapeOption(turnShape)</span>
+                                            </span>
+                                        </BusyButton>
+                                    </li>
+                                }
+                            </ul>
+                        </div>
 
                         @if (showRespondAsPicker)
                         {
@@ -895,6 +1017,7 @@ else
                     </div>
                 </div>
             }
+            </div>
         </div>
     </div>
 
@@ -918,10 +1041,21 @@ else
                                     OnClose="CloseAppearanceReplayAsync"
                                     OnSave="SaveAppearanceReplayStepAsync" />
 
+    <StorySceneAppearanceEditorModal IsOpen="@_isMessageAppearanceModalOpen"
+                                     IsSaving="@_isSavingMessageAppearance"
+                                     ThreadId="@_chat.ThreadId"
+                                     Message="@EditingMessageAppearanceMessage"
+                                     Appearance="@EditingMessageAppearance"
+                                     PreviousAppearance="@PreviousMessageAppearance"
+                                     EmptyCharacters="@PresentAppearanceCharacters"
+                                     ErrorMessage="@_messageAppearanceEditErrorMessage"
+                                     OnClose="CloseMessageAppearanceModalAsync"
+                                     OnSave="SaveMessageAppearanceAsync" />
+
     <AppModal IsOpen="@_isPlanModalOpen"
               Title="@PlanModalTitle"
               DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down"
-              CloseDisabled="@_isSubmitting"
+              CloseDisabled="@_isSavingPlanEdit"
               OnClose="ClosePlanModalAsync">
         <ChildContent>
             @if (EditingPlanMessage is not null)
@@ -939,7 +1073,7 @@ else
                             <select id="story-plan-turn-shape"
                                     class="form-select"
                                     @bind="_planDraftTurnShape"
-                                    disabled="@_isSubmitting">
+                                    disabled="@_isSavingPlanEdit">
                                 @foreach (var turnShape in Enum.GetValues<StoryTurnShape>())
                                 {
                                     <option @key="turnShape" value="@turnShape">@FormatTurnShapeOption(turnShape)</option>
@@ -953,7 +1087,7 @@ else
                                       class="form-control"
                                       rows="2"
                                       @bind="_planDraftBeat"
-                                      disabled="@_isSubmitting"></textarea>
+                                      disabled="@_isSavingPlanEdit"></textarea>
                         </div>
 
                         <div class="col-12 col-lg-6">
@@ -962,7 +1096,7 @@ else
                                       class="form-control"
                                       rows="3"
                                       @bind="_planDraftIntent"
-                                      disabled="@_isSubmitting"></textarea>
+                                      disabled="@_isSavingPlanEdit"></textarea>
                         </div>
 
                         <div class="col-12 col-lg-6">
@@ -971,7 +1105,7 @@ else
                                       class="form-control"
                                       rows="3"
                                       @bind="_planDraftImmediateGoal"
-                                      disabled="@_isSubmitting"></textarea>
+                                      disabled="@_isSavingPlanEdit"></textarea>
                         </div>
 
                         <div class="col-12">
@@ -980,7 +1114,7 @@ else
                                       class="form-control"
                                       rows="3"
                                       @bind="_planDraftWhyNow"
-                                      disabled="@_isSubmitting"></textarea>
+                                      disabled="@_isSavingPlanEdit"></textarea>
                         </div>
 
                         <div class="col-12">
@@ -989,7 +1123,7 @@ else
                                       class="form-control"
                                       rows="3"
                                       @bind="_planDraftChangeIntroduced"
-                                      disabled="@_isSubmitting"></textarea>
+                                      disabled="@_isSavingPlanEdit"></textarea>
                         </div>
 
                         <div class="col-12">
@@ -998,7 +1132,7 @@ else
                                       class="form-control"
                                       rows="5"
                                       @bind="_planDraftNarrativeGuardrails"
-                                      disabled="@_isSubmitting"></textarea>
+                                      disabled="@_isSavingPlanEdit"></textarea>
                             <div class="form-text">Optional. Use one guardrail per line.</div>
                         </div>
                     </div>
@@ -1008,16 +1142,60 @@ else
         <FooterContent>
             <button type="button"
                     class="btn btn-outline-secondary"
-                    disabled="@_isSubmitting"
+                    disabled="@_isSavingPlanEdit"
                     @onclick="ClosePlanModalAsync">
                 Cancel
             </button>
 
             <BusyButton Class="btn btn-primary"
                         OnClick="SavePlanEditAsync"
-                        IsBusy="@_isSubmitting"
+                        IsBusy="@_isSavingPlanEdit"
                         BusyText="Saving..."
                         Disabled="@(!CanSavePlanEdit || !_isPlanModalOpen)">
+                Save
+            </BusyButton>
+        </FooterContent>
+    </AppModal>
+
+    <AppModal IsOpen="@_isPrivateIntentModalOpen"
+              Title="@PrivateIntentModalTitle"
+              DialogClass="modal-lg modal-dialog-scrollable modal-fullscreen-sm-down"
+              CloseDisabled="@_isSavingPrivateIntent"
+              OnClose="ClosePrivateIntentModalAsync">
+        <ChildContent>
+            @if (EditingPrivateIntentMessage is not null)
+            {
+                <div class="d-flex flex-column gap-3">
+                    <InlineAlert Message="@_privateIntentEditErrorMessage" />
+
+                    <div class="small text-body-secondary">
+                        @EditingPrivateIntentMessage.CanonicalSpeakerName on @EditingPrivateIntentMessage.CreatedUtc.ToShorthandDateWithRelativeDays()
+                    </div>
+
+                    <div>
+                        <label class="form-label" for="story-private-intent">Private Intent</label>
+                        <textarea id="story-private-intent"
+                                  class="form-control"
+                                  rows="8"
+                                  @bind="_privateIntentDraft"
+                                  disabled="@_isSavingPrivateIntent"></textarea>
+                    </div>
+                </div>
+            }
+        </ChildContent>
+        <FooterContent>
+            <button type="button"
+                    class="btn btn-outline-secondary"
+                    disabled="@_isSavingPrivateIntent"
+                    @onclick="ClosePrivateIntentModalAsync">
+                Cancel
+            </button>
+
+            <BusyButton Class="btn btn-primary"
+                        OnClick="SavePrivateIntentEditAsync"
+                        IsBusy="@_isSavingPrivateIntent"
+                        BusyText="Saving..."
+                        Disabled="@(!_isPrivateIntentModalOpen || !_editingPrivateIntentMessageId.HasValue)">
                 Save
             </BusyButton>
         </FooterContent>
@@ -1110,6 +1288,7 @@ else
     private bool _isSubmitting;
     private StoryScenePostMode? _submittingMode;
     private string? _submittingAuthorKey;
+    private StoryTurnShape? _submittingTurnShape;
     private string _draftText = string.Empty;
     private Guid? _retrySourceMessageId;
     private string? _retrySpeakerName;
@@ -1117,11 +1296,14 @@ else
     private Guid? _reassigningMessageId;
     private string? _reassigningAuthorKey;
     private Guid? _regeneratingProseMessageId;
+    private Guid? _changingTurnShapeMessageId;
+    private StoryTurnShape? _changingTurnShapeValue;
     private Guid? _editingMessageId;
     private Guid? _selectedMessageId;
     private string _editingDraft = string.Empty;
     private StorySceneEditAction? _editingAction;
     private Guid? _editingAppearanceEntryId;
+    private Guid? _savingAppearanceEntryId;
     private Dictionary<Guid, string> _appearanceDrafts = [];
     private Guid? _switchingBranchLeafId;
     private bool _isSnapshotModalOpen;
@@ -1134,6 +1316,7 @@ else
     private StoryChatSnapshotDraftView? _snapshotDraft;
     private StoryChatAppearanceReplayView? _appearanceReplay;
     private bool _isPlanModalOpen;
+    private bool _isSavingPlanEdit;
     private Guid? _editingPlanMessageId;
     private string? _editingPlanSpeakerName;
     private StoryTurnShape _planDraftTurnShape = StoryTurnShape.Compact;
@@ -1145,6 +1328,15 @@ else
     private string _planDraftNarrativeGuardrails = string.Empty;
     private string _planDraftContentGuardrails = string.Empty;
     private string? _planEditErrorMessage;
+    private bool _isPrivateIntentModalOpen;
+    private bool _isSavingPrivateIntent;
+    private Guid? _editingPrivateIntentMessageId;
+    private string _privateIntentDraft = string.Empty;
+    private string? _privateIntentEditErrorMessage;
+    private bool _isMessageAppearanceModalOpen;
+    private bool _isSavingMessageAppearance;
+    private Guid? _editingMessageAppearanceMessageId;
+    private string? _messageAppearanceEditErrorMessage;
     private bool _isDeleteModalOpen;
     private StorySceneMessageView? _deleteTargetMessage;
     private StorySceneDeleteMode? _deleteMode;
@@ -1152,6 +1344,8 @@ else
     private StorySceneChatState? _chat;
     private bool _showProcessPanels = true;
     private DateTime _processDurationNowUtc = DateTime.UtcNow;
+    private Guid? _copyingProcessStepId;
+    private Guid? _copiedProcessStepId;
     private readonly Dictionary<Guid, bool> _expandedProcessRunStates = [];
     private readonly Dictionary<Guid, bool> _expandedProcessTraceStates = [];
     private readonly Dictionary<Guid, Guid?> _expandedProcessStepIds = [];
@@ -1161,7 +1355,10 @@ else
     private readonly HashSet<Guid> _stoppingRunIds = [];
     private System.Threading.Timer? _processDurationRefreshTimer;
     private IModelOperationHandle? _snapshotDraftOperation;
+    private CancellationTokenSource? _processStepCopyFeedbackCancellation;
     private ElementReference _chatLogScrollContainer;
+    private ElementReference _chatComposerFooter;
+    private IJSObjectReference? _chatComposerScrollSnap;
     private bool _scrollChatLogToBottom;
     private bool _isStoppingSnapshotDraft;
     private string? _snapshotDraftStatusMessage;
@@ -1202,15 +1399,32 @@ else
         }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         _workspaceSubscription?.Dispose();
         _processDurationRefreshTimer?.Dispose();
         _snapshotDraftOperation?.Dispose();
+        _processStepCopyFeedbackCancellation?.Cancel();
+        _processStepCopyFeedbackCancellation?.Dispose();
+
+        if (_chatComposerScrollSnap is null)
+            return;
+
+        try
+        {
+            await _chatComposerScrollSnap.InvokeVoidAsync("dispose");
+            await _chatComposerScrollSnap.DisposeAsync();
+        }
+        catch (JSDisconnectedException exception)
+        {
+            Logger.LogDebug(exception, "Skipping chat composer scroll snap disposal because the browser circuit is disconnected.");
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        await RegisterChatComposerScrollSnapAsync();
+
         if (!_scrollChatLogToBottom)
             return;
 
@@ -1223,6 +1437,24 @@ else
         catch (JSDisconnectedException exception)
         {
             Logger.LogDebug(exception, "Skipping chat log scroll because the browser circuit is disconnected.");
+        }
+    }
+
+    private async Task RegisterChatComposerScrollSnapAsync()
+    {
+        if (_chat is null || _chatComposerScrollSnap is not null)
+            return;
+
+        try
+        {
+            _chatComposerScrollSnap = await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "agentRp.registerInlineFooterScrollSnap",
+                _chatLogScrollContainer,
+                _chatComposerFooter);
+        }
+        catch (JSDisconnectedException exception)
+        {
+            Logger.LogDebug(exception, "Skipping chat composer scroll snap registration because the browser circuit is disconnected.");
         }
     }
 
@@ -1271,6 +1503,9 @@ else
                 if (editingPlanMessage is null || !CanEditSavedPlan(editingPlanMessage))
                     ResetPlanEditState();
             }
+            if (_editingPrivateIntentMessageId.HasValue
+                && !_chat.Transcript.Any(x => x.Message?.MessageId == _editingPrivateIntentMessageId.Value))
+                ResetPrivateIntentEditState();
 
             ClearStaleRetryState();
             ShellState?.SetMobileContentHeader(_chat.Title, MessageCountText);
@@ -1352,18 +1587,18 @@ else
         _ = InvokeAsync(StateHasChanged);
     }
 
-    private async Task PostAsync(StoryScenePostMode mode)
+    private async Task PostAsync(StoryScenePostMode mode, StoryTurnShape? requestedTurnShape = null)
     {
         if (_chat is null)
             return;
 
-        await PostAsAsync(mode, _chat.SelectedSpeaker.CharacterId, null);
+        await PostAsAsync(mode, _chat.SelectedSpeaker.CharacterId, null, requestedTurnShape);
     }
 
     private Task PostRespondAsAsync(StorySceneSpeakerView author)
     {
         var mode = HasDraftText ? StoryScenePostMode.GuidedAi : StoryScenePostMode.AutomaticAi;
-        return PostAsAsync(mode, author.CharacterId, BuildAuthorKey(author.CharacterId));
+        return PostAsAsync(mode, author.CharacterId, BuildAuthorKey(author.CharacterId), null);
     }
 
     private Task PostRespondAutoselectAsync()
@@ -1372,10 +1607,10 @@ else
             return Task.CompletedTask;
 
         var mode = HasDraftText ? StoryScenePostMode.RespondGuidedAi : StoryScenePostMode.RespondAutomaticAi;
-        return PostAsAsync(mode, _chat.SelectedSpeaker.CharacterId, AutoselectAuthorKey);
+        return PostAsAsync(mode, _chat.SelectedSpeaker.CharacterId, AutoselectAuthorKey, null);
     }
 
-    private async Task PostAsAsync(StoryScenePostMode mode, Guid? speakerCharacterId, string? submittingAuthorKey)
+    private async Task PostAsAsync(StoryScenePostMode mode, Guid? speakerCharacterId, string? submittingAuthorKey, StoryTurnShape? requestedTurnShape)
     {
         if (_chat is null)
             return;
@@ -1404,6 +1639,7 @@ else
 
         _submittingMode = mode;
         _submittingAuthorKey = submittingAuthorKey;
+        _submittingTurnShape = requestedTurnShape;
         _isSubmitting = true;
         var retrySourceMessageId = _retrySourceMessageId;
 
@@ -1416,7 +1652,8 @@ else
                     mode,
                     mode == StoryScenePostMode.Manual ? _draftText : null,
                     UsesGuidance(mode) ? _draftText : null,
-                    retrySourceMessageId),
+                    retrySourceMessageId,
+                    requestedTurnShape),
                 mode == StoryScenePostMode.Manual ? null : HandleMessageStreamUpdateAsync,
                 CancellationToken.None);
 
@@ -1455,6 +1692,7 @@ else
             _isSubmitting = false;
             _submittingMode = null;
             _submittingAuthorKey = null;
+            _submittingTurnShape = null;
         }
     }
 
@@ -1542,13 +1780,7 @@ else
             CancelInlineEdit();
             ClearRetryState(clearDraft: false);
 
-            await StorySceneChatService.RegenerateProseAsync(
-                new RegenerateStorySceneProse(_chat.ThreadId, message.MessageId),
-                HandleMessageStreamUpdateAsync,
-                CancellationToken.None);
-
-            await LoadChatAsync(_chat.ThreadId);
-            ClearStreamedMessageContent();
+            await RegenerateProseFromSavedPlanAsync(message);
         }
         catch (OperationCanceledException)
         {
@@ -1569,6 +1801,85 @@ else
             _regeneratingProseMessageId = null;
         }
     }
+
+    private async Task ChangeTurnShapeAndRegenerateAsync(StorySceneMessageView message, StoryTurnShape turnShape)
+    {
+        if (_chat is null || IsSceneInteractionLocked || !CanRegenerateProse(message) || !CanEditSavedPlan(message))
+            return;
+
+        var planner = message.Process?.Context?.Planner;
+        if (planner is null || planner.TurnShape == turnShape)
+            return;
+
+        _isSubmitting = true;
+        _changingTurnShapeMessageId = message.MessageId;
+        _changingTurnShapeValue = turnShape;
+        _errorMessage = null;
+
+        try
+        {
+            CancelInlineEdit();
+            CancelAppearanceEdit();
+            ClearRetryState(clearDraft: false);
+
+            await StorySceneChatService.UpdatePlanAsync(
+                new UpdateStoryScenePlan(
+                    _chat.ThreadId,
+                    message.MessageId,
+                    BuildPlannerWithTurnShape(planner, message, turnShape)),
+                CancellationToken.None);
+
+            await RegenerateProseFromSavedPlanAsync(message);
+        }
+        catch (OperationCanceledException)
+        {
+            await LoadChatAsync(_chat.ThreadId);
+            ClearStreamedMessageContent();
+            _errorMessage = null;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Changing the turn shape to {TurnShape} and regenerating prose from story scene message {MessageId} failed for chat {ThreadId}.", turnShape, message.MessageId, _chat.ThreadId);
+            await LoadChatAsync(_chat.ThreadId);
+            ClearStreamedMessageContent();
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"Changing the turn shape to {FormatTurnShapeOption(turnShape)} and regenerating prose failed.", exception);
+        }
+        finally
+        {
+            _isSubmitting = false;
+            _changingTurnShapeMessageId = null;
+            _changingTurnShapeValue = null;
+        }
+    }
+
+    private async Task RegenerateProseFromSavedPlanAsync(StorySceneMessageView message)
+    {
+        if (_chat is null)
+            return;
+
+        await StorySceneChatService.RegenerateProseAsync(
+            new RegenerateStorySceneProse(_chat.ThreadId, message.MessageId),
+            HandleMessageStreamUpdateAsync,
+            CancellationToken.None);
+
+        await LoadChatAsync(_chat.ThreadId);
+        ClearStreamedMessageContent();
+    }
+
+    private static StoryMessagePlannerResult BuildPlannerWithTurnShape(
+        StoryMessagePlannerResult planner,
+        StorySceneMessageView message,
+        StoryTurnShape turnShape) =>
+        new(
+            turnShape,
+            planner.Beat,
+            planner.Intent,
+            planner.ImmediateGoal,
+            planner.WhyNow,
+            planner.ChangeIntroduced,
+            message.PrivateIntent ?? planner.PrivateIntent,
+            planner.NarrativeGuardrails,
+            planner.ContentGuardrails);
 
     private async Task ChangeMessageSpeakerAsync(StorySceneMessageView message, StorySceneSpeakerView author)
     {
@@ -1639,13 +1950,14 @@ else
         _planDraftWhyNow = planner.WhyNow;
         _planDraftChangeIntroduced = planner.ChangeIntroduced;
         _planDraftNarrativeGuardrails = string.Join(Environment.NewLine, planner.NarrativeGuardrails);
+        _planDraftContentGuardrails = string.Join(Environment.NewLine, planner.ContentGuardrails);
         _planEditErrorMessage = null;
         _isPlanModalOpen = true;
     }
 
     private Task ClosePlanModalAsync()
     {
-        if (_isSubmitting)
+        if (_isSavingPlanEdit)
             return Task.CompletedTask;
 
         ResetPlanEditState();
@@ -1664,7 +1976,125 @@ else
         _planDraftWhyNow = string.Empty;
         _planDraftChangeIntroduced = string.Empty;
         _planDraftNarrativeGuardrails = string.Empty;
+        _planDraftContentGuardrails = string.Empty;
         _planEditErrorMessage = null;
+    }
+
+    private void OpenPrivateIntentModal(StorySceneMessageView message)
+    {
+        CancelInlineEdit();
+        CancelAppearanceEdit();
+        ClearRetryState(clearDraft: false);
+        _editingPrivateIntentMessageId = message.MessageId;
+        _privateIntentDraft = message.PrivateIntent ?? string.Empty;
+        _privateIntentEditErrorMessage = null;
+        _isPrivateIntentModalOpen = true;
+    }
+
+    private Task ClosePrivateIntentModalAsync()
+    {
+        if (_isSavingPrivateIntent)
+            return Task.CompletedTask;
+
+        ResetPrivateIntentEditState();
+        return Task.CompletedTask;
+    }
+
+    private void ResetPrivateIntentEditState()
+    {
+        _isPrivateIntentModalOpen = false;
+        _editingPrivateIntentMessageId = null;
+        _privateIntentDraft = string.Empty;
+        _privateIntentEditErrorMessage = null;
+    }
+
+    private async Task SavePrivateIntentEditAsync()
+    {
+        if (_chat is null || !_editingPrivateIntentMessageId.HasValue)
+            return;
+
+        var message = EditingPrivateIntentMessage;
+        if (message is null)
+        {
+            _privateIntentEditErrorMessage = "The private intent could not be updated for the selected message.";
+            return;
+        }
+
+        _isSavingPrivateIntent = true;
+        _privateIntentEditErrorMessage = null;
+        _errorMessage = null;
+
+        try
+        {
+            await StorySceneChatService.UpdatePrivateIntentAsync(
+                new UpdateStoryScenePrivateIntent(_chat.ThreadId, message.MessageId, _privateIntentDraft),
+                CancellationToken.None);
+
+            ResetPrivateIntentEditState();
+            await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Updating private intent for message {MessageId} failed for chat {ThreadId}.", message.MessageId, _chat.ThreadId);
+            _privateIntentEditErrorMessage = UserFacingErrorMessageBuilder.Build("Updating private intent failed.", exception);
+        }
+        finally
+        {
+            _isSavingPrivateIntent = false;
+        }
+    }
+
+    private void OpenMessageAppearanceModal(StorySceneMessageView message)
+    {
+        CancelInlineEdit();
+        CancelAppearanceEdit();
+        ClearRetryState(clearDraft: false);
+        _editingMessageAppearanceMessageId = message.MessageId;
+        _messageAppearanceEditErrorMessage = null;
+        _isMessageAppearanceModalOpen = true;
+    }
+
+    private Task CloseMessageAppearanceModalAsync()
+    {
+        if (_isSavingMessageAppearance)
+            return Task.CompletedTask;
+
+        ResetMessageAppearanceEditState();
+        return Task.CompletedTask;
+    }
+
+    private void ResetMessageAppearanceEditState()
+    {
+        _isMessageAppearanceModalOpen = false;
+        _isSavingMessageAppearance = false;
+        _editingMessageAppearanceMessageId = null;
+        _messageAppearanceEditErrorMessage = null;
+    }
+
+    private async Task SaveMessageAppearanceAsync(SaveStoryChatAppearanceReplayStep request)
+    {
+        if (_chat is null)
+            return;
+
+        _isSavingMessageAppearance = true;
+        _messageAppearanceEditErrorMessage = null;
+        _errorMessage = null;
+
+        try
+        {
+            await StorySceneChatService.SaveAppearanceReplayStepAsync(request, CancellationToken.None);
+            ResetMessageAppearanceEditState();
+            await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving appearance for message {MessageId} failed for chat {ThreadId}.", request.MessageId, request.ThreadId);
+            _messageAppearanceEditErrorMessage = UserFacingErrorMessageBuilder.Build("Saving appearance for this message failed.", exception);
+        }
+        finally
+        {
+            _isSavingMessageAppearance = false;
+        }
     }
 
     private async Task SavePlanEditAsync()
@@ -1679,7 +2109,7 @@ else
             return;
         }
 
-        _isSubmitting = true;
+        _isSavingPlanEdit = true;
         _planEditErrorMessage = null;
         _errorMessage = null;
 
@@ -1696,6 +2126,7 @@ else
                         _planDraftImmediateGoal,
                         _planDraftWhyNow,
                         _planDraftChangeIntroduced,
+                        message.PrivateIntent ?? message.Process?.Context?.Planner?.PrivateIntent ?? string.Empty,
                         NormalizePlanDraftGuardrails(_planDraftNarrativeGuardrails),
                         NormalizePlanDraftGuardrails(_planDraftContentGuardrails))),
                 CancellationToken.None);
@@ -1710,7 +2141,7 @@ else
         }
         finally
         {
-            _isSubmitting = false;
+            _isSavingPlanEdit = false;
         }
     }
 
@@ -2071,11 +2502,13 @@ else
                 StoryScenePostMode.GuidedAi,
                 "Guided",
                 "Guided uses your guidance for the selected speaker",
+                "Guided response actions",
                 "fa-regular fa-wand-magic-sparkles me-2")
             : new AdaptiveAiPostAction(
                 StoryScenePostMode.AutomaticAi,
                 "Automatic",
                 "Automatic writes the next message for the selected speaker and ignores the textbox",
+                "Automatic response actions",
                 "fa-regular fa-stars me-2");
 
     private string BuildMessageCardClass(StorySceneMessageView message)
@@ -2204,6 +2637,81 @@ else
             .ToList();
     }
 
+    private static bool CanCopyProcessStep(StorySceneProcessStepView step, IReadOnlyList<StoryMessageProcessTextBlock> blocks) =>
+        !string.IsNullOrWhiteSpace(step.Detail) || blocks.Any(block => !string.IsNullOrWhiteSpace(block.Content));
+
+    private async Task CopyProcessStepAsync(StorySceneProcessStepView step, IReadOnlyList<StoryMessageProcessTextBlock> blocks)
+    {
+        if (!CanCopyProcessStep(step, blocks))
+            return;
+
+        _errorMessage = null;
+        _copyingProcessStepId = step.StepId;
+        _copiedProcessStepId = null;
+        _processStepCopyFeedbackCancellation?.Cancel();
+        _processStepCopyFeedbackCancellation?.Dispose();
+        _processStepCopyFeedbackCancellation = new CancellationTokenSource();
+
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", BuildProcessStepMarkdownDocument(step, blocks));
+            _copiedProcessStepId = step.StepId;
+            _ = ClearProcessStepCopyFeedbackAsync(step.StepId, _processStepCopyFeedbackCancellation.Token);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Copying {StepTitle} process step markdown failed.", step.Title);
+            UserFeedbackService.ShowBackgroundError(exception, $"Copying the {step.Title} process step failed.", "Copy Failed");
+        }
+        finally
+        {
+            _copyingProcessStepId = null;
+        }
+    }
+
+    private static string BuildProcessStepMarkdownDocument(StorySceneProcessStepView step, IReadOnlyList<StoryMessageProcessTextBlock> blocks)
+    {
+        var builder = new StringBuilder();
+
+        if (blocks.Count == 0)
+            AppendMarkdownSection(builder, step.Title, step.Detail);
+
+        foreach (var block in blocks)
+            AppendMarkdownSection(builder, block.Title, block.Content);
+
+        return builder.ToString().Trim();
+    }
+
+    private static void AppendMarkdownSection(StringBuilder builder, string title, string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return;
+
+        if (builder.Length > 0)
+            builder.AppendLine();
+
+        builder.Append("# ");
+        builder.AppendLine(title.Trim());
+        builder.AppendLine();
+        builder.AppendLine(content.Trim());
+    }
+
+    private async Task ClearProcessStepCopyFeedbackAsync(Guid stepId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1.5), cancellationToken);
+
+            if (_copiedProcessStepId == stepId)
+                _copiedProcessStepId = null;
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     private static bool IsAppearanceProcessStep(StorySceneProcessStepView step) =>
         string.Equals(step.Title, "Appearance", StringComparison.OrdinalIgnoreCase);
 
@@ -2298,6 +2806,40 @@ else
 
     private string PlanModalTitle => "Edit Saved Plan";
 
+    private StorySceneMessageView? EditingPrivateIntentMessage =>
+        _chat?.Transcript
+            .Select(x => x.Message)
+            .FirstOrDefault(x => x?.MessageId == _editingPrivateIntentMessageId);
+
+    private string PrivateIntentModalTitle => "Private Intent";
+
+    private StorySceneMessageView? EditingMessageAppearanceMessage =>
+        _chat?.Transcript
+            .Select(x => x.Message)
+            .FirstOrDefault(x => x?.MessageId == _editingMessageAppearanceMessageId);
+
+    private StorySceneAppearanceEntryView? EditingMessageAppearance =>
+        _chat?.Transcript
+            .FirstOrDefault(x => x.Message?.MessageId == _editingMessageAppearanceMessageId)
+            ?.Appearance;
+
+    private StorySceneAppearanceEntryView? PreviousMessageAppearance =>
+        _chat is null || !_editingMessageAppearanceMessageId.HasValue
+            ? null
+            : _chat.Transcript
+                .TakeWhile(x => x.Message?.MessageId != _editingMessageAppearanceMessageId.Value)
+                .Select(x => x.Appearance)
+                .Where(x => x is not null)
+                .LastOrDefault();
+
+    private IReadOnlyList<StorySceneCharacterAppearanceView> PresentAppearanceCharacters =>
+        _chat?.AvailableSpeakers
+            .Where(x => x is { IsNarrator: false, IsPresentInScene: true, CharacterId: not null })
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(x => new StorySceneCharacterAppearanceView(x.CharacterId!.Value, x.Name, string.Empty))
+            .ToList()
+        ?? [];
+
     private bool CanSavePlanEdit =>
         !string.IsNullOrWhiteSpace(_planDraftBeat)
         && !string.IsNullOrWhiteSpace(_planDraftIntent)
@@ -2309,11 +2851,34 @@ else
     {
         StoryTurnShape.Compact => "Compact",
         StoryTurnShape.Brief => "Brief",
+        StoryTurnShape.Extended => "Extended",
         StoryTurnShape.Monologue => "Monologue",
         StoryTurnShape.Silent => "Silent",
         StoryTurnShape.SilentMonologue => "Silent Monologue",
         _ => turnShape.ToString()
     };
+
+    private static string GetTurnShapeIconCssClass(StoryTurnShape turnShape) => turnShape switch
+    {
+        StoryTurnShape.Compact => "fa-regular fa-face-smile",
+        StoryTurnShape.Brief => "fa-regular fa-face-grin-wide",
+        StoryTurnShape.Extended => "fa-regular fa-message-lines",
+        StoryTurnShape.Monologue => "fa-regular fa-face-awesome",
+        StoryTurnShape.Silent => "fa-regular fa-face-zipper",
+        StoryTurnShape.SilentMonologue => "fa-regular fa-face-beam-hand-over-mouth",
+        _ => "fa-regular fa-pen-line"
+    };
+
+    private static string BuildTurnShapePickerTitle(StoryTurnShape turnShape) =>
+        $"Change turn shape from {FormatTurnShapeOption(turnShape)} and regenerate";
+
+    private static string BuildTurnShapeOptionTitle(StoryTurnShape turnShape, bool isCurrentTurnShape) =>
+        isCurrentTurnShape
+            ? $"{FormatTurnShapeOption(turnShape)} is the current turn shape"
+            : $"Change turn shape to {FormatTurnShapeOption(turnShape)} and regenerate";
+
+    private static string BuildPreSubmitTurnShapeOptionTitle(StoryTurnShape turnShape) =>
+        $"Generate with {FormatTurnShapeOption(turnShape)} turn shape";
 
     private IReadOnlyList<string> NormalizePlanDraftGuardrails(string guardrails) =>
         guardrails
@@ -2326,6 +2891,7 @@ else
         StoryScenePostMode Mode,
         string Label,
         string Title,
+        string GroupLabel,
         string IconCssClass);
 
     private Task StopSceneRunAsync(Guid runId)
@@ -2396,7 +2962,7 @@ else
         if (_chat is null)
             return;
 
-        _isSubmitting = true;
+        _savingAppearanceEntryId = appearance.AppearanceEntryId;
         _errorMessage = null;
 
         try
@@ -2423,7 +2989,7 @@ else
         }
         finally
         {
-            _isSubmitting = false;
+            _savingAppearanceEntryId = null;
         }
     }
 

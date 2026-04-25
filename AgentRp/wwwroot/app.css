@@ -191,6 +191,10 @@ a, .btn-link {
     resize: vertical;
 }
 
+.app-field-sizing-content {
+    field-sizing: content;
+}
+
 .app-chat-message {
     min-height: 5rem;
     resize: vertical;

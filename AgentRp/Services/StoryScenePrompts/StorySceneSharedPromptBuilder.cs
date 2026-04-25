@@ -80,13 +80,30 @@ internal static class StorySceneSharedPromptBuilder
         if (context.TranscriptSinceSnapshot.Count > 0)
         {
             foreach (var message in context.TranscriptSinceSnapshot)
+            {
                 builder.AppendLine($"- {message.SpeakerName}: {PromptInlineText(message.Content, "None")}");
+                if (!string.IsNullOrWhiteSpace(message.PrivateIntent))
+                    builder.AppendLine($"  Private Intent: {PromptInlineText(message.PrivateIntent)}");
+            }
         }
         else
         {
             builder.AppendLine("- None");
         }
         builder.AppendLine();
+
+        var transcriptMessageIds = context.TranscriptSinceSnapshot.Select(x => x.MessageId).ToHashSet();
+        var earlierPrivateIntentMessages = (context.PrivateIntentTranscript ?? [])
+            .Where(x => !transcriptMessageIds.Contains(x.MessageId))
+            .Where(x => !string.IsNullOrWhiteSpace(x.PrivateIntent))
+            .ToList();
+        if (earlierPrivateIntentMessages.Count > 0)
+        {
+            builder.AppendLine("**Earlier private intent continuity:**");
+            foreach (var message in earlierPrivateIntentMessages)
+                builder.AppendLine($"- {message.SpeakerName}: Private Intent: {PromptInlineText(message.PrivateIntent)}");
+            builder.AppendLine();
+        }
 
         var currentAppearanceCharacters = context.Characters
             .Where(x => x.IsPresentInScene && !string.IsNullOrWhiteSpace(x.CurrentAppearance))
@@ -110,6 +127,7 @@ internal static class StorySceneSharedPromptBuilder
         builder.AppendLine($"**Immediate goal:** {planner.ImmediateGoal}");
         builder.AppendLine($"**Why now:** {planner.WhyNow}");
         builder.AppendLine($"**Change introduced:** {planner.ChangeIntroduced}");
+        builder.AppendLine($"**Private Intent:** {PromptInlineText(planner.PrivateIntent, "None")}");
         builder.AppendLine($"**Narrative Guardrails:** {FormatList(planner.NarrativeGuardrails)}");
         return builder.ToString().TrimEnd();
     }
@@ -207,6 +225,7 @@ internal static class StorySceneSharedPromptBuilder
     {
         StoryTurnShape.Compact => "compact",
         StoryTurnShape.Brief => "brief",
+        StoryTurnShape.Extended => "extended",
         StoryTurnShape.Monologue => "monologue",
         StoryTurnShape.Silent => "silent",
         StoryTurnShape.SilentMonologue => "silent monologue",

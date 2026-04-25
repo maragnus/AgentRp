@@ -109,7 +109,7 @@
                                     <div @key="character.CharacterId">
                                         <label class="form-label" for="@GetEditorId(selectedItem.MessageId, character.CharacterId)">@character.CharacterName</label>
                                         <textarea id="@GetEditorId(selectedItem.MessageId, character.CharacterId)"
-                                                  class="form-control"
+                                                  class="form-control app-field-sizing-content"
                                                   rows="3"
                                                   disabled="@IsSaving"
                                                   @bind:get="GetDraft(character.CharacterId)"
