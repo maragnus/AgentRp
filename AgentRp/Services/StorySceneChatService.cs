@@ -16,6 +16,7 @@ public sealed class StorySceneChatService(
     IStoryChatSnapshotService storyChatSnapshotService,
     IStoryChatAppearanceService storyChatAppearanceService,
     IStoryGenerationSettingsService storyGenerationSettingsService,
+    IStoryScenePromptLibraryService promptLibraryService,
     IAgentCatalog agentCatalog,
     IModelOperationRegistry modelOperationRegistry,
     ILogger<StorySceneChatService> logger) : IStorySceneChatService
@@ -896,6 +897,7 @@ public sealed class StorySceneChatService(
             {
                 responderSelection = await RunResponderSelectionStageAsync(
                     agent,
+                    request.ThreadId,
                     request.Mode,
                     trimmedGuidancePrompt,
                     request.SpeakerCharacterId,
@@ -1011,10 +1013,16 @@ public sealed class StorySceneChatService(
         StoryGenerationSettingsView generationSettings,
         CancellationToken cancellationToken)
     {
+        var prompt = await promptLibraryService.RenderPlanningPromptAsync(
+            request.ThreadId,
+            request,
+            context,
+            cancellationToken);
+
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
         [
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, StoryScenePlanningPromptBuilder.BuildSystemPrompt()),
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, StoryScenePlanningPromptBuilder.BuildUserPrompt(request, context))
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, prompt.SystemPrompt),
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, prompt.UserPrompt)
         ];
 
         var response = await agent.ChatClient.GetResponseAsync<PlannerStageResponse>(
@@ -1040,6 +1048,7 @@ public sealed class StorySceneChatService(
 
     private async Task<StorySceneResponderSelectionResult> RunResponderSelectionStageAsync(
         ConfiguredAgent agent,
+        Guid threadId,
         StoryScenePostMode mode,
         string? guidancePrompt,
         Guid? activeSpeakerCharacterId,
@@ -1060,19 +1069,21 @@ public sealed class StorySceneChatService(
                 $"Only {candidates[0].Name} was eligible to respond next.");
         }
 
+        var prompt = await promptLibraryService.RenderSelectionPromptAsync(
+            threadId,
+            activeSpeaker,
+            candidates,
+            context.StoryContext,
+            context.CurrentLocation,
+            context.TranscriptSinceSnapshot,
+            appearance,
+            UsesGuidance(mode) ? guidancePrompt : null,
+            cancellationToken);
+
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
         [
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, StorySceneResponderSelectionPromptBuilder.BuildSystemPrompt()),
-            new Microsoft.Extensions.AI.ChatMessage(
-                Microsoft.Extensions.AI.ChatRole.User,
-                StorySceneResponderSelectionPromptBuilder.BuildUserPrompt(
-                    activeSpeaker,
-                    candidates,
-                    context.StoryContext,
-                    context.CurrentLocation,
-                    context.TranscriptSinceSnapshot,
-                    appearance,
-                    UsesGuidance(mode) ? guidancePrompt : null))
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, prompt.SystemPrompt),
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, prompt.UserPrompt)
         ];
 
         var response = await agent.ChatClient.GetResponseAsync<ResponderStageResponse>(
@@ -1100,10 +1111,12 @@ public sealed class StorySceneChatService(
         Action<string> partialProseTextChanged,
         CancellationToken cancellationToken)
     {
+        var prompt = await promptLibraryService.RenderProsePromptAsync(threadId, request, cancellationToken);
+
         IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages =
         [
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, StorySceneProsePromptBuilder.BuildSystemPrompt(request)),
-            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, StorySceneProsePromptBuilder.BuildUserPrompt(request))
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, prompt.SystemPrompt),
+            new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, prompt.UserPrompt)
         ];
 
         var rawProseBuilder = new StringBuilder();

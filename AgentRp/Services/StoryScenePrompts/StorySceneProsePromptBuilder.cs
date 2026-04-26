@@ -2,9 +2,9 @@ using System.Text;
 
 namespace AgentRp.Services;
 
-internal static class StorySceneProsePromptBuilder
+public static class StorySceneProsePromptBuilder
 {
-    internal static string BuildSystemPrompt(StoryMessageProseRequest request)
+    public static string BuildSystemPrompt(StoryMessageProseRequest request)
     {
         var context = request.Context;
         var speaker = context.Actor.IsNarrator ? "the narrator" : $"{context.Actor.Name}";
@@ -134,7 +134,7 @@ internal static class StorySceneProsePromptBuilder
         return builder.ToString().TrimEnd();
     }
 
-    internal static string BuildUserPrompt(StoryMessageProseRequest request)
+    public static string BuildUserPrompt(StoryMessageProseRequest request)
     {
         var builder = new StringBuilder();
         builder.AppendLine(StorySceneSharedPromptBuilder.BuildContextSummary(request.Context));

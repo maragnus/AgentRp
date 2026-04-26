@@ -32,6 +32,7 @@ builder.Services.AddScoped<IChatStoryService, ChatStoryService>();
 builder.Services.AddScoped<IStoryChatSnapshotService, StoryChatSnapshotService>();
 builder.Services.AddScoped<IStoryChatAppearanceService, StoryChatAppearanceService>();
 builder.Services.AddScoped<IStoryChatAppearanceReplayService, StoryChatAppearanceReplayService>();
+builder.Services.AddScoped<IStoryScenePromptLibraryService, StoryScenePromptLibraryService>();
 builder.Services.AddScoped<IStorySceneChatService, StorySceneChatService>();
 builder.Services.AddScoped<IStoryImageOptimizationService, StoryImageOptimizationService>();
 builder.Services.AddScoped<IStoryImageService, StoryImageService>();
@@ -60,7 +61,6 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-app.UseHttpsRedirection();
 
 app.UseAntiforgery();
 

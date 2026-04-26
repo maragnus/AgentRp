@@ -3,13 +3,13 @@ using AgentRp.Data;
 
 namespace AgentRp.Services;
 
-internal sealed record StorySceneAppearancePromptCharacter(
+public sealed record StorySceneAppearancePromptCharacter(
     string Name,
     string CurrentAppearance);
 
-internal static class StorySceneAppearancePromptBuilder
+public static class StorySceneAppearancePromptBuilder
 {
-    internal static string BuildSystemPrompt() =>
+    public static string BuildSystemPrompt() =>
         """
         You update character scene state.
 
@@ -49,7 +49,7 @@ internal static class StorySceneAppearancePromptBuilder
         The summary must mention only characters with hasCurrentSceneState true.
         """;
 
-    internal static string BuildUserPrompt(
+    public static string BuildUserPrompt(
         IReadOnlyList<StorySceneAppearancePromptCharacter> characters,
         IReadOnlyList<StorySceneTranscriptMessage> transcriptSinceLatestEntry,
         StoryContentIntensity explicitContent,

@@ -3,11 +3,111 @@ using AgentRp.Data;
 
 namespace AgentRp.Services;
 
-internal static class StorySceneSharedPromptBuilder
+public enum StorySceneContextSection
 {
-    internal static string BuildContextSummary(StorySceneGenerationContext context)
+    Actor,
+    Location,
+    CharactersInScene,
+    OtherKnownCharacters,
+    ObjectsInScene,
+    StoryContext,
+    ContentGuidance,
+    HistorySummary,
+    Snapshot,
+    Transcript,
+    EarlierPrivateIntentContinuity,
+    CharacterAppearances
+}
+
+public static class StorySceneContextSectionDefaults
+{
+    public static IReadOnlyList<StorySceneContextSection> OrderedSections { get; } =
+    [
+        StorySceneContextSection.Actor,
+        StorySceneContextSection.Location,
+        StorySceneContextSection.CharactersInScene,
+        StorySceneContextSection.OtherKnownCharacters,
+        StorySceneContextSection.ObjectsInScene,
+        StorySceneContextSection.StoryContext,
+        StorySceneContextSection.ContentGuidance,
+        StorySceneContextSection.HistorySummary,
+        StorySceneContextSection.Snapshot,
+        StorySceneContextSection.Transcript,
+        StorySceneContextSection.EarlierPrivateIntentContinuity,
+        StorySceneContextSection.CharacterAppearances
+    ];
+}
+
+public static class StorySceneSharedPromptBuilder
+{
+    public static string BuildContextSummary(StorySceneGenerationContext context)
     {
         var builder = new StringBuilder();
+        foreach (var section in StorySceneContextSectionDefaults.OrderedSections)
+            AppendContextSection(builder, context, section);
+
+        return builder.ToString().TrimEnd();
+    }
+
+    public static string BuildContextSection(StorySceneGenerationContext context, StorySceneContextSection section)
+    {
+        var builder = new StringBuilder();
+        AppendContextSection(builder, context, section);
+        return builder.ToString().TrimEnd();
+    }
+
+    public static IReadOnlyDictionary<StorySceneContextSection, string> BuildContextSections(StorySceneGenerationContext context) =>
+        StorySceneContextSectionDefaults.OrderedSections.ToDictionary(
+            section => section,
+            section => BuildContextSection(context, section));
+
+    public static void AppendContextSection(StringBuilder builder, StorySceneGenerationContext context, StorySceneContextSection section)
+    {
+        switch (section)
+        {
+            case StorySceneContextSection.Actor:
+                AppendActorContext(builder, context);
+                break;
+            case StorySceneContextSection.Location:
+                AppendLocationContext(builder, context);
+                break;
+            case StorySceneContextSection.CharactersInScene:
+                AppendCharactersInSceneContext(builder, context);
+                break;
+            case StorySceneContextSection.OtherKnownCharacters:
+                AppendOtherKnownCharactersContext(builder, context);
+                break;
+            case StorySceneContextSection.ObjectsInScene:
+                AppendObjectsInSceneContext(builder, context);
+                break;
+            case StorySceneContextSection.StoryContext:
+                AppendStoryContext(builder, context.StoryContext);
+                break;
+            case StorySceneContextSection.ContentGuidance:
+                AppendContentGuidance(builder, context.StoryContext);
+                break;
+            case StorySceneContextSection.HistorySummary:
+                AppendHistorySummaryContext(builder, context);
+                break;
+            case StorySceneContextSection.Snapshot:
+                AppendSnapshotContext(builder, context);
+                break;
+            case StorySceneContextSection.Transcript:
+                AppendTranscriptContext(builder, context);
+                break;
+            case StorySceneContextSection.EarlierPrivateIntentContinuity:
+                AppendEarlierPrivateIntentContinuityContext(builder, context);
+                break;
+            case StorySceneContextSection.CharacterAppearances:
+                AppendCharacterAppearancesContext(builder, context);
+                break;
+            default:
+                throw new InvalidOperationException($"Building the scene context prompt failed because context section '{section}' is not supported.");
+        }
+    }
+
+    private static void AppendActorContext(StringBuilder builder, StorySceneGenerationContext context)
+    {
         builder.AppendLine($"**Actor:** {context.Actor.Name}");
         builder.AppendLine($"- Summary: {PromptInlineText(context.Actor.Summary)}");
         if (context.Actor.IsNarrator)
@@ -28,7 +128,10 @@ internal static class StorySceneSharedPromptBuilder
             builder.AppendLine($"- Hidden knowledge: {PromptInlineText(context.Actor.HiddenKnowledge)}");
 
         builder.AppendLine();
+    }
 
+    private static void AppendLocationContext(StringBuilder builder, StorySceneGenerationContext context)
+    {
         if (context.CurrentLocation is not null)
         {
             builder.AppendLine($"**Location:** {PromptInlineText(context.CurrentLocation.Name)}");
@@ -38,7 +141,10 @@ internal static class StorySceneSharedPromptBuilder
                 builder.AppendLine($"- Details: {PromptInlineText(context.CurrentLocation.Details)}");
             builder.AppendLine();
         }
+    }
 
+    private static void AppendCharactersInSceneContext(StringBuilder builder, StorySceneGenerationContext context)
+    {
         var nonActorCharacters = context.Actor.CharacterId.HasValue
             ? context.Characters.Where(x => x.CharacterId != context.Actor.CharacterId.Value).ToList()
             : context.Characters.ToList();
@@ -51,14 +157,23 @@ internal static class StorySceneSharedPromptBuilder
                 builder.AppendLine($"- **{character.Name}:** {PromptInlineText(character.Summary)} | Appearance: {PromptInlineText(character.Appearance, "None")} | Voice: {PromptInlineText(character.Voice, "None")} | Relationships: {PromptInlineText(character.Relationships, "None")}");
             builder.AppendLine();
         }
+    }
 
+    private static void AppendOtherKnownCharactersContext(StringBuilder builder, StorySceneGenerationContext context)
+    {
+        var nonActorCharacters = context.Actor.CharacterId.HasValue
+            ? context.Characters.Where(x => x.CharacterId != context.Actor.CharacterId.Value).ToList()
+            : context.Characters.ToList();
         var otherCharacters = nonActorCharacters.Where(x => !x.IsPresentInScene).ToList();
         if (otherCharacters.Count > 0)
         {
             builder.AppendLine($"**Other known characters:** {string.Join(", ", otherCharacters.Select(x => x.Name))}");
             builder.AppendLine();
         }
+    }
 
+    private static void AppendObjectsInSceneContext(StringBuilder builder, StorySceneGenerationContext context)
+    {
         if (context.SceneObjects.Count > 0)
         {
             builder.AppendLine("**Objects in the scene:**");
@@ -66,16 +181,22 @@ internal static class StorySceneSharedPromptBuilder
                 builder.AppendLine($"- {item.Name} | {PromptInlineText(item.Summary)} | Details: {PromptInlineText(item.Details, "None")}");
             builder.AppendLine();
         }
+    }
 
-        AppendStoryContext(builder, context.StoryContext);
-        AppendContentGuidance(builder, context.StoryContext);
-
+    private static void AppendHistorySummaryContext(StringBuilder builder, StorySceneGenerationContext context)
+    {
         if (!string.IsNullOrEmpty(context.HistorySummary))
             builder.AppendLine($"**History summary:** {PromptInlineText(context.HistorySummary)}");
+    }
 
+    private static void AppendSnapshotContext(StringBuilder builder, StorySceneGenerationContext context)
+    {
         if (!string.IsNullOrEmpty(context.LatestSnapshot?.Summary))
             builder.AppendLine($"**Snapshot:** {PromptInlineText(context.LatestSnapshot.Summary)}");
+    }
 
+    private static void AppendTranscriptContext(StringBuilder builder, StorySceneGenerationContext context)
+    {
         builder.AppendLine("**Transcript:**");
         if (context.TranscriptSinceSnapshot.Count > 0)
         {
@@ -91,7 +212,10 @@ internal static class StorySceneSharedPromptBuilder
             builder.AppendLine("- None");
         }
         builder.AppendLine();
+    }
 
+    private static void AppendEarlierPrivateIntentContinuityContext(StringBuilder builder, StorySceneGenerationContext context)
+    {
         var transcriptMessageIds = context.TranscriptSinceSnapshot.Select(x => x.MessageId).ToHashSet();
         var earlierPrivateIntentMessages = (context.PrivateIntentTranscript ?? [])
             .Where(x => !transcriptMessageIds.Contains(x.MessageId))
@@ -104,7 +228,10 @@ internal static class StorySceneSharedPromptBuilder
                 builder.AppendLine($"- {message.SpeakerName}: Private Intent: {PromptInlineText(message.PrivateIntent)}");
             builder.AppendLine();
         }
+    }
 
+    private static void AppendCharacterAppearancesContext(StringBuilder builder, StorySceneGenerationContext context)
+    {
         var currentAppearanceCharacters = context.Characters
             .Where(x => x.IsPresentInScene && !string.IsNullOrWhiteSpace(x.CurrentAppearance))
             .ToList();
@@ -114,8 +241,6 @@ internal static class StorySceneSharedPromptBuilder
             foreach (var character in currentAppearanceCharacters)
                 builder.AppendLine($"- {character.Name}: {PromptInlineText(character.CurrentAppearance, "None")}");
         }
-
-        return builder.ToString().TrimEnd();
     }
 
     internal static string BuildPlannerDetail(StoryMessagePlannerResult planner)
@@ -175,7 +300,7 @@ internal static class StorySceneSharedPromptBuilder
         return builder.ToString().TrimEnd();
     }
 
-    internal static void AppendStoryContext(StringBuilder builder, StoryNarrativeSettingsView? storyContext)
+    public static void AppendStoryContext(StringBuilder builder, StoryNarrativeSettingsView? storyContext)
     {
         var context = storyContext ?? CreateDefaultStoryContext();
         var hasGenre = !string.IsNullOrWhiteSpace(context.Genre);
@@ -198,7 +323,7 @@ internal static class StorySceneSharedPromptBuilder
         builder.AppendLine();
     }
 
-    internal static void AppendContentGuidance(StringBuilder builder, StoryNarrativeSettingsView? storyContext)
+    public static void AppendContentGuidance(StringBuilder builder, StoryNarrativeSettingsView? storyContext)
     {
         var context = storyContext ?? CreateDefaultStoryContext();
         builder.AppendLine("**Content guidance:**");
@@ -207,21 +332,21 @@ internal static class StorySceneSharedPromptBuilder
         builder.AppendLine();
     }
 
-    internal static string FormatContentIntensity(StoryContentIntensity intensity) => intensity switch
+    public static string FormatContentIntensity(StoryContentIntensity intensity) => intensity switch
     {
         StoryContentIntensity.Forbidden => "Forbidden. Do not introduce or describe this content.",
         StoryContentIntensity.Encouraged => "Encouraged when supported and scene-relevant. Lean into it without inventing it.",
         _ => "Allowed when naturally supported by the scene."
     };
 
-    internal static string FormatContentIntensityLabel(StoryContentIntensity intensity) => intensity switch
+    public static string FormatContentIntensityLabel(StoryContentIntensity intensity) => intensity switch
     {
         StoryContentIntensity.Forbidden => "Forbidden",
         StoryContentIntensity.Encouraged => "Encouraged",
         _ => "Allowed"
     };
 
-    internal static string FormatTurnShape(StoryTurnShape turnShape) => turnShape switch
+    public static string FormatTurnShape(StoryTurnShape turnShape) => turnShape switch
     {
         StoryTurnShape.Compact => "compact",
         StoryTurnShape.Brief => "brief",
@@ -232,10 +357,10 @@ internal static class StorySceneSharedPromptBuilder
         _ => turnShape.ToString().ToLowerInvariant()
     };
 
-    internal static string PromptInlineText(string? value, string fallback = "Unknown") =>
+    public static string PromptInlineText(string? value, string fallback = "Unknown") =>
         string.IsNullOrWhiteSpace(value) ? fallback : CollapseWhitespace(value);
 
-    internal static string TrimInlineText(string? value, string fallback) =>
+    public static string TrimInlineText(string? value, string fallback) =>
         string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
 
     private static string FormatList(IReadOnlyList<string> values) => values.Count == 0 ? "None" : string.Join("; ", values);

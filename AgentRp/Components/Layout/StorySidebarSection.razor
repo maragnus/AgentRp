@@ -5,6 +5,7 @@
 @inject IStorySceneChatService StorySceneChatService
 @inject IThreadAgentService ThreadAgentService
 @inject IStoryGenerationSettingsService StoryGenerationSettingsService
+@inject IStoryScenePromptLibraryService StoryScenePromptLibraryService
 @inject IActivityNotifier ActivityNotifier
 @inject IJSRuntime JSRuntime
 @inject NavigationManager NavigationManager
@@ -32,6 +33,14 @@
                         aria-label="Image optimization"
                         @onclick="OpenImageOptimizationModal">
                     <i class="fa-regular fa-wand-magic-sparkles" aria-hidden="true"></i>
+                </button>
+
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        title="Prompt library"
+                        aria-label="Prompt library"
+                        @onclick="OpenPromptLibraryModal">
+                    <i class="fa-regular fa-pen-nib" aria-hidden="true"></i>
                 </button>
 
                 <button type="button"
@@ -839,6 +848,125 @@
     </FooterContent>
 </AppModal>
 
+<AppModal IsOpen="@_isPromptLibraryModalOpen"
+          Title="Prompt Library"
+          DialogClass="modal-xl modal-dialog-scrollable modal-fullscreen-sm-down"
+          OnClose="ClosePromptLibraryModal">
+    <ChildContent>
+        <div class="d-flex flex-column gap-3">
+            <InlineAlert Message="@_promptLibraryErrorMessage" />
+
+            @if (_promptLibraryDraft is null || _promptLibraryDefaults is null)
+            {
+                <div class="d-flex align-items-center gap-2 small text-body-secondary">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <span>Loading prompt library...</span>
+                </div>
+            }
+            else
+            {
+                <ul class="nav nav-tabs">
+                    @foreach (var stage in PromptLibraryStages)
+                    {
+                        <li @key="stage" class="nav-item">
+                            <button type="button"
+                                    class="@BuildPromptLibraryStageTabClass(stage)"
+                                    disabled="@IsPromptLibraryBusy"
+                                    @onclick="() => SelectPromptLibraryStage(stage)">
+                                @DescribePromptStage(stage)
+                            </button>
+                        </li>
+                    }
+                </ul>
+
+                <div class="row g-3">
+                    <div class="col-12 col-xl-8">
+                        <div class="d-flex flex-column gap-3">
+                            @RenderPromptTextArea("System Prompt", ActivePromptStageDraft.SystemPromptInputId, ActivePromptStageDraft.SystemPrompt, value => ActivePromptStageDraft.SystemPrompt = value, () => ResetActivePromptSystemPrompt(), IsActiveSystemPromptDefault)
+                            @RenderPromptTextArea("User Prompt Template", ActivePromptStageDraft.UserPromptInputId, ActivePromptStageDraft.UserPromptTemplate, value => ActivePromptStageDraft.UserPromptTemplate = value, () => ResetActivePromptUserPrompt(), IsActiveUserPromptDefault)
+
+                            @if (_activePromptLibraryStage == StoryScenePromptStage.Planning || _activePromptLibraryStage == StoryScenePromptStage.Prose)
+                            {
+                                <div class="border-top pt-3">
+                                    <div class="fw-semibold mb-2">Turn Shapes</div>
+                                    <div class="row g-3">
+                                        @foreach (var shape in PromptTurnShapes)
+                                        {
+                                            var shapeText = GetActiveTurnShapeTemplate(shape);
+                                            var shapeInputId = GetActiveTurnShapeInputId(shape);
+                                            var isDefault = IsActiveTurnShapeDefault(shape);
+
+                                            <div @key="shape" class="col-12">
+                                                <label for="@shapeInputId" class="form-label d-flex align-items-center justify-content-between gap-2">
+                                                    <span>@DescribeTurnShape(shape)</span>
+                                                    <button type="button"
+                                                            class="btn btn-outline-secondary btn-sm"
+                                                            disabled="@(IsPromptLibraryBusy || isDefault)"
+                                                            title="@($"Reset {DescribeTurnShape(shape)} to default")"
+                                                            aria-label="@($"Reset {DescribeTurnShape(shape)} to default")"
+                                                            @onclick="() => ResetActiveTurnShape(shape)">
+                                                        <i class="fa-regular fa-rotate-left" aria-hidden="true"></i>
+                                                    </button>
+                                                </label>
+                                                <textarea id="@shapeInputId"
+                                                          class="form-control font-monospace"
+                                                          rows="@(_activePromptLibraryStage == StoryScenePromptStage.Planning ? 2 : 7)"
+                                                          disabled="@IsPromptLibraryBusy"
+                                                          value="@shapeText"
+                                                          @oninput="args => SetActiveTurnShapeTemplate(shape, args.Value?.ToString() ?? string.Empty)"></textarea>
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="col-12 col-xl-4">
+                        <div class="border rounded p-3">
+                            <div class="fw-semibold mb-2">Placeholders</div>
+                            <div class="d-flex flex-column gap-2 small">
+                                @foreach (var placeholder in ActivePromptPlaceholders)
+                                {
+                                    <div @key="placeholder.Token">
+                                        <div class="d-flex align-items-center justify-content-between gap-2">
+                                            <div class="font-monospace text-break">@placeholder.Token</div>
+                                            <button type="button"
+                                                    class="btn btn-outline-secondary btn-sm flex-shrink-0"
+                                                    title="@($"Copy {placeholder.Token}")"
+                                                    aria-label="@($"Copy {placeholder.Token}")"
+                                                    @onclick="() => CopyPromptPlaceholderAsync(placeholder.Token)">
+                                                <i class="fa-regular @(string.Equals(_copiedPromptPlaceholderToken, placeholder.Token, StringComparison.Ordinal) ? "fa-check" : "fa-copy")" aria-hidden="true"></i>
+                                            </button>
+                                        </div>
+                                        <div class="text-body-secondary">@placeholder.Description</div>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    </ChildContent>
+    <FooterContent>
+        <button type="button"
+                class="btn btn-outline-secondary"
+                disabled="@IsPromptLibraryBusy"
+                @onclick="ClosePromptLibraryModal">
+            Cancel
+        </button>
+        <BusyButton Class="btn btn-primary"
+                    IsBusy="@_isSavingPromptLibrary"
+                    Disabled="@(!CanSavePromptLibrary)"
+                    BusyText="Saving..."
+                    OnClick="SavePromptLibraryAsync">
+            <i class="fa-regular fa-floppy-disk me-2" aria-hidden="true"></i>
+            Save
+        </BusyButton>
+    </FooterContent>
+</AppModal>
+
 @code {
     private IDisposable? _storySubscription;
     private IDisposable? _chatSubscription;
@@ -850,6 +978,22 @@
     private readonly string _activeFrequencyPenaltyInputId = $"story-model-frequency-penalty-{Guid.NewGuid():N}";
     private readonly string _activePresencePenaltyInputId = $"story-model-presence-penalty-{Guid.NewGuid():N}";
     private readonly string _activeStopSequencesInputId = $"story-model-stop-sequences-{Guid.NewGuid():N}";
+    private static readonly IReadOnlyList<StoryScenePromptStage> PromptLibraryStages =
+    [
+        StoryScenePromptStage.Appearance,
+        StoryScenePromptStage.Selection,
+        StoryScenePromptStage.Planning,
+        StoryScenePromptStage.Prose
+    ];
+    private static readonly IReadOnlyList<StoryTurnShape> PromptTurnShapes =
+    [
+        StoryTurnShape.Compact,
+        StoryTurnShape.Brief,
+        StoryTurnShape.Monologue,
+        StoryTurnShape.Extended,
+        StoryTurnShape.Silent,
+        StoryTurnShape.SilentMonologue
+    ];
     private bool _isLoading;
     private Guid? _threadId;
     private ChatStorySidebarView? _story;
@@ -861,6 +1005,7 @@
     private bool _isImageGalleryModalOpen;
     private bool _isImageOptimizationModalOpen;
     private bool _isGenerationSettingsModalOpen;
+    private bool _isPromptLibraryModalOpen;
     private bool _isProviderEditorOpen;
     private bool _isModelSwitcherOpen;
     private bool _isSavingGenerationSettings;
@@ -868,6 +1013,7 @@
     private bool _isImportingGenerationSettings;
     private bool _isCopyingGenerationSettings;
     private bool _isGenerationSettingsCopyOpen;
+    private bool _isSavingPromptLibrary;
     private int _generationSettingsImportInputKey;
     private string? _generationSettingsImportFileName;
     private StoryGenerationStage _activeGenerationSettingsStage = StoryGenerationStage.Planning;
@@ -879,7 +1025,14 @@
     private bool _startCharacterModalInCreateMode;
     private string? _errorMessage;
     private string? _generationSettingsErrorMessage;
+    private string? _promptLibraryErrorMessage;
     private Guid? _generationSettingsModelId;
+    private StoryScenePromptLibraryView? _promptLibrary;
+    private StoryScenePromptLibraryView? _promptLibraryDefaults;
+    private PromptLibraryDraft? _promptLibraryDraft;
+    private StoryScenePromptStage _activePromptLibraryStage = StoryScenePromptStage.Appearance;
+    private string? _copiedPromptPlaceholderToken;
+    private CancellationTokenSource? _promptPlaceholderCopyFeedbackCancellation;
     private HashSet<Guid> _togglingCharacterIds = [];
     private HashSet<Guid> _togglingItemIds = [];
     private HashSet<string> _switchingSpeakerKeys = [];
@@ -903,6 +1056,8 @@
         _storySubscription?.Dispose();
         _chatSubscription?.Dispose();
         NavigationManager.LocationChanged -= HandleLocationChanged;
+        _promptPlaceholderCopyFeedbackCancellation?.Cancel();
+        _promptPlaceholderCopyFeedbackCancellation?.Dispose();
         StopManagedEndpointPolling();
     }
 
@@ -935,6 +1090,7 @@
                 _story = null;
                 _generationSettings = null;
                 _isGenerationSettingsModalOpen = false;
+                _isPromptLibraryModalOpen = false;
                 StopManagedEndpointPolling();
             }
         }
@@ -1017,6 +1173,19 @@
 
     private void OpenProviderEditor() => _isProviderEditorOpen = true;
 
+    private async Task OpenPromptLibraryModal()
+    {
+        if (!_threadId.HasValue)
+            return;
+
+        _promptLibraryErrorMessage = null;
+        _activePromptLibraryStage = StoryScenePromptStage.Appearance;
+        _promptLibraryDefaults = StoryScenePromptLibraryService.GetDefaultLibrary();
+        _promptLibrary = await StoryScenePromptLibraryService.GetLibraryAsync(_threadId.Value, CancellationToken.None);
+        _promptLibraryDraft = PromptLibraryDraft.FromView(_promptLibrary);
+        _isPromptLibraryModalOpen = true;
+    }
+
     private Task CloseProviderEditor()
     {
         _isProviderEditorOpen = false;
@@ -1097,6 +1266,19 @@
         _generationSettingsImportInputKey++;
         if (_generationSettings is not null)
             ApplyGenerationSettingsDraft(_generationSettings);
+
+        return Task.CompletedTask;
+    }
+
+    private Task ClosePromptLibraryModal()
+    {
+        if (IsPromptLibraryBusy)
+            return Task.CompletedTask;
+
+        _isPromptLibraryModalOpen = false;
+        _promptLibraryErrorMessage = null;
+        if (_promptLibrary is not null)
+            _promptLibraryDraft = PromptLibraryDraft.FromView(_promptLibrary);
 
         return Task.CompletedTask;
     }
@@ -1777,6 +1959,280 @@
     private static string DescribeGenerationSettingsFailure(Exception exception, string fallbackMessage) =>
         UserFacingErrorMessageBuilder.Build(fallbackMessage, exception);
 
+    private bool IsPromptLibraryBusy => _isSavingPromptLibrary;
+
+    private bool CanSavePromptLibrary =>
+        !IsPromptLibraryBusy
+        && _threadId.HasValue
+        && _promptLibrary is not null
+        && _promptLibraryDraft is not null
+        && !ArePromptLibrariesEqual(_promptLibraryDraft.ToView(), _promptLibrary);
+
+    private PromptStageDraft ActivePromptStageDraft => GetPromptStageDraft(_activePromptLibraryStage);
+
+    private PromptTurnShapeDraft ActiveTurnShapeDraft =>
+        _activePromptLibraryStage == StoryScenePromptStage.Planning
+            ? _promptLibraryDraft!.PlanningTurnShapes
+            : _promptLibraryDraft!.ProseTurnShapes;
+
+    private IReadOnlyList<StoryScenePromptPlaceholderView> ActivePromptPlaceholders =>
+        _promptLibraryDraft?.Placeholders
+            .Where(x => x.Stages.Contains(_activePromptLibraryStage))
+            .ToList()
+        ?? [];
+
+    private bool IsActiveSystemPromptDefault =>
+        _promptLibraryDefaults is not null
+        && string.Equals(ActivePromptStageDraft.SystemPrompt, GetPromptStageView(_promptLibraryDefaults, _activePromptLibraryStage).SystemPrompt, StringComparison.Ordinal);
+
+    private bool IsActiveUserPromptDefault =>
+        _promptLibraryDefaults is not null
+        && string.Equals(ActivePromptStageDraft.UserPromptTemplate, GetPromptStageView(_promptLibraryDefaults, _activePromptLibraryStage).UserPromptTemplate, StringComparison.Ordinal);
+
+    private RenderFragment RenderPromptTextArea(
+        string label,
+        string inputId,
+        string value,
+        Action<string> setValue,
+        Action reset,
+        bool isDefault) => @<div>
+            <label for="@inputId" class="form-label d-flex align-items-center justify-content-between gap-2">
+                <span>@label</span>
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        disabled="@(IsPromptLibraryBusy || isDefault)"
+                        title="@($"Reset {label.ToLowerInvariant()} to default")"
+                        aria-label="@($"Reset {label.ToLowerInvariant()} to default")"
+                        @onclick="reset">
+                    <i class="fa-regular fa-rotate-left" aria-hidden="true"></i>
+                </button>
+            </label>
+            <textarea id="@inputId"
+                      class="form-control font-monospace"
+                      rows="10"
+                      disabled="@IsPromptLibraryBusy"
+                      value="@value"
+                      @oninput="args => setValue(args.Value?.ToString() ?? string.Empty)"></textarea>
+        </div>;
+
+    private async Task SavePromptLibraryAsync()
+    {
+        if (!_threadId.HasValue || _promptLibraryDraft is null || IsPromptLibraryBusy)
+            return;
+
+        _isSavingPromptLibrary = true;
+        _promptLibraryErrorMessage = null;
+
+        try
+        {
+            var saved = await StoryScenePromptLibraryService.SaveLibraryAsync(
+                new UpdateStoryScenePromptLibrary(_threadId.Value, _promptLibraryDraft.ToView()),
+                CancellationToken.None);
+            _promptLibrary = saved;
+            _promptLibraryDraft = PromptLibraryDraft.FromView(saved);
+            _isPromptLibraryModalOpen = false;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Saving prompt library failed for chat {ChatId}.", _threadId);
+            _promptLibraryErrorMessage = UserFacingErrorMessageBuilder.Build("Saving the prompt library failed.", exception);
+        }
+        finally
+        {
+            _isSavingPromptLibrary = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task CopyPromptPlaceholderAsync(string token)
+    {
+        _promptLibraryErrorMessage = null;
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("navigator.clipboard.writeText", token);
+            _copiedPromptPlaceholderToken = token;
+            _promptPlaceholderCopyFeedbackCancellation?.Cancel();
+            _promptPlaceholderCopyFeedbackCancellation?.Dispose();
+            _promptPlaceholderCopyFeedbackCancellation = new CancellationTokenSource();
+            _ = ClearPromptPlaceholderCopyFeedbackAsync(_promptPlaceholderCopyFeedbackCancellation.Token);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Copying prompt placeholder failed.");
+            _promptLibraryErrorMessage = UserFacingErrorMessageBuilder.Build($"Copying placeholder '{token}' failed.", exception);
+        }
+    }
+
+    private async Task ClearPromptPlaceholderCopyFeedbackAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+            _copiedPromptPlaceholderToken = null;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void SelectPromptLibraryStage(StoryScenePromptStage stage) => _activePromptLibraryStage = stage;
+
+    private string BuildPromptLibraryStageTabClass(StoryScenePromptStage stage) =>
+        stage == _activePromptLibraryStage ? "nav-link active" : "nav-link";
+
+    private void ResetActivePromptSystemPrompt()
+    {
+        if (_promptLibraryDefaults is null)
+            return;
+
+        ActivePromptStageDraft.SystemPrompt = GetPromptStageView(_promptLibraryDefaults, _activePromptLibraryStage).SystemPrompt;
+    }
+
+    private void ResetActivePromptUserPrompt()
+    {
+        if (_promptLibraryDefaults is null)
+            return;
+
+        ActivePromptStageDraft.UserPromptTemplate = GetPromptStageView(_promptLibraryDefaults, _activePromptLibraryStage).UserPromptTemplate;
+    }
+
+    private void ResetActiveTurnShape(StoryTurnShape shape)
+    {
+        if (_promptLibraryDefaults is null)
+            return;
+
+        var defaults = _activePromptLibraryStage == StoryScenePromptStage.Planning
+            ? _promptLibraryDefaults.PlanningTurnShapes
+            : _promptLibraryDefaults.ProseTurnShapes;
+        SetActiveTurnShapeTemplate(shape, GetTurnShapeTemplate(defaults, shape));
+    }
+
+    private bool IsActiveTurnShapeDefault(StoryTurnShape shape)
+    {
+        if (_promptLibraryDefaults is null)
+            return false;
+
+        var defaults = _activePromptLibraryStage == StoryScenePromptStage.Planning
+            ? _promptLibraryDefaults.PlanningTurnShapes
+            : _promptLibraryDefaults.ProseTurnShapes;
+        return string.Equals(GetActiveTurnShapeTemplate(shape), GetTurnShapeTemplate(defaults, shape), StringComparison.Ordinal);
+    }
+
+    private string GetActiveTurnShapeTemplate(StoryTurnShape shape) =>
+        GetTurnShapeTemplate(ActiveTurnShapeDraft, shape);
+
+    private string GetActiveTurnShapeInputId(StoryTurnShape shape) =>
+        GetTurnShapeInputId(ActiveTurnShapeDraft, shape);
+
+    private void SetActiveTurnShapeTemplate(StoryTurnShape shape, string value)
+    {
+        switch (shape)
+        {
+            case StoryTurnShape.Compact:
+                ActiveTurnShapeDraft.Compact = value;
+                break;
+            case StoryTurnShape.Brief:
+                ActiveTurnShapeDraft.Brief = value;
+                break;
+            case StoryTurnShape.Extended:
+                ActiveTurnShapeDraft.Extended = value;
+                break;
+            case StoryTurnShape.Monologue:
+                ActiveTurnShapeDraft.Monologue = value;
+                break;
+            case StoryTurnShape.Silent:
+                ActiveTurnShapeDraft.Silent = value;
+                break;
+            case StoryTurnShape.SilentMonologue:
+                ActiveTurnShapeDraft.SilentMonologue = value;
+                break;
+        }
+    }
+
+    private PromptStageDraft GetPromptStageDraft(StoryScenePromptStage stage) => stage switch
+    {
+        StoryScenePromptStage.Appearance => _promptLibraryDraft!.Appearance,
+        StoryScenePromptStage.Selection => _promptLibraryDraft!.Selection,
+        StoryScenePromptStage.Planning => _promptLibraryDraft!.Planning,
+        StoryScenePromptStage.Prose => _promptLibraryDraft!.Prose,
+        _ => _promptLibraryDraft!.Appearance
+    };
+
+    private static StorySceneStagePromptTemplateView GetPromptStageView(StoryScenePromptLibraryView library, StoryScenePromptStage stage) => stage switch
+    {
+        StoryScenePromptStage.Appearance => library.Appearance,
+        StoryScenePromptStage.Selection => library.Selection,
+        StoryScenePromptStage.Planning => library.Planning,
+        StoryScenePromptStage.Prose => library.Prose,
+        _ => library.Appearance
+    };
+
+    private static string GetTurnShapeTemplate(StorySceneTurnShapePromptTemplatesView templates, StoryTurnShape shape) => shape switch
+    {
+        StoryTurnShape.Compact => templates.Compact,
+        StoryTurnShape.Brief => templates.Brief,
+        StoryTurnShape.Extended => templates.Extended,
+        StoryTurnShape.Monologue => templates.Monologue,
+        StoryTurnShape.Silent => templates.Silent,
+        StoryTurnShape.SilentMonologue => templates.SilentMonologue,
+        _ => string.Empty
+    };
+
+    private static string GetTurnShapeTemplate(PromptTurnShapeDraft templates, StoryTurnShape shape) => shape switch
+    {
+        StoryTurnShape.Compact => templates.Compact,
+        StoryTurnShape.Brief => templates.Brief,
+        StoryTurnShape.Extended => templates.Extended,
+        StoryTurnShape.Monologue => templates.Monologue,
+        StoryTurnShape.Silent => templates.Silent,
+        StoryTurnShape.SilentMonologue => templates.SilentMonologue,
+        _ => string.Empty
+    };
+
+    private static string GetTurnShapeInputId(PromptTurnShapeDraft templates, StoryTurnShape shape) => shape switch
+    {
+        StoryTurnShape.Compact => templates.CompactInputId,
+        StoryTurnShape.Brief => templates.BriefInputId,
+        StoryTurnShape.Extended => templates.ExtendedInputId,
+        StoryTurnShape.Monologue => templates.MonologueInputId,
+        StoryTurnShape.Silent => templates.SilentInputId,
+        StoryTurnShape.SilentMonologue => templates.SilentMonologueInputId,
+        _ => templates.CompactInputId
+    };
+
+    private static string DescribePromptStage(StoryScenePromptStage stage) => stage switch
+    {
+        StoryScenePromptStage.Appearance => "Appearance",
+        StoryScenePromptStage.Selection => "Selection",
+        StoryScenePromptStage.Planning => "Planning",
+        StoryScenePromptStage.Prose => "Prose",
+        _ => stage.ToString()
+    };
+
+    private static string DescribeTurnShape(StoryTurnShape shape) =>
+        StorySceneSharedPromptBuilder.FormatTurnShape(shape);
+
+    private static bool ArePromptLibrariesEqual(StoryScenePromptLibraryView left, StoryScenePromptLibraryView right) =>
+        ArePromptStagesEqual(left.Appearance, right.Appearance)
+        && ArePromptStagesEqual(left.Selection, right.Selection)
+        && ArePromptStagesEqual(left.Planning, right.Planning)
+        && ArePromptStagesEqual(left.Prose, right.Prose)
+        && AreTurnShapesEqual(left.PlanningTurnShapes, right.PlanningTurnShapes)
+        && AreTurnShapesEqual(left.ProseTurnShapes, right.ProseTurnShapes);
+
+    private static bool ArePromptStagesEqual(StorySceneStagePromptTemplateView left, StorySceneStagePromptTemplateView right) =>
+        string.Equals(left.SystemPrompt, right.SystemPrompt, StringComparison.Ordinal)
+        && string.Equals(left.UserPromptTemplate, right.UserPromptTemplate, StringComparison.Ordinal);
+
+    private static bool AreTurnShapesEqual(StorySceneTurnShapePromptTemplatesView left, StorySceneTurnShapePromptTemplatesView right) =>
+        string.Equals(left.Compact, right.Compact, StringComparison.Ordinal)
+        && string.Equals(left.Brief, right.Brief, StringComparison.Ordinal)
+        && string.Equals(left.Extended, right.Extended, StringComparison.Ordinal)
+        && string.Equals(left.Monologue, right.Monologue, StringComparison.Ordinal)
+        && string.Equals(left.Silent, right.Silent, StringComparison.Ordinal)
+        && string.Equals(left.SilentMonologue, right.SilentMonologue, StringComparison.Ordinal);
+
     private static string FormatTemperature(double temperature) =>
         temperature.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
 
@@ -1819,6 +2275,107 @@
             FrequencyPenalty = settings.FrequencyPenalty,
             PresencePenalty = settings.PresencePenalty,
             StopSequencesText = string.Join(Environment.NewLine, settings.StopSequences)
+        };
+    }
+
+    private sealed class PromptLibraryDraft
+    {
+        public PromptStageDraft Appearance { get; set; } = new();
+
+        public PromptStageDraft Selection { get; set; } = new();
+
+        public PromptStageDraft Planning { get; set; } = new();
+
+        public PromptStageDraft Prose { get; set; } = new();
+
+        public PromptTurnShapeDraft PlanningTurnShapes { get; set; } = new();
+
+        public PromptTurnShapeDraft ProseTurnShapes { get; set; } = new();
+
+        public IReadOnlyList<StoryScenePromptPlaceholderView> Placeholders { get; set; } = [];
+
+        public StoryScenePromptLibraryView ToView() => new(
+            Appearance.ToView(),
+            Selection.ToView(),
+            Planning.ToView(),
+            Prose.ToView(),
+            PlanningTurnShapes.ToView(),
+            ProseTurnShapes.ToView(),
+            Placeholders);
+
+        public static PromptLibraryDraft FromView(StoryScenePromptLibraryView view) => new()
+        {
+            Appearance = PromptStageDraft.FromView(view.Appearance),
+            Selection = PromptStageDraft.FromView(view.Selection),
+            Planning = PromptStageDraft.FromView(view.Planning),
+            Prose = PromptStageDraft.FromView(view.Prose),
+            PlanningTurnShapes = PromptTurnShapeDraft.FromView(view.PlanningTurnShapes),
+            ProseTurnShapes = PromptTurnShapeDraft.FromView(view.ProseTurnShapes),
+            Placeholders = view.Placeholders
+        };
+    }
+
+    private sealed class PromptStageDraft
+    {
+        public string SystemPrompt { get; set; } = string.Empty;
+
+        public string UserPromptTemplate { get; set; } = string.Empty;
+
+        public string SystemPromptInputId { get; } = $"prompt-system-{Guid.NewGuid():N}";
+
+        public string UserPromptInputId { get; } = $"prompt-user-{Guid.NewGuid():N}";
+
+        public StorySceneStagePromptTemplateView ToView() => new(SystemPrompt, UserPromptTemplate);
+
+        public static PromptStageDraft FromView(StorySceneStagePromptTemplateView view) => new()
+        {
+            SystemPrompt = view.SystemPrompt,
+            UserPromptTemplate = view.UserPromptTemplate
+        };
+    }
+
+    private sealed class PromptTurnShapeDraft
+    {
+        public string Compact { get; set; } = string.Empty;
+
+        public string Brief { get; set; } = string.Empty;
+
+        public string Extended { get; set; } = string.Empty;
+
+        public string Monologue { get; set; } = string.Empty;
+
+        public string Silent { get; set; } = string.Empty;
+
+        public string SilentMonologue { get; set; } = string.Empty;
+
+        public string CompactInputId { get; } = $"prompt-shape-compact-{Guid.NewGuid():N}";
+
+        public string BriefInputId { get; } = $"prompt-shape-brief-{Guid.NewGuid():N}";
+
+        public string ExtendedInputId { get; } = $"prompt-shape-extended-{Guid.NewGuid():N}";
+
+        public string MonologueInputId { get; } = $"prompt-shape-monologue-{Guid.NewGuid():N}";
+
+        public string SilentInputId { get; } = $"prompt-shape-silent-{Guid.NewGuid():N}";
+
+        public string SilentMonologueInputId { get; } = $"prompt-shape-silent-monologue-{Guid.NewGuid():N}";
+
+        public StorySceneTurnShapePromptTemplatesView ToView() => new(
+            Compact,
+            Brief,
+            Extended,
+            Monologue,
+            Silent,
+            SilentMonologue);
+
+        public static PromptTurnShapeDraft FromView(StorySceneTurnShapePromptTemplatesView view) => new()
+        {
+            Compact = view.Compact,
+            Brief = view.Brief,
+            Extended = view.Extended,
+            Monologue = view.Monologue,
+            Silent = view.Silent,
+            SilentMonologue = view.SilentMonologue
         };
     }
 

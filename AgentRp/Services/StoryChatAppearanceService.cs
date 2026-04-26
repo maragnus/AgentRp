@@ -8,7 +8,8 @@ namespace AgentRp.Services;
 
 public sealed class StoryChatAppearanceService(
     IDbContextFactory<DbAppContext> dbContextFactory,
-    IThreadAgentService threadAgentService) : IStoryChatAppearanceService
+    IThreadAgentService threadAgentService,
+    IStoryScenePromptLibraryService promptLibraryService) : IStoryChatAppearanceService
 {
 
     public async Task<StorySceneAppearanceStageResult> ResolveLatestAppearanceAsync(
@@ -43,16 +44,18 @@ public sealed class StoryChatAppearanceService(
         var agent = await threadAgentService.GetSelectedAgentAsync(threadId, cancellationToken)
             ?? throw new InvalidOperationException("Resolving current appearance failed because no AI provider is configured for this chat.");
 
+        var prompt = await promptLibraryService.RenderAppearancePromptAsync(
+            threadId,
+            BuildPromptCharacters(story, latestEffectiveCharacters),
+            transcriptSinceLatestEntry,
+            story.StoryContext.ExplicitContent,
+            story.StoryContext.ViolentContent,
+            cancellationToken);
+
         var response = await agent.ChatClient.GetResponseAsync<AppearanceStageResponse>(
             [
-                new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, StorySceneAppearancePromptBuilder.BuildSystemPrompt()),
-                new Microsoft.Extensions.AI.ChatMessage(
-                    Microsoft.Extensions.AI.ChatRole.User,
-                    StorySceneAppearancePromptBuilder.BuildUserPrompt(
-                        BuildPromptCharacters(story, latestEffectiveCharacters),
-                        transcriptSinceLatestEntry,
-                        story.StoryContext.ExplicitContent,
-                        story.StoryContext.ViolentContent))
+                new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, prompt.SystemPrompt),
+                new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, prompt.UserPrompt)
             ],
             options: new ChatOptions { Temperature = 0.2f },
             useJsonSchemaResponseFormat: agent.UseJsonSchemaResponseFormat,

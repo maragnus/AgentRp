@@ -87,6 +87,7 @@ public sealed class StorySceneChatServiceTests
                         null,
                         null,
                         null,
+                        null,
                         [
                             new(ProcessStepKey("appearance"), "Appearance", [], []),
                             new(ProcessStepKey("planning"), "Planning", [], []),
@@ -125,6 +126,7 @@ public sealed class StorySceneChatServiceTests
                 ContextJson = JsonSerializer.Serialize(
                     new StoryMessageProcessContext(
                         StoryScenePostMode.AutomaticAi,
+                        null,
                         null,
                         null,
                         null,
@@ -171,6 +173,7 @@ public sealed class StorySceneChatServiceTests
                 ContextJson = JsonSerializer.Serialize(
                     new StoryMessageProcessContext(
                         StoryScenePostMode.RespondAutomaticAi,
+                        null,
                         null,
                         null,
                         null,

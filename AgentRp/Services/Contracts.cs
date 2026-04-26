@@ -1194,8 +1194,8 @@ public enum StoryTurnShape
 {
     Compact,
     Brief,
-    Extended,
     Monologue,
+    Extended,
     Silent,
     SilentMonologue
 }
@@ -1228,7 +1228,8 @@ public sealed record StoryMessageProcessContext(
     StoryMessagePlannerResult? Planner,
     StoryMessageProseRequest? ProseRequest,
     string? FinalMessage,
-    IReadOnlyList<StoryMessageProcessStepArtifact> StepArtifacts);
+    IReadOnlyList<StoryMessageProcessStepArtifact> StepArtifacts = default!)
+;
 
 public sealed record StoryMessageProcessStepArtifact(
     string StepKey,

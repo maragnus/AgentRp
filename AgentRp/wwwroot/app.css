@@ -31,6 +31,18 @@ a, .btn-link {
     min-width: 0;
 }
 
+.dropdown-menu,
+.popover,
+.tooltip {
+    z-index: 2000;
+}
+
+.dropdown:has(.dropdown-menu.show),
+.btn-group:has(.dropdown-menu.show) {
+    position: relative;
+    z-index: 2000;
+}
+
 .app-shell {
     min-height: 100dvh;
     display: flex;
@@ -133,7 +145,7 @@ a, .btn-link {
 
 .app-message-card {
     border-radius: 1rem;
-    cursor: pointer;
+    /* cursor: pointer; */
     outline: none;
 }
 
@@ -150,6 +162,11 @@ a, .btn-link {
 
 .app-message-card:hover .card {
     transform: translateY(-1px);
+}
+
+.app-message-card:has(.dropdown-menu.show) {
+    position: relative;
+    z-index: 2000;
 }
 
 .app-message-content {

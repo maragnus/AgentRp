@@ -8,7 +8,8 @@ namespace AgentRp.Services;
 
 public sealed class StoryChatAppearanceReplayService(
     IDbContextFactory<DbAppContext> dbContextFactory,
-    IThreadAgentService threadAgentService) : IStoryChatAppearanceReplayService
+    IThreadAgentService threadAgentService,
+    IStoryScenePromptLibraryService promptLibraryService) : IStoryChatAppearanceReplayService
 {
     public async Task<StoryChatAppearanceReplayView> CreateReplayAsync(
         CreateStoryChatAppearanceReplay request,
@@ -79,16 +80,18 @@ public sealed class StoryChatAppearanceReplayService(
                 message.SpeakerCharacterId,
                 null))
             .ToList();
+        var prompt = await promptLibraryService.RenderAppearancePromptAsync(
+            request.ThreadId,
+            BuildPromptCharacters(context.Story, previousCharacters),
+            transcriptMessages,
+            context.Story.StoryContext.ExplicitContent,
+            context.Story.StoryContext.ViolentContent,
+            cancellationToken);
+
         var response = await agent.ChatClient.GetResponseAsync<AppearanceReplayResponse>(
             [
-                new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, StorySceneAppearancePromptBuilder.BuildSystemPrompt()),
-                new Microsoft.Extensions.AI.ChatMessage(
-                    Microsoft.Extensions.AI.ChatRole.User,
-                    StorySceneAppearancePromptBuilder.BuildUserPrompt(
-                        BuildPromptCharacters(context.Story, previousCharacters),
-                        transcriptMessages,
-                        context.Story.StoryContext.ExplicitContent,
-                        context.Story.StoryContext.ViolentContent))
+                new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.System, prompt.SystemPrompt),
+                new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, prompt.UserPrompt)
             ],
             options: new ChatOptions { Temperature = 0.2f },
             useJsonSchemaResponseFormat: agent.UseJsonSchemaResponseFormat,

@@ -1,6 +1,7 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
-var app = builder.AddProject<Projects.AgentRp>("app");
+var app = builder.AddProject<Projects.AgentRp>("app")
+    .WithExternalHttpEndpoints();
 
 var database = builder.AddAzureSqlServer("agentrp-sql")
     .RunAsContainer(c => c

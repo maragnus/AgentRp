@@ -182,10 +182,17 @@ else
     protected override async Task OnInitializedAsync()
     {
         _subscription = ActivityNotifier.Subscribe(ActivityStreams.SidebarChats, _ => InvokeAsync(LoadAsync));
+        NavigationManager.LocationChanged += HandleLocationChanged;
         await LoadAsync();
     }
 
-    public void Dispose() => _subscription?.Dispose();
+    public void Dispose()
+    {
+        _subscription?.Dispose();
+        NavigationManager.LocationChanged -= HandleLocationChanged;
+    }
+
+    private void HandleLocationChanged(object? sender, LocationChangedEventArgs args) => InvokeAsync(StateHasChanged);
 
     private async Task LoadAsync()
     {

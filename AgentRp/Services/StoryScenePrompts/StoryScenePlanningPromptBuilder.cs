@@ -3,9 +3,9 @@ using AgentRp.Data;
 
 namespace AgentRp.Services;
 
-internal static class StoryScenePlanningPromptBuilder
+public static class StoryScenePlanningPromptBuilder
 {
-    internal static string BuildSystemPrompt() =>
+    public static string BuildSystemPrompt() =>
         """
         You are the planning stage for a story scene message generator.
         Decide the next turn before any prose is written.
@@ -73,7 +73,7 @@ internal static class StoryScenePlanningPromptBuilder
         Do not write the final message text.
         """;
 
-    internal static string BuildUserPrompt(PostStorySceneMessage request, StorySceneGenerationContext context)
+    public static string BuildUserPrompt(PostStorySceneMessage request, StorySceneGenerationContext context)
     {
         var builder = new StringBuilder();
         builder.AppendLine(StorySceneSharedPromptBuilder.BuildContextSummary(context));

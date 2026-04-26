@@ -24,6 +24,8 @@ public sealed class ChatStory
 
     public string StoryContextJson { get; set; } = ChatStoryJson.Serialize(ChatStoryContextDocument.Empty);
 
+    public string PromptLibraryJson { get; set; } = string.Empty;
+
     public ChatThread Thread { get; set; } = null!;
 
     [NotMapped]

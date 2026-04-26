@@ -524,7 +524,7 @@ else
                                                                                         </span>
                                                                                         @if (isCurrentTurnShape)
                                                                                         {
-                                                                                            <span class="small">Current</span>
+                                                                                            <i class="fa-solid fa-check"></i>
                                                                                         }
                                                                                     </BusyButton>
                                                                                 </li>
@@ -1896,11 +1896,35 @@ else
             CancelInlineEdit();
             ClearRetryState(clearDraft: false);
 
-            await StorySceneChatService.ChangeMessageSpeakerAsync(
-                new ChangeStorySceneMessageSpeaker(_chat.ThreadId, message.MessageId, author.CharacterId),
-                CancellationToken.None);
+            if (ShouldRegenerateAfterSpeakerChange(message))
+            {
+                await StorySceneChatService.PostMessageAsync(
+                    new PostStorySceneMessage(
+                        _chat.ThreadId,
+                        author.CharacterId,
+                        ResolveSpeakerChangeRegenerationMode(message.GenerationMode),
+                        null,
+                        message.Process?.Context?.GuidancePrompt,
+                        message.MessageId,
+                        ResolveSpeakerChangeTurnShapePreference(message)),
+                    HandleMessageStreamUpdateAsync,
+                    CancellationToken.None);
+                ClearStreamedMessageContent();
+            }
+            else
+            {
+                await StorySceneChatService.ChangeMessageSpeakerAsync(
+                    new ChangeStorySceneMessageSpeaker(_chat.ThreadId, message.MessageId, author.CharacterId),
+                    CancellationToken.None);
+            }
 
             await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (OperationCanceledException)
+        {
+            await LoadChatAsync(_chat.ThreadId);
+            ClearStreamedMessageContent();
+            _errorMessage = null;
         }
         catch (Exception exception)
         {
@@ -1919,6 +1943,21 @@ else
         characterId.HasValue
             ? message.SpeakerCharacterId == characterId.Value && !message.IsNarrator
             : message.IsNarrator && !message.SpeakerCharacterId.HasValue;
+
+    private static bool ShouldRegenerateAfterSpeakerChange(StorySceneMessageView message) =>
+        message.GenerationMode != StoryScenePostMode.Manual
+        && HasReusableSavedPlan(message);
+
+    private static StoryScenePostMode ResolveSpeakerChangeRegenerationMode(StoryScenePostMode mode) => mode switch
+    {
+        StoryScenePostMode.RespondGuidedAi => StoryScenePostMode.GuidedAi,
+        StoryScenePostMode.RespondAutomaticAi => StoryScenePostMode.AutomaticAi,
+        _ => mode
+    };
+
+    private static StoryTurnShape? ResolveSpeakerChangeTurnShapePreference(StorySceneMessageView message) =>
+        message.Process?.Context?.RequestedTurnShape
+        ?? message.Process?.Context?.Planner?.TurnShape;
 
     private static string BuildAuthorKey(Guid? characterId) => characterId?.ToString("N") ?? "narrator";
 
@@ -2851,8 +2890,8 @@ else
     {
         StoryTurnShape.Compact => "Compact",
         StoryTurnShape.Brief => "Brief",
-        StoryTurnShape.Extended => "Extended",
         StoryTurnShape.Monologue => "Monologue",
+        StoryTurnShape.Extended => "Extended",
         StoryTurnShape.Silent => "Silent",
         StoryTurnShape.SilentMonologue => "Silent Monologue",
         _ => turnShape.ToString()
@@ -2862,8 +2901,8 @@ else
     {
         StoryTurnShape.Compact => "fa-regular fa-face-smile",
         StoryTurnShape.Brief => "fa-regular fa-face-grin-wide",
-        StoryTurnShape.Extended => "fa-regular fa-message-lines",
         StoryTurnShape.Monologue => "fa-regular fa-face-awesome",
+        StoryTurnShape.Extended => "fa-regular fa-message-lines",
         StoryTurnShape.Silent => "fa-regular fa-face-zipper",
         StoryTurnShape.SilentMonologue => "fa-regular fa-face-beam-hand-over-mouth",
         _ => "fa-regular fa-pen-line"

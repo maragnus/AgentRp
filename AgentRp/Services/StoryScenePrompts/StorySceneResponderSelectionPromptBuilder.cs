@@ -2,9 +2,9 @@ using System.Text;
 
 namespace AgentRp.Services;
 
-internal static class StorySceneResponderSelectionPromptBuilder
+public static class StorySceneResponderSelectionPromptBuilder
 {
-    internal static string BuildSystemPrompt() =>
+    public static string BuildSystemPrompt() =>
         """
         You choose who in the current scene should respond next in an automatic story chat.
         Return only structured data.
@@ -18,7 +18,7 @@ internal static class StorySceneResponderSelectionPromptBuilder
         Favor the character with the strongest local reason, pressure, opportunity, or emotional stake to answer now.
         """;
 
-    internal static string BuildUserPrompt(
+    public static string BuildUserPrompt(
         StorySceneActorContext activeSpeaker,
         IReadOnlyList<StorySceneCharacterContext> candidates,
         StoryNarrativeSettingsView storyContext,
