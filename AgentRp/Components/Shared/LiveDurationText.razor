@@ -1,0 +1,41 @@
+@implements IDisposable
+
+@StartedUtc.ToDurationText(CompletedUtc, _nowUtc)
+
+@code {
+    private System.Threading.Timer? _timer;
+    private DateTime _nowUtc = DateTime.UtcNow;
+
+    [Parameter]
+    public DateTime StartedUtc { get; set; }
+
+    [Parameter]
+    public DateTime? CompletedUtc { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (CompletedUtc.HasValue)
+        {
+            StopTimer();
+            _nowUtc = CompletedUtc.Value;
+            return;
+        }
+
+        _nowUtc = DateTime.UtcNow;
+        _timer ??= new System.Threading.Timer(_ => Refresh(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    public void Dispose() => StopTimer();
+
+    private void StopTimer()
+    {
+        _timer?.Dispose();
+        _timer = null;
+    }
+
+    private void Refresh()
+    {
+        _nowUtc = DateTime.UtcNow;
+        _ = InvokeAsync(StateHasChanged);
+    }
+}

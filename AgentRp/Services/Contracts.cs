@@ -1104,7 +1104,8 @@ public sealed record BranchStorySceneMessage(
 
 public sealed record RegenerateStorySceneProse(
     Guid ThreadId,
-    Guid SourceMessageId);
+    Guid SourceMessageId,
+    StoryMessagePlannerResult? PlannerOverride = null);
 
 public sealed record StorySceneTranscriptMessage(
     Guid MessageId,
@@ -1170,7 +1171,8 @@ public sealed record StoryMessageTokenUsage(
 
 public sealed record StorySceneAppearanceStageResult(
     StorySceneAppearanceResolution Appearance,
-    StoryMessageTokenUsage? TokenUsage);
+    StoryMessageTokenUsage? TokenUsage,
+    StoryScenePromptRenderResult? Prompt = null);
 
 public sealed record StorySceneResponderSelectionResult(
     Guid? ActiveSpeakerCharacterId,

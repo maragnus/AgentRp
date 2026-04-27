@@ -78,7 +78,6 @@ else
                         var snapshot = node.Snapshot;
                         var appearance = node.Appearance;
                         var process = message?.Process;
-                        var processDurationText = process is null ? null : DescribeDuration(process.StartedUtc, process.CompletedUtc);
                         var expandedStepId = process is null ? null : GetExpandedStepId(process.RunId);
                         var isStandaloneAppearanceVisible = appearance is not null && _showProcessPanels;
                         var isStandaloneAppearanceExpanded = appearance is not null && IsAppearanceEntryExpanded(appearance.AppearanceEntryId);
@@ -129,7 +128,9 @@ else
                                                                              OnClick="() => StopSceneRunAsync(process.RunId)" />
                                                     }
                                                     <span class="badge text-bg-light border text-body-secondary">@process.DisplayStatusText</span>
-                                                    <span class="badge text-bg-light border text-body-secondary">@processDurationText</span>
+                                                    <span class="badge text-bg-light border text-body-secondary">
+                                                        <LiveDurationText StartedUtc="@process.StartedUtc" CompletedUtc="@process.CompletedUtc" />
+                                                    </span>
                                                     <button type="button"
                                                             class="btn btn-link d-flex align-items-center gap-2 p-0 text-decoration-none text-reset"
                                                             aria-expanded="@isProcessTraceExpanded"
@@ -147,7 +148,6 @@ else
                                                         {
                                                             var step = process.Steps[stepIndex];
                                                             var isStepExpanded = expandedStepId == step.StepId;
-                                                            var stepDurationText = DescribeStepDuration(step);
                                                             var stepTokenUsage = GetProcessStepTokenUsage(step);
                                                             var stepSubtitle = GetProcessStepSubtitle(process, step);
                                                             var stepBlocks = GetProcessStepBlocks(step);
@@ -172,10 +172,10 @@ else
                                                                                         <div class="small text-body-secondary">@stepSubtitle</div>
                                                                                     </div>
                                                                                     <div class="d-flex align-items-center gap-3 ms-auto">
-                                                                                        @if (!string.IsNullOrWhiteSpace(stepDurationText))
+                                                                                        @if (step.StartedUtc.HasValue)
                                                                                         {
                                                                                             <div class="small text-body-secondary text-nowrap">
-                                                                                                <i class="fa-regular fa-clock me-1" aria-hidden="true"></i>@stepDurationText
+                                                                                                <i class="fa-regular fa-clock me-1" aria-hidden="true"></i><LiveDurationText StartedUtc="@step.StartedUtc.Value" CompletedUtc="@step.CompletedUtc" />
                                                                                             </div>
                                                                                         }
                                                                                         @if (stepTokenUsage.Count > 0)
@@ -256,7 +256,11 @@ else
                                             </div>
                                             <div>
                                                 <div class="fw-semibold">Scene generation in progress</div>
-                                                <div class="small text-body-secondary">@GetHiddenProcessSummary(process, processDurationText)</div>
+                                                <div class="small text-body-secondary">
+                                                    @GetHiddenProcessSummary(process)
+                                                    <span aria-hidden="true"> • </span>
+                                                    <LiveDurationText StartedUtc="@process.StartedUtc" CompletedUtc="@process.CompletedUtc" />
+                                                </div>
                                             </div>
                                         </div>
 
@@ -1343,7 +1347,6 @@ else
     private string? _errorMessage;
     private StorySceneChatState? _chat;
     private bool _showProcessPanels = true;
-    private DateTime _processDurationNowUtc = DateTime.UtcNow;
     private Guid? _copyingProcessStepId;
     private Guid? _copiedProcessStepId;
     private readonly Dictionary<Guid, bool> _expandedProcessRunStates = [];
@@ -1353,7 +1356,6 @@ else
     private readonly Dictionary<Guid, bool> _expandedAppearanceEntryStates = [];
     private readonly Dictionary<Guid, string> _streamedMessageContent = [];
     private readonly HashSet<Guid> _stoppingRunIds = [];
-    private System.Threading.Timer? _processDurationRefreshTimer;
     private IModelOperationHandle? _snapshotDraftOperation;
     private CancellationTokenSource? _processStepCopyFeedbackCancellation;
     private ElementReference _chatLogScrollContainer;
@@ -1373,7 +1375,7 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        _workspaceSubscription = ActivityNotifier.Subscribe(ActivityStreams.StoryChatWorkspace, _ => InvokeAsync(HandleWorkspaceUpdatedAsync));
+        _workspaceSubscription = ActivityNotifier.Subscribe(ActivityStreams.StoryChatWorkspace, notification => InvokeAsync(() => HandleWorkspaceUpdatedAsync(notification)));
         await LoadDisplayPreferencesAsync();
         await base.OnInitializedAsync();
     }
@@ -1402,7 +1404,6 @@ else
     public async ValueTask DisposeAsync()
     {
         _workspaceSubscription?.Dispose();
-        _processDurationRefreshTimer?.Dispose();
         _snapshotDraftOperation?.Dispose();
         _processStepCopyFeedbackCancellation?.Cancel();
         _processStepCopyFeedbackCancellation?.Dispose();
@@ -1458,8 +1459,13 @@ else
         }
     }
 
-    private async Task HandleWorkspaceUpdatedAsync()
+    private async Task HandleWorkspaceUpdatedAsync(ActivityNotification notification)
     {
+        if (notification.EntityId.HasValue
+            && _appliedThreadId.HasValue
+            && notification.EntityId.Value != _appliedThreadId.Value)
+            return;
+
         if (_appliedThreadId.HasValue)
             await LoadChatAsync(_appliedThreadId.Value);
     }
@@ -1469,7 +1475,6 @@ else
         var previousThreadId = _chat?.ThreadId;
         var previousMessageCount = GetTranscriptMessageCount(_chat);
         _chat = await StorySceneChatService.GetChatStateAsync(threadId, CancellationToken.None);
-        _processDurationNowUtc = DateTime.UtcNow;
 
         if (_chat is not null)
         {
@@ -1512,7 +1517,6 @@ else
         }
 
         SyncStoppingRuns();
-        SyncProcessDurationRefreshTimer();
         StateHasChanged();
     }
 
@@ -1565,26 +1569,6 @@ else
 
         _streamedMessageContent.Clear();
         StateHasChanged();
-    }
-
-    private void SyncProcessDurationRefreshTimer()
-    {
-        var hasRunningProcesses = _chat?.Transcript.Any(x => x.Message?.Process?.Status == ProcessRunStatus.Running) == true;
-
-        if (hasRunningProcesses)
-        {
-            _processDurationRefreshTimer ??= new System.Threading.Timer(_ => RefreshProcessDurations(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
-            return;
-        }
-
-        _processDurationRefreshTimer?.Dispose();
-        _processDurationRefreshTimer = null;
-    }
-
-    private void RefreshProcessDurations()
-    {
-        _processDurationNowUtc = DateTime.UtcNow;
-        _ = InvokeAsync(StateHasChanged);
     }
 
     private async Task PostAsync(StoryScenePostMode mode, StoryTurnShape? requestedTurnShape = null)
@@ -1822,14 +1806,7 @@ else
             CancelAppearanceEdit();
             ClearRetryState(clearDraft: false);
 
-            await StorySceneChatService.UpdatePlanAsync(
-                new UpdateStoryScenePlan(
-                    _chat.ThreadId,
-                    message.MessageId,
-                    BuildPlannerWithTurnShape(planner, message, turnShape)),
-                CancellationToken.None);
-
-            await RegenerateProseFromSavedPlanAsync(message);
+            await RegenerateProseFromSavedPlanAsync(message, BuildPlannerWithTurnShape(planner, message, turnShape));
         }
         catch (OperationCanceledException)
         {
@@ -1852,13 +1829,15 @@ else
         }
     }
 
-    private async Task RegenerateProseFromSavedPlanAsync(StorySceneMessageView message)
+    private async Task RegenerateProseFromSavedPlanAsync(
+        StorySceneMessageView message,
+        StoryMessagePlannerResult? plannerOverride = null)
     {
         if (_chat is null)
             return;
 
         await StorySceneChatService.RegenerateProseAsync(
-            new RegenerateStorySceneProse(_chat.ThreadId, message.MessageId),
+            new RegenerateStorySceneProse(_chat.ThreadId, message.MessageId, plannerOverride),
             HandleMessageStreamUpdateAsync,
             CancellationToken.None);
 
@@ -2629,12 +2608,6 @@ else
     private bool IsProcessExpanded(Guid runId) =>
         _expandedProcessRunStates.TryGetValue(runId, out var isExpanded) && isExpanded;
 
-    private string DescribeDuration(DateTime startedUtc, DateTime? completedUtc) =>
-        startedUtc.ToDurationText(completedUtc, _processDurationNowUtc);
-
-    private string? DescribeStepDuration(StorySceneProcessStepView step) =>
-        step.StartedUtc.HasValue ? step.StartedUtc.Value.ToDurationText(step.CompletedUtc, _processDurationNowUtc) : null;
-
     private static IReadOnlyList<string> GetProcessStepTokenUsage(StorySceneProcessStepView step)
     {
         var usage = new List<string>();
@@ -2767,15 +2740,12 @@ else
             : "Review the saved machine trace for this message.";
     }
 
-    private static string GetHiddenProcessSummary(StorySceneMessageProcessView process, string? processDurationText)
+    private static string GetHiddenProcessSummary(StorySceneMessageProcessView process)
     {
         var segments = new List<string> { process.DisplayStatusText };
 
         if (!string.IsNullOrWhiteSpace(process.ActiveStage))
             segments.Add($"Active stage: {process.ActiveStage}");
-
-        if (!string.IsNullOrWhiteSpace(processDurationText))
-            segments.Add(processDurationText);
 
         return string.Join(" • ", segments);
     }

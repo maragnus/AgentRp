@@ -283,7 +283,9 @@ public sealed class StorySceneChatServiceTests
 
     private static T InvokePrivateStatic<T>(string methodName, params object?[] args)
     {
-        var method = typeof(StorySceneChatService).GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
+        var method = typeof(StorySceneChatService)
+            .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .SingleOrDefault(method => method.Name == methodName && method.GetParameters().Length == args.Length)
             ?? throw new InvalidOperationException($"Method {methodName} was not found.");
         var result = method.Invoke(null, args);
         return result is T typedResult

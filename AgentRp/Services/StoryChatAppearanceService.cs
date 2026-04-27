@@ -23,6 +23,7 @@ public sealed class StoryChatAppearanceService(
         {
             return new StorySceneAppearanceStageResult(
                 new StorySceneAppearanceResolution(null, BuildEffectiveCharacters(story, null), []),
+                null,
                 null);
         }
 
@@ -38,6 +39,7 @@ public sealed class StoryChatAppearanceService(
                     MapEntry(latestEntry, story, latestEntry is not null, latestEffectiveCharacters),
                     latestEffectiveCharacters,
                     transcriptSinceLatestEntry),
+                null,
                 null);
         }
 
@@ -80,7 +82,8 @@ public sealed class StoryChatAppearanceService(
                         MapEntry(createdEntry, story, true, resolvedCharacters),
                         resolvedCharacters,
                         transcriptSinceLatestEntry),
-                    tokenUsage);
+                    tokenUsage,
+                    prompt);
             }
 
             return new StorySceneAppearanceStageResult(
@@ -88,7 +91,8 @@ public sealed class StoryChatAppearanceService(
                     MapEntry(latestEntry, story, latestEntry is not null, latestEffectiveCharacters),
                     latestEffectiveCharacters,
                     transcriptSinceLatestEntry),
-                tokenUsage);
+                tokenUsage,
+                prompt);
         }
 
         var entry = await CreateEntryAsync(
@@ -104,7 +108,8 @@ public sealed class StoryChatAppearanceService(
                 MapEntry(entry, story, true, resolvedCharacters),
                 resolvedCharacters,
                 transcriptSinceLatestEntry),
-            tokenUsage);
+            tokenUsage,
+            prompt);
     }
 
     public async Task<IReadOnlyList<StorySceneAppearanceEntryView>> GetEntriesForPathAsync(

@@ -1,0 +1,285 @@
+@implements IDisposable
+@inject IAgentEndpointManagementService AgentEndpointManagementService
+@inject ILogger<ManagedEndpointStatusPanel> Logger
+
+@if (Endpoint is not null || ShouldShowError)
+{
+    <div class="border-top pt-2 mt-2">
+        @if (ShouldShowError)
+        {
+            <div class="small text-body-secondary">@_errorMessage</div>
+        }
+        else
+        {
+            var endpoint = Endpoint!;
+            var isManagingEndpoint = IsManagingEndpoint(endpoint.AgentName);
+
+            <div class="d-flex align-items-center justify-content-between gap-2">
+                <div class="d-flex align-items-center gap-2 overflow-hidden">
+                    <span class="@BuildManagedEndpointStatusIconClass(endpoint.State)"
+                          title="@FormatManagedEndpointState(endpoint.State)"
+                          aria-label="@FormatManagedEndpointState(endpoint.State)">
+                        <i class="@BuildManagedEndpointStatusIcon(endpoint.State)" aria-hidden="true"></i>
+                    </span>
+
+                    @if (endpoint.IsLinked)
+                    {
+                        @if (endpoint.StatusUpdatedUtc.HasValue)
+                        {
+                            <span class="small text-body-secondary text-truncate">@FormatManagedEndpointAge(endpoint)</span>
+                        }
+                        else if (!string.IsNullOrWhiteSpace(endpoint.StatusMessage))
+                        {
+                            <span class="small text-body-secondary text-truncate">@endpoint.StatusMessage</span>
+                        }
+                    }
+                    else
+                    {
+                        <span class="small text-body-secondary text-truncate">@GetManagedEndpointUnlinkedText(endpoint)</span>
+                    }
+                </div>
+
+                @if (endpoint.IsLinked)
+                {
+                    <div class="d-flex align-items-center gap-1 flex-shrink-0">
+                        @if (endpoint.CanStart)
+                        {
+                            <BusyButton Class="btn btn-outline-success btn-sm"
+                                        IsBusy="@IsManagingEndpointAction(endpoint.AgentName, ManagedAgentAction.Start)"
+                                        Disabled="@isManagingEndpoint"
+                                        BusyText=""
+                                        ShowBusyText="false"
+                                        title="@($"Start {endpoint.AgentName}")"
+                                        aria-label="@($"Start {endpoint.AgentName}")"
+                                        OnClick="() => ManageEndpointAsync(endpoint, ManagedAgentAction.Start)">
+                                <i class="fa-regular fa-play" aria-hidden="true"></i>
+                            </BusyButton>
+                        }
+
+                        @if (endpoint.CanPause)
+                        {
+                            <BusyButton Class="btn btn-outline-secondary btn-sm"
+                                        IsBusy="@IsManagingEndpointAction(endpoint.AgentName, ManagedAgentAction.Pause)"
+                                        Disabled="@isManagingEndpoint"
+                                        BusyText=""
+                                        ShowBusyText="false"
+                                        title="@($"Pause {endpoint.AgentName}")"
+                                        aria-label="@($"Pause {endpoint.AgentName}")"
+                                        OnClick="() => ManageEndpointAsync(endpoint, ManagedAgentAction.Pause)">
+                                <i class="fa-regular fa-pause" aria-hidden="true"></i>
+                            </BusyButton>
+                        }
+
+                        @if (endpoint.CanScaleToZero)
+                        {
+                            <BusyButton Class="btn btn-outline-danger btn-sm"
+                                        IsBusy="@IsManagingEndpointAction(endpoint.AgentName, ManagedAgentAction.ScaleToZero)"
+                                        Disabled="@isManagingEndpoint"
+                                        BusyText=""
+                                        ShowBusyText="false"
+                                        title="@($"Scale {endpoint.AgentName} to zero")"
+                                        aria-label="@($"Scale {endpoint.AgentName} to zero")"
+                                        OnClick="() => ManageEndpointAsync(endpoint, ManagedAgentAction.ScaleToZero)">
+                                <i class="fa-regular fa-power-off" aria-hidden="true"></i>
+                            </BusyButton>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private readonly HashSet<string> _managingEndpointAgentNames = [];
+    private readonly HashSet<string> _managingEndpointActionKeys = [];
+    private CancellationTokenSource? _pollingCancellationTokenSource;
+    private Task? _pollingTask;
+    private string? _selectedAgentName;
+    private AgentEndpointStatusView? _endpoint;
+    private string? _errorMessage;
+
+    [Parameter]
+    public string? SelectedAgentName { get; set; }
+
+    [Parameter]
+    public bool IsManagedEndpointAgent { get; set; }
+
+    [Parameter]
+    public AgentEndpointStatusView? InitialEndpoint { get; set; }
+
+    [Parameter]
+    public string? InitialErrorMessage { get; set; }
+
+    private AgentEndpointStatusView? Endpoint => _endpoint;
+
+    private bool ShouldShowError =>
+        Endpoint is null
+        && IsManagedEndpointAgent
+        && !string.IsNullOrWhiteSpace(_errorMessage);
+
+    protected override void OnParametersSet()
+    {
+        if (string.Equals(_selectedAgentName, SelectedAgentName, StringComparison.Ordinal)
+            && Equals(_endpoint, InitialEndpoint)
+            && string.Equals(_errorMessage, InitialErrorMessage, StringComparison.Ordinal))
+        {
+            EnsurePolling();
+            return;
+        }
+
+        _selectedAgentName = SelectedAgentName;
+        _endpoint = InitialEndpoint;
+        _errorMessage = InitialErrorMessage;
+        EnsurePolling();
+    }
+
+    public void Dispose() => StopPolling();
+
+    private void EnsurePolling()
+    {
+        if (!IsManagedEndpointAgent || string.IsNullOrWhiteSpace(SelectedAgentName))
+        {
+            StopPolling();
+            return;
+        }
+
+        if (_pollingCancellationTokenSource is not null)
+            return;
+
+        _pollingCancellationTokenSource = new CancellationTokenSource();
+        _pollingTask = PollManagedEndpointAsync(_pollingCancellationTokenSource.Token);
+    }
+
+    private void StopPolling()
+    {
+        _pollingCancellationTokenSource?.Cancel();
+        _pollingCancellationTokenSource?.Dispose();
+        _pollingCancellationTokenSource = null;
+        _pollingTask = null;
+    }
+
+    private async Task PollManagedEndpointAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await RefreshEndpointAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task RefreshEndpointAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(SelectedAgentName))
+            return;
+
+        try
+        {
+            var statuses = await AgentEndpointManagementService.GetStatusesAsync(cancellationToken);
+            _endpoint = statuses.FirstOrDefault(x => string.Equals(x.AgentName, SelectedAgentName, StringComparison.Ordinal));
+            _errorMessage = null;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Refreshing Hugging Face endpoint status failed for agent {AgentName}.", SelectedAgentName);
+            _endpoint = null;
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Loading Hugging Face endpoint status failed.", exception);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ManageEndpointAsync(AgentEndpointStatusView endpoint, ManagedAgentAction action)
+    {
+        if (!_managingEndpointAgentNames.Add(endpoint.AgentName))
+            return;
+
+        var actionKey = BuildManagedEndpointActionKey(endpoint.AgentName, action);
+        _managingEndpointActionKeys.Add(actionKey);
+        _errorMessage = null;
+
+        try
+        {
+            _endpoint = await AgentEndpointManagementService.ExecuteActionAsync(endpoint.AgentName, action, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Running endpoint action {Action} failed for agent {AgentName}.", action, endpoint.AgentName);
+            _errorMessage = UserFacingErrorMessageBuilder.Build($"{DescribeManagedEndpointAction(action)} the Hugging Face endpoint for '{endpoint.AgentName}' failed.", exception);
+        }
+        finally
+        {
+            _managingEndpointActionKeys.Remove(actionKey);
+            _managingEndpointAgentNames.Remove(endpoint.AgentName);
+            StateHasChanged();
+        }
+    }
+
+    private bool IsManagingEndpoint(string agentName) => _managingEndpointAgentNames.Contains(agentName);
+
+    private bool IsManagingEndpointAction(string agentName, ManagedAgentAction action) =>
+        _managingEndpointActionKeys.Contains(BuildManagedEndpointActionKey(agentName, action));
+
+    private static string BuildManagedEndpointActionKey(string agentName, ManagedAgentAction action) => $"{agentName}|{action}";
+
+    private static string FormatManagedEndpointAge(AgentEndpointStatusView endpoint) =>
+        endpoint.StatusUpdatedUtc.HasValue
+            ? endpoint.StatusUpdatedUtc.Value.ToShorthandDateWithRelativeDays()
+            : string.Empty;
+
+    private static string BuildManagedEndpointStatusIconClass(string? state) =>
+        FormatManagedEndpointState(state) switch
+        {
+            "Running" => "text-success",
+            "Paused" => "text-secondary",
+            "Scaled to Zero" => "text-warning",
+            "Initializing" or "Updating" => "text-primary",
+            "Failed" => "text-danger",
+            _ => "text-body-secondary"
+        };
+
+    private static string BuildManagedEndpointStatusIcon(string? state) =>
+        FormatManagedEndpointState(state) switch
+        {
+            "Running" => "fa-regular fa-circle-play",
+            "Paused" => "fa-regular fa-circle-pause",
+            "Scaled to Zero" => "fa-regular fa-circle-stop",
+            "Initializing" or "Updating" => "fa-regular fa-spinner",
+            "Failed" => "fa-regular fa-circle-exclamation",
+            _ => "fa-regular fa-circle-question"
+        };
+
+    private static string FormatManagedEndpointState(string? state) =>
+        state?.Trim().ToLowerInvariant() switch
+        {
+            "running" => "Running",
+            "paused" => "Paused",
+            "scaledtozero" or "scaled_to_zero" or "scale-to-zero" => "Scaled to Zero",
+            "initializing" => "Initializing",
+            "updating" => "Updating",
+            "failed" => "Failed",
+            { Length: > 0 } value => value,
+            _ => "Unknown"
+        };
+
+    private static string DescribeManagedEndpointAction(ManagedAgentAction action) =>
+        action switch
+        {
+            ManagedAgentAction.Start => "Starting",
+            ManagedAgentAction.Pause => "Pausing",
+            ManagedAgentAction.ScaleToZero => "Scaling to zero",
+            _ => "Managing"
+        };
+
+    private static string GetManagedEndpointUnlinkedText(AgentEndpointStatusView endpoint) =>
+        string.IsNullOrWhiteSpace(endpoint.UnlinkedReason)
+            ? "No matching managed endpoint"
+            : endpoint.UnlinkedReason;
+}

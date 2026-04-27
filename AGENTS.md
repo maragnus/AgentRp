@@ -30,6 +30,7 @@ If you choose not to reuse a similar existing implementation, briefly state why.
 - ALWAYS ask before removing or degrading user-facing behavior. NEVER assume feature removal is acceptable.
 - ALWAYS ask when requirements are ambiguous or you are uncertain.
 - ALWAYS treat assumptions as dangerous, especially for behavior, configuration, model/runtime capabilities, and product defaults. If a decision could reasonably belong in configuration or materially change behavior, ask or make it explicitly configurable instead of hard-coding the assumption.
+- NEVER make speculative fixes for bugs. If the root cause is not proven, investigate, add targeted diagnostics when useful, and ask before changing behavior.
 - ALWAYS fix root causes. NEVER patch symptoms.
 - ALWAYS write code to be testable, even if no tests exist.
 - ALWAYS use Bootstrap UI components, classes, and styles.
@@ -68,6 +69,14 @@ If you choose not to reuse a similar existing implementation, briefly state why.
 - Do not add redundant indicators when selection state, active styling, or layout already makes the current item obvious.
 - Display simple representations of complex things but enable access to details through accordians, popups, and/or dedicated detail pages.
   Example: A task list may be a checklist where the active items display real-time status, but can be expanded to display more details. And a the task list itself should have a full detail page that examples all steps in full detail.
+
+## Blazor Render Isolation
+- Timers, polling, subscriptions, busy state, edit state, and modal state must live in the smallest component that owns the UI they affect. A parent page or shell must not call `StateHasChanged()` for a passive refresh when only one small panel needs new data.
+- Use component boundaries to protect focused inputs, open dialogs, expanded panels, and in-progress edits from unrelated rerenders. Do not fix cursor jumps or flicker with input hacks when the root cause is an oversized render owner.
+- Components that subscribe to `IActivityNotifier` must filter by `ActivityNotification.EntityId` when the component is scoped to a chat/thread. Ignore unrelated notifications instead of reloading broad UI.
+- Passive polling components should load their own data, render their own loading/error state, and call `StateHasChanged()` only on themselves. If a parent must know something changed, raise a narrow callback such as `OnChanged`; do not call a parent `LoadAsync()` from a child poll loop.
+- Modal and editor components should own their own draft, delete/save busy flags, validation errors, selected item IDs, and local reloads. Parents should pass stable IDs and receive explicit `OnSaved`, `OnDeleted`, `OnChanged`, or `OnClose` callbacks.
+- Repeated components and repeated root elements in `.razor` loops must use `@key` with stable domain identifiers so Blazor preserves element/component identity across item additions, deletions, and refreshes.
 
 ## Async Feedback
 - Async user-action buttons must use a `BusyButton` component instead of hand-rolled button busy state. A `BusyButton` must disable itself while work is running and show a Bootstrap spinner so users can see that the action is in progress.
