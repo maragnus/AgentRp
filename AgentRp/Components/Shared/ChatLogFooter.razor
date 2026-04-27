@@ -1,0 +1,283 @@
+<div class="flex-shrink-0 border-top bg-body px-3 py-3 px-lg-4" @ref="_footerElement">
+    @if (!Context.Chat.IsAiAvailable)
+    {
+        <div class="alert alert-info">Configure AI to enable chat functionality.</div>
+    }
+    else
+    {
+        @if (!string.IsNullOrWhiteSpace(Context.ErrorMessage))
+        {
+            <div class="alert alert-danger mb-3">@Context.ErrorMessage</div>
+        }
+
+        @if (Context.IsRetrying)
+        {
+            <div class="alert alert-primary d-flex align-items-start justify-content-between gap-3 py-2 mb-3" role="status">
+                <div>
+                    <div class="fw-semibold">Retrying message as @Context.RetrySpeakerName</div>
+                    <div class="small">The next submit creates a new branch from before that message.</div>
+                </div>
+                <button type="button"
+                        class="btn-close"
+                        title="Cancel retry"
+                        aria-label="Cancel retry"
+                        disabled="@Context.IsSubmitting"
+                        @onclick="Actions.CancelRetry"></button>
+            </div>
+        }
+
+        <div>
+            <label class="visually-hidden" for="scene-message-input">Message or guidance</label>
+            <textarea id="scene-message-input"
+                      class="form-control app-field-sizing-content mb-2"
+                      rows="4"
+                      placeholder="Write a direct message or add optional guidance..."
+                      value="@Context.DraftText"
+                      @oninput="HandleDraftTextChangedAsync"
+                      disabled="@Context.IsSceneInteractionLocked"></textarea>
+        </div>
+
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div class="d-flex flex-column">
+                <div class="small text-body-secondary">Speaking as <strong>@Context.Chat.SelectedSpeaker.Name</strong></div>
+            </div>
+
+            <div class="d-flex flex-wrap justify-content-end gap-2">
+                <BusyButton Class="btn btn-outline-secondary"
+                            OnClick="Actions.OpenAppearanceReplay"
+                            IsBusy="@Context.IsAppearanceReplayLoading"
+                            BusyText="Debugging..."
+                            Disabled="@Context.IsAppearanceReplayLoading"
+                            ShowBusyText="false"
+                            title="Debug appearance"
+                            aria-label="Debug appearance">
+                    <i class="fa-regular fa-shirt" aria-hidden="true"></i>
+                </BusyButton>
+
+                <BusyButton Class="btn btn-outline-secondary"
+                            OnClick="Actions.ToggleProcessPanels"
+                            IsBusy="@Context.IsUpdatingDisplayPreferences"
+                            BusyText="Saving..."
+                            ShowBusyText="false"
+                            title="@ProcessPanelsToggleTitle"
+                            aria-label="@ProcessPanelsToggleTitle">
+                    <i class="fa-regular @ProcessPanelsToggleIconCss" aria-hidden="true"></i>
+                </BusyButton>
+
+                <div class="vr" aria-hidden="true"></div>
+
+                <div class="btn-group" role="group" aria-label="@AdaptiveAiPostAction.GroupLabel">
+                    <BusyButton Class="btn btn-primary"
+                                OnClick="() => PostAsync(AdaptiveAiPostAction.Mode)"
+                                IsBusy="@(Context.SubmittingMode == AdaptiveAiPostAction.Mode && Context.SubmittingAuthorKey is null && Context.SubmittingTurnShape is null)"
+                                BusyText="Generating..."
+                                Disabled="@(!Context.Chat.IsAiAvailable || (Context.IsSceneInteractionLocked && !(Context.SubmittingMode == AdaptiveAiPostAction.Mode && Context.SubmittingAuthorKey is null && Context.SubmittingTurnShape is null)))"
+                                ShowBusyText="false"
+                                title="@AdaptiveAiPostAction.Title"
+                                aria-label="@AdaptiveAiPostAction.Title">
+                        <i class="@AdaptiveAiPostAction.IconCssClass" aria-hidden="true"></i>
+                        @AdaptiveAiPostAction.Label
+                    </BusyButton>
+                    <button type="button"
+                            class="btn btn-primary dropdown-toggle dropdown-toggle-split"
+                            data-bs-toggle="dropdown"
+                            data-bs-auto-close="true"
+                            aria-expanded="false"
+                            title="Choose turn shape"
+                            aria-label="Choose turn shape"
+                            disabled="@(!Context.Chat.IsAiAvailable || Context.IsSceneInteractionLocked)">
+                        <span class="visually-hidden">Choose turn shape</span>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow">
+                        @foreach (var turnShape in Enum.GetValues<StoryTurnShape>())
+                        {
+                            var isBusyTurnShape = Context.SubmittingMode == AdaptiveAiPostAction.Mode && Context.SubmittingAuthorKey is null && Context.SubmittingTurnShape == turnShape;
+                            var turnShapeItemClass = "dropdown-item d-flex align-items-center justify-content-between gap-3";
+
+                            <li @key="turnShape">
+                                <BusyButton Class="@turnShapeItemClass"
+                                            OnClick="() => PostAsync(AdaptiveAiPostAction.Mode, turnShape)"
+                                            IsBusy="@isBusyTurnShape"
+                                            BusyText="Generating..."
+                                            Disabled="@(!Context.Chat.IsAiAvailable || Context.IsSceneInteractionLocked)"
+                                            title="@BuildPreSubmitTurnShapeOptionTitle(turnShape)"
+                                            aria-label="@BuildPreSubmitTurnShapeOptionTitle(turnShape)">
+                                    <span class="d-flex align-items-center gap-2">
+                                        <i class="@GetTurnShapeIconCssClass(turnShape)" aria-hidden="true"></i>
+                                        <span>@FormatTurnShapeOption(turnShape)</span>
+                                    </span>
+                                </BusyButton>
+                            </li>
+                        }
+                    </ul>
+                </div>
+
+                @if (Context.ShowRespondAsPicker)
+                {
+                    <div class="dropdown">
+                        <button type="button"
+                                class="btn btn-outline-primary dropdown-toggle"
+                                data-bs-toggle="dropdown"
+                                data-bs-auto-close="true"
+                                aria-expanded="false"
+                                title="Respond as"
+                                aria-label="Respond as"
+                                disabled="@(!Context.Chat.IsAiAvailable || Context.IsSceneInteractionLocked)">
+                            <i class="fa-regular fa-reply me-2" aria-hidden="true"></i>
+                            Respond As
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end shadow">
+                            @foreach (var author in Context.Chat.AvailableSpeakers)
+                            {
+                                var authorKey = BuildAuthorKey(author.CharacterId);
+                                var isBusyAuthor = Context.SubmittingAuthorKey == authorKey;
+                                var authorItemClass = "dropdown-item d-flex align-items-center justify-content-between gap-3";
+
+                                <li @key="authorKey">
+                                    <BusyButton Class="@authorItemClass"
+                                                OnClick="() => RespondAsAsync(author)"
+                                                IsBusy="@isBusyAuthor"
+                                                BusyText="Generating..."
+                                                ShowBusyText="true"
+                                                Disabled="@(!Context.Chat.IsAiAvailable || Context.IsSceneInteractionLocked)">
+                                        <span class="d-flex align-items-center gap-2">
+                                            <i class="fa-regular @(author.IsNarrator ? "fa-feather" : "fa-user") fa-fw" aria-hidden="true"></i>
+                                            <span>@author.Name</span>
+                                        </span>
+                                        @if (author.IsNarrator)
+                                        {
+                                            <span class="badge text-bg-info">Narrator</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge @(author.IsPresentInScene ? "text-bg-success" : "text-bg-light border text-body-secondary")">
+                                                @(author.IsPresentInScene ? "In Scene" : "Out of Scene")
+                                            </span>
+                                        }
+                                    </BusyButton>
+                                </li>
+                            }
+                            <li><hr class="dropdown-divider" /></li>
+                            <li>
+                                <BusyButton Class="dropdown-item d-flex align-items-center justify-content-between gap-3"
+                                            OnClick="Actions.RespondAutoselect"
+                                            IsBusy="@(Context.SubmittingAuthorKey == AutoselectAuthorKey)"
+                                            BusyText="Generating..."
+                                            ShowBusyText="true"
+                                            Disabled="@(!Context.Chat.IsAiAvailable || Context.IsSceneInteractionLocked)">
+                                    <span class="d-flex align-items-center gap-2">
+                                        <i class="fa-regular fa-wand-magic-sparkles fa-fw" aria-hidden="true"></i>
+                                        <span>Autoselect</span>
+                                    </span>
+                                    <span class="badge text-bg-light border text-body-secondary">AI</span>
+                                </BusyButton>
+                            </li>
+                        </ul>
+                    </div>
+                }
+
+                <BusyButton Class="btn btn-outline-primary"
+                            OnClick="() => PostAsync(StoryScenePostMode.Manual)"
+                            IsBusy="@(Context.SubmittingMode == StoryScenePostMode.Manual && Context.SubmittingAuthorKey is null)"
+                            BusyText="Posting..."
+                            Disabled="@(!HasDraftText || (Context.IsSceneInteractionLocked && !(Context.SubmittingMode == StoryScenePostMode.Manual && Context.SubmittingAuthorKey is null)))"
+                            ShowBusyText="false"
+                            title="Direct posts your exact text"
+                            aria-label="Direct posts your exact text">
+                    <i class="fa-regular fa-paper-plane" aria-hidden="true"></i>
+                </BusyButton>
+
+                @if (Context.ActiveRunningProcess is not null)
+                {
+                    <StopOperationButton Class="btn btn-outline-danger"
+                                         ShowText="true"
+                                         IsStopping="@Actions.IsStoppingRun(Context.ActiveRunningProcess.RunId)"
+                                         Disabled="@Actions.IsStoppingRun(Context.ActiveRunningProcess.RunId)"
+                                         Title="Stop the active scene generation"
+                                         OnClick="() => StopSceneRunAsync(Context.ActiveRunningProcess.RunId)" />
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private const string AutoselectAuthorKey = "autoselect";
+
+    [Parameter, EditorRequired]
+    public ChatLogFooterContext Context { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public StorySceneChatActions Actions { get; set; } = new();
+
+    private ElementReference _footerElement;
+
+    private bool HasDraftText => !string.IsNullOrWhiteSpace(Context.DraftText);
+
+    private ChatLogFooterAiPostAction AdaptiveAiPostAction =>
+        HasDraftText
+            ? new(
+                StoryScenePostMode.GuidedAi,
+                "Guided",
+                "Guided uses your guidance for the selected speaker",
+                "Guided response actions",
+                "fa-regular fa-wand-magic-sparkles me-2")
+            : new(
+                StoryScenePostMode.AutomaticAi,
+                "Automatic",
+                "Automatic writes the next message for the selected speaker and ignores the textbox",
+                "Automatic response actions",
+                "fa-regular fa-bolt me-2");
+
+    private string ProcessPanelsToggleTitle =>
+        Context.ShowProcessPanels ? "Hide process details" : "Show process details";
+
+    private string ProcessPanelsToggleIconCss =>
+        Context.ShowProcessPanels ? "fa-eye-slash" : "fa-eye";
+
+    protected override void OnAfterRender(bool firstRender) => Actions.ChatLogFooterElementChanged?.Invoke(_footerElement);
+
+    private Task PostAsync(StoryScenePostMode mode, StoryTurnShape? turnShape = null) =>
+        Actions.Post(mode, turnShape);
+
+    private Task RespondAsAsync(StorySceneSpeakerView speaker) => Actions.RespondAs(speaker);
+
+    private Task StopSceneRunAsync(Guid runId) => Actions.StopSceneRun(runId);
+
+    private Task HandleDraftTextChangedAsync(ChangeEventArgs args) =>
+        Actions.SetDraftText(args.Value?.ToString() ?? string.Empty);
+
+    private static string BuildAuthorKey(Guid? characterId) => characterId?.ToString("N") ?? "narrator";
+
+    private static string FormatTurnShapeOption(StoryTurnShape turnShape) => turnShape switch
+    {
+        StoryTurnShape.Compact => "Compact",
+        StoryTurnShape.Brief => "Brief",
+        StoryTurnShape.Monologue => "Monologue",
+        StoryTurnShape.Extended => "Extended",
+        StoryTurnShape.Silent => "Silent",
+        StoryTurnShape.SilentMonologue => "Silent Monologue",
+        _ => turnShape.ToString()
+    };
+
+    private static string GetTurnShapeIconCssClass(StoryTurnShape turnShape) => turnShape switch
+    {
+        StoryTurnShape.Compact => "fa-regular fa-face-smile",
+        StoryTurnShape.Brief => "fa-regular fa-face-grin-wide",
+        StoryTurnShape.Monologue => "fa-regular fa-face-awesome",
+        StoryTurnShape.Extended => "fa-regular fa-message-lines",
+        StoryTurnShape.Silent => "fa-regular fa-face-zipper",
+        StoryTurnShape.SilentMonologue => "fa-regular fa-face-beam-hand-over-mouth",
+        _ => "fa-regular fa-pen-line"
+    };
+
+    private static string BuildPreSubmitTurnShapeOptionTitle(StoryTurnShape turnShape) =>
+        $"Generate a {FormatTurnShapeOption(turnShape).ToLowerInvariant()} response";
+
+    private sealed record ChatLogFooterAiPostAction(
+        StoryScenePostMode Mode,
+        string Label,
+        string Title,
+        string GroupLabel,
+        string IconCssClass);
+}

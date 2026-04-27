@@ -1,0 +1,300 @@
+<div class="app-message-footer border-top px-3 py-2" @onclick:stopPropagation="true">
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+        <div class="d-flex align-items-center gap-2">
+            @if (Context.Message.BranchNavigator is not null)
+            {
+                <StoryBranchNavigator Navigator="@Context.Message.BranchNavigator"
+                                      SwitchingBranchLeafId="@Context.SwitchingBranchLeafId"
+                                      Disabled="@Context.IsSceneInteractionLocked"
+                                      OnSelectBranch="Actions.SelectBranch" />
+            }
+        </div>
+
+        <div class="d-flex align-items-center justify-content-end gap-2 ms-auto">
+            @if (Context.IsEditing)
+            {
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        title="Cancel edit"
+                        aria-label="Cancel edit"
+                        disabled="@Context.IsSubmitting"
+                        @onclick="Actions.CancelInlineEdit">
+                    <i class="fa-regular fa-xmark" aria-hidden="true"></i>
+                </button>
+
+                <BusyButton Class="btn btn-outline-primary btn-sm"
+                            OnClick="Actions.SaveInlineEdit"
+                            IsBusy="@Context.IsSavingInlineEdit"
+                            BusyText=""
+                            ShowBusyText="false"
+                            Disabled="@(!Context.Message.CanSaveInPlace || !Context.HasEditingMessage || string.IsNullOrWhiteSpace(Context.EditingDraft) || (Context.IsSubmitting && !Context.IsSavingInlineEdit))"
+                            title="Save message"
+                            aria-label="Save message">
+                    <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
+                </BusyButton>
+
+                <BusyButton Class="btn btn-primary btn-sm"
+                            OnClick="Actions.CreateEditedBranch"
+                            IsBusy="@Context.IsBranchingInlineEdit"
+                            BusyText=""
+                            ShowBusyText="false"
+                            Disabled="@(!Context.HasEditingMessage || string.IsNullOrWhiteSpace(Context.EditingDraft) || (Context.IsSubmitting && !Context.IsBranchingInlineEdit))"
+                            title="Submit as new branch"
+                            aria-label="Submit as new branch">
+                    <i class="fa-regular fa-code-branch" aria-hidden="true"></i>
+                </BusyButton>
+            }
+            else
+            {
+                <div class="dropdown">
+                    <button type="button"
+                            class="btn btn-outline-primary btn-sm dropdown-toggle"
+                            data-bs-toggle="dropdown"
+                            data-bs-auto-close="true"
+                            aria-expanded="false"
+                            title="Change author"
+                            aria-label="Change author"
+                            disabled="@(Context.IsSceneInteractionLocked || Context.ReassigningMessageId.HasValue)">
+                        <i class="fa-regular fa-user-pen" aria-hidden="true"></i>
+                    </button>
+                    <ul class="dropdown-menu dropdown-menu-end shadow">
+                        @foreach (var author in Context.AvailableSpeakers)
+                        {
+                            var isCurrentAuthor = IsCurrentMessageAuthor(Context.Message, author.CharacterId);
+                            var authorKey = BuildAuthorKey(author.CharacterId);
+                            var isBusyAuthor = Context.ReassigningMessageId == Context.Message.MessageId && Context.ReassigningAuthorKey == authorKey;
+                            var authorItemClass = $"dropdown-item d-flex align-items-center justify-content-between gap-3{(isCurrentAuthor ? " active" : string.Empty)}";
+
+                            <li @key="authorKey">
+                                <BusyButton Class="@authorItemClass"
+                                            OnClick="() => Actions.ChangeMessageSpeaker(Context.Message, author)"
+                                            IsBusy="@isBusyAuthor"
+                                            BusyText="Changing..."
+                                            ShowBusyText="true"
+                                            Disabled="@(Context.IsSceneInteractionLocked || isCurrentAuthor)"
+                                            aria-current="@(isCurrentAuthor ? "true" : null)">
+                                    <span class="d-flex align-items-center gap-2">
+                                        <i class="fa-regular @(author.IsNarrator ? "fa-feather" : "fa-user") fa-fw" aria-hidden="true"></i>
+                                        <span>@author.Name</span>
+                                    </span>
+                                    @if (author.IsNarrator)
+                                    {
+                                        <span class="badge text-bg-info">Narrator</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge @(author.IsPresentInScene ? "text-bg-success" : "text-bg-light border text-body-secondary")">
+                                            @(author.IsPresentInScene ? "In Scene" : "Out of Scene")
+                                        </span>
+                                    }
+                                </BusyButton>
+                            </li>
+                        }
+                    </ul>
+                </div>
+
+                @if (Context.CanRetryMessage)
+                {
+                    <BusyButton Class="btn btn-outline-primary btn-sm"
+                                OnClick="() => Actions.BeginRetry(Context.Message)"
+                                IsBusy="@(Context.StartingRetryMessageId == Context.Message.MessageId)"
+                                BusyText=""
+                                ShowBusyText="false"
+                                Disabled="@(Context.IsSceneInteractionLocked || Context.StartingRetryMessageId.HasValue)"
+                                title="Retry message as a new branch"
+                                aria-label="Retry message as a new branch">
+                        <i class="fa-regular fa-rotate-left" aria-hidden="true"></i>
+                    </BusyButton>
+                }
+
+                <div class="btn-group btn-group-sm" role="group" aria-label="Message context actions">
+                    <button type="button"
+                            class="btn btn-outline-secondary"
+                            title="Private intent"
+                            aria-label="View or edit private intent"
+                            @onclick="() => Actions.OpenPrivateIntent(Context.Message)">
+                        <i class="fa-regular fa-thought-bubble" aria-hidden="true"></i>
+                    </button>
+
+                    <button type="button"
+                            class="btn btn-outline-secondary"
+                            title="Appearance"
+                            aria-label="View or edit appearance"
+                            @onclick="() => Actions.OpenMessageAppearance(Context.Message)">
+                        <i class="fa-regular fa-shirt" aria-hidden="true"></i>
+                    </button>
+                </div>
+
+                @if (Context.CanRegenerateProse || Context.CanEditSavedPlan)
+                {
+                    <div class="btn-group btn-group-sm" role="group" aria-label="Saved plan actions">
+                        @if (Context.CanRegenerateProse)
+                        {
+                            <BusyButton Class="btn btn-outline-primary"
+                                        OnClick="() => Actions.RegenerateProse(Context.Message)"
+                                        IsBusy="@(Context.RegeneratingProseMessageId == Context.Message.MessageId)"
+                                        BusyText=""
+                                        ShowBusyText="false"
+                                        Disabled="@(Context.IsSceneInteractionLocked || Context.RegeneratingProseMessageId.HasValue)"
+                                        title="Regenerate prose from saved plan"
+                                        aria-label="Regenerate prose from saved plan">
+                                <i class="fa-regular fa-repeat" aria-hidden="true"></i>
+                            </BusyButton>
+                        }
+
+                        @if (Context.CanRegenerateProse && Context.CanEditSavedPlan && Context.SavedPlanTurnShape.HasValue)
+                        {
+                            var isChangingTurnShape = Context.ChangingTurnShapeMessageId == Context.Message.MessageId;
+
+                            <div class="btn-group btn-group-sm" role="group">
+                                <button type="button"
+                                        class="btn btn-outline-primary"
+                                        data-bs-toggle="dropdown"
+                                        data-bs-auto-close="true"
+                                        aria-expanded="false"
+                                        title="@BuildTurnShapePickerTitle(Context.SavedPlanTurnShape.Value)"
+                                        aria-label="@BuildTurnShapePickerTitle(Context.SavedPlanTurnShape.Value)"
+                                        disabled="@(Context.IsSceneInteractionLocked || Context.IsSubmitting)">
+                                    @if (isChangingTurnShape)
+                                    {
+                                        <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                    }
+                                    else
+                                    {
+                                        <i class="@GetTurnShapeIconCssClass(Context.SavedPlanTurnShape.Value)" aria-hidden="true"></i>
+                                    }
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end shadow">
+                                    @foreach (var turnShape in Enum.GetValues<StoryTurnShape>())
+                                    {
+                                        var isCurrentTurnShape = turnShape == Context.SavedPlanTurnShape.Value;
+                                        var isBusyTurnShape = Context.ChangingTurnShapeMessageId == Context.Message.MessageId && Context.ChangingTurnShapeValue == turnShape;
+                                        var turnShapeItemClass = $"dropdown-item d-flex align-items-center justify-content-between gap-3{(isCurrentTurnShape ? " disabled text-body-secondary" : string.Empty)}";
+
+                                        <li @key="turnShape">
+                                            <BusyButton Class="@turnShapeItemClass"
+                                                        OnClick="() => Actions.ChangeTurnShapeAndRegenerate(Context.Message, turnShape)"
+                                                        IsBusy="@isBusyTurnShape"
+                                                        BusyText="Regenerating..."
+                                                        Disabled="@(isCurrentTurnShape || Context.IsSceneInteractionLocked || (Context.IsSubmitting && !isBusyTurnShape))"
+                                                        title="@BuildTurnShapeOptionTitle(turnShape, isCurrentTurnShape)"
+                                                        aria-label="@BuildTurnShapeOptionTitle(turnShape, isCurrentTurnShape)">
+                                                <span class="d-flex align-items-center gap-2">
+                                                    <i class="@GetTurnShapeIconCssClass(turnShape)" aria-hidden="true"></i>
+                                                    <span>@FormatTurnShapeOption(turnShape)</span>
+                                                </span>
+                                                @if (isCurrentTurnShape)
+                                                {
+                                                    <i class="fa-solid fa-check"></i>
+                                                }
+                                            </BusyButton>
+                                        </li>
+                                    }
+                                </ul>
+                            </div>
+                        }
+
+                        @if (Context.CanEditSavedPlan)
+                        {
+                            <button type="button"
+                                    class="btn btn-outline-primary"
+                                    title="Edit saved plan"
+                                    aria-label="Edit saved plan"
+                                    @onclick="() => Actions.OpenPlan(Context.Message)">
+                                <i class="fa-regular fa-list-check" aria-hidden="true"></i>
+                            </button>
+                        }
+                    </div>
+                }
+
+                @if (Context.Message.IsSnapshotCandidate)
+                {
+                    <button type="button"
+                            class="btn btn-outline-primary btn-sm"
+                            title="Create snapshot through this message"
+                            aria-label="Create snapshot through this message"
+                            disabled="@(Context.IsSceneInteractionLocked || Context.IsSnapshotDraftLoading || Context.IsCommittingSnapshot)"
+                            @onclick="() => Actions.OpenSnapshotDraft(Context.Message)">
+                        <i class="fa-regular fa-compress" aria-hidden="true"></i>
+                    </button>
+                }
+
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        title="Edit message"
+                        aria-label="Edit message"
+                        disabled="@Context.IsSceneInteractionLocked"
+                        @onclick="() => Actions.BeginInlineEdit(Context.Message)">
+                    <i class="fa-regular fa-pen" aria-hidden="true"></i>
+                </button>
+
+                <button type="button"
+                        class="btn btn-outline-secondary btn-sm"
+                        title="Copy message"
+                        aria-label="Copy message"
+                        @onclick="() => Actions.CopyMessage(Context.Message.Content)">
+                    <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                </button>
+
+                <button type="button"
+                        class="btn btn-outline-danger btn-sm"
+                        title="Delete message"
+                        aria-label="Delete message"
+                        disabled="@Context.IsSceneInteractionLocked"
+                        @onclick="() => Actions.OpenDelete(Context.Message)">
+                    <i class="fa-regular fa-trash" aria-hidden="true"></i>
+                </button>
+            }
+        </div>
+
+        @if (Context.IsEditing && !Context.Message.CanSaveInPlace)
+        {
+            <div class="w-100 small text-body-secondary text-end">
+                This message is already covered by a snapshot, so edits must create a branch.
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public ChatMessageFooterContext Context { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public StorySceneChatActions Actions { get; set; } = new();
+
+    private static bool IsCurrentMessageAuthor(StorySceneMessageView message, Guid? characterId) =>
+        message.SpeakerCharacterId == characterId;
+
+    private static string BuildAuthorKey(Guid? characterId) => characterId?.ToString("N") ?? "narrator";
+
+    private static string FormatTurnShapeOption(StoryTurnShape turnShape) => turnShape switch
+    {
+        StoryTurnShape.Compact => "Compact",
+        StoryTurnShape.Brief => "Brief",
+        StoryTurnShape.Monologue => "Monologue",
+        StoryTurnShape.Extended => "Extended",
+        StoryTurnShape.Silent => "Silent",
+        StoryTurnShape.SilentMonologue => "Silent Monologue",
+        _ => turnShape.ToString()
+    };
+
+    private static string GetTurnShapeIconCssClass(StoryTurnShape turnShape) => turnShape switch
+    {
+        StoryTurnShape.Compact => "fa-regular fa-face-smile",
+        StoryTurnShape.Brief => "fa-regular fa-face-grin-wide",
+        StoryTurnShape.Monologue => "fa-regular fa-face-awesome",
+        StoryTurnShape.Extended => "fa-regular fa-message-lines",
+        StoryTurnShape.Silent => "fa-regular fa-face-zipper",
+        StoryTurnShape.SilentMonologue => "fa-regular fa-face-beam-hand-over-mouth",
+        _ => "fa-regular fa-pen-line"
+    };
+
+    private static string BuildTurnShapePickerTitle(StoryTurnShape turnShape) =>
+        $"Change turn shape from {FormatTurnShapeOption(turnShape)} and regenerate";
+
+    private static string BuildTurnShapeOptionTitle(StoryTurnShape turnShape, bool isCurrentTurnShape) =>
+        isCurrentTurnShape
+            ? $"{FormatTurnShapeOption(turnShape)} is already selected"
+            : $"Change turn shape to {FormatTurnShapeOption(turnShape)} and regenerate";
+}

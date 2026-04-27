@@ -1,0 +1,63 @@
+<div class="app-chat-transcript flex-grow-1 overflow-auto d-flex flex-column" @ref="_scrollContainer">
+    @if (Context.Items.Count == 0)
+    {
+        <div class="d-flex flex-grow-1 align-items-center justify-content-center px-3 py-3 px-lg-4">
+            <div class="col-12 col-xl-8">
+                <div class="card border-0 bg-body-tertiary shadow-sm">
+                    <div class="card-body p-4 p-lg-5 text-center">
+                        <div class="display-6 mb-3 text-primary">
+                            <i class="fa-regular fa-books" aria-hidden="true"></i>
+                        </div>
+                        <h2 class="h4 mb-2">Start the scene</h2>
+                        <p class="text-body-secondary mb-0">
+                            Pick a speaker in the sidebar, then use Guided or Automatic for that character, or use Respond As to choose exactly who answers next. AI posts show live process details while they run.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="d-flex flex-column gap-4 px-3 py-3 px-lg-4">
+            @foreach (var item in Context.Items)
+            {
+                <div @key="item.Key" class="d-flex flex-column gap-3">
+                    @if (item.Process is not null)
+                    {
+                        <ChatProcessTrace Context="@item.Process" Actions="@Actions" />
+                    }
+                    @if (item.Message is not null)
+                    {
+                        <ChatMessageRenderer Context="@item.Message" Actions="@Actions" Design="@MessageDesign" />
+                    }
+                    @if (item.Snapshot is not null)
+                    {
+                        <ChatSnapshotEntry Context="@item.Snapshot" Actions="@Actions" />
+                    }
+                    @if (item.Appearance is not null)
+                    {
+                        <ChatAppearanceEntry Context="@item.Appearance" Actions="@Actions" />
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    <ChatLogFooter Context="@Context.Footer" Actions="@Actions" />
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public ChatLogContext Context { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public StorySceneChatActions Actions { get; set; } = new();
+
+    [Parameter]
+    public ChatMessageDesign MessageDesign { get; set; } = ChatMessageDesign.Classic;
+
+    private ElementReference _scrollContainer;
+
+    protected override void OnAfterRender(bool firstRender) => Actions.ChatLogScrollContainerChanged?.Invoke(_scrollContainer);
+}

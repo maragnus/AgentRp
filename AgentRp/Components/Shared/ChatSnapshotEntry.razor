@@ -1,0 +1,137 @@
+<div class="card border-0 bg-body-tertiary shadow-sm">
+    <div class="card-body p-0">
+        <button type="button"
+                class="btn btn-link w-100 p-3 text-start text-decoration-none text-reset"
+                aria-expanded="@Context.IsExpanded"
+                @onclick="() => Actions.ToggleSnapshot(Context.Snapshot.SnapshotId)">
+            <div class="d-flex align-items-start justify-content-between gap-3">
+                <div class="d-flex align-items-start gap-3">
+                    <div class="pt-1">
+                        <i class="fa-regular fa-compress text-body-secondary" aria-hidden="true"></i>
+                    </div>
+                    <div>
+                        <div class="fw-semibold">Snapshot</div>
+                        <div class="small text-body-secondary">@Context.Snapshot.Summary</div>
+                    </div>
+                </div>
+
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge text-bg-light border text-body-secondary">@Context.Snapshot.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
+                    <i class="fa-regular @(Context.IsExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                </div>
+            </div>
+        </button>
+
+        <div class="border-top px-3 py-2 small text-body-secondary">
+            @($"{Context.Snapshot.IncludedMessageCount} messages, {Context.Snapshot.FactCount} facts, {Context.Snapshot.TimelineEntryCount} timeline entries")
+        </div>
+
+        @if (Context.IsExpanded)
+        {
+            <div class="border-top px-3 py-3">
+                <div class="d-flex flex-column gap-3">
+                    <div class="small text-body-secondary">
+                        Committed @Context.Snapshot.CreatedUtc.ToShorthandDateWithRelativeDays()
+                    </div>
+
+                    <div class="border rounded bg-body px-3 py-3">
+                        <div class="fw-semibold mb-2">Narrative Summary</div>
+                        <div class="small">@Context.Snapshot.Summary</div>
+                    </div>
+
+                    <div class="border rounded bg-body px-3 py-3">
+                        <div class="fw-semibold mb-2">Facts</div>
+                        @if (Context.Snapshot.Facts.Count == 0)
+                        {
+                            <div class="small text-body-secondary">No facts in this snapshot.</div>
+                        }
+                        else
+                        {
+                            <div class="d-flex flex-column gap-3">
+                                @foreach (var fact in Context.Snapshot.Facts)
+                                {
+                                    <div @key="fact.Title">
+                                        <div class="fw-semibold">@fact.Title</div>
+                                        @if (!string.IsNullOrWhiteSpace(fact.Summary))
+                                        {
+                                            <div class="small text-body-secondary mt-1">@fact.Summary</div>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(fact.Details))
+                                        {
+                                            <div class="small mt-1">@fact.Details</div>
+                                        }
+                                        @RenderSnapshotReferences("Characters", fact.CharacterNames)
+                                        @RenderSnapshotReferences("Locations", fact.LocationNames)
+                                        @RenderSnapshotReferences("Items", fact.ItemNames)
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+
+                    <div class="border rounded bg-body px-3 py-3">
+                        <div class="fw-semibold mb-2">Timeline Entries</div>
+                        @if (Context.Snapshot.TimelineEntries.Count == 0)
+                        {
+                            <div class="small text-body-secondary">No timeline entries in this snapshot.</div>
+                        }
+                        else
+                        {
+                            <div class="d-flex flex-column gap-3">
+                                @foreach (var entry in Context.Snapshot.TimelineEntries)
+                                {
+                                    <div @key="entry.Title">
+                                        <div class="fw-semibold">@entry.Title</div>
+                                        @if (!string.IsNullOrWhiteSpace(entry.WhenText))
+                                        {
+                                            <div class="small text-body-secondary mt-1">@entry.WhenText</div>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(entry.Summary))
+                                        {
+                                            <div class="small text-body-secondary mt-1">@entry.Summary</div>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(entry.Details))
+                                        {
+                                            <div class="small mt-1">@entry.Details</div>
+                                        }
+                                        @RenderSnapshotReferences("Characters", entry.CharacterNames)
+                                        @RenderSnapshotReferences("Locations", entry.LocationNames)
+                                        @RenderSnapshotReferences("Items", entry.ItemNames)
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public ChatSnapshotContext Context { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public StorySceneChatActions Actions { get; set; } = new();
+
+    private static RenderFragment RenderSnapshotReferences(string label, IReadOnlyList<string> names) => builder =>
+    {
+        if (names.Count == 0)
+            return;
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "small text-body-secondary mt-1");
+        builder.AddContent(2, $"{label}: ");
+
+        for (var index = 0; index < names.Count; index++)
+        {
+            builder.OpenElement(5 + (index * 3), "span");
+            builder.AddAttribute(6 + (index * 3), "class", "badge text-bg-light border text-body-secondary me-1");
+            builder.AddContent(7 + (index * 3), names[index]);
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+    };
+}

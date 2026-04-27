@@ -1,0 +1,17 @@
+@switch (Design)
+{
+    case ChatMessageDesign.Classic:
+        <ChatMessage Context="@Context" Actions="@Actions" />
+        break;
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public ChatMessageContext Context { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public StorySceneChatActions Actions { get; set; } = new();
+
+    [Parameter]
+    public ChatMessageDesign Design { get; set; } = ChatMessageDesign.Classic;
+}

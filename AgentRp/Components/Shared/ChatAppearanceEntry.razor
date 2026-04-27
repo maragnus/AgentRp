@@ -1,0 +1,113 @@
+@if (Context.IsVisible)
+{
+    <div class="card border-0 bg-body-tertiary shadow-sm">
+        <div class="card-body p-0">
+            <button type="button"
+                    class="btn btn-link w-100 p-3 text-start text-decoration-none text-reset"
+                    aria-expanded="@Context.IsExpanded"
+                    @onclick="() => Actions.ToggleAppearanceEntry(Context.Appearance.AppearanceEntryId)">
+                <div class="d-flex align-items-start justify-content-between gap-3">
+                    <div class="d-flex align-items-start gap-3">
+                        <div class="pt-1">
+                            <i class="fa-regular fa-shirt text-body-secondary" aria-hidden="true"></i>
+                        </div>
+                        <div>
+                            <div class="fw-semibold">Appearance</div>
+                            <div class="small text-body-secondary">@Context.Appearance.Summary</div>
+                        </div>
+                    </div>
+
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="badge text-bg-light border text-body-secondary">@Context.Appearance.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
+                        <span class="badge text-bg-light border text-body-secondary">@(Context.Appearance.Characters.Count == 1 ? "1 character" : $"{Context.Appearance.Characters.Count} characters")</span>
+                        <i class="fa-regular @(Context.IsExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                    </div>
+                </div>
+            </button>
+
+            @if (Context.IsExpanded)
+            {
+                <div class="border-top px-3 py-3">
+                    <div class="d-flex flex-column gap-3">
+                        <div class="small text-body-secondary">
+                            Recorded @Context.Appearance.CreatedUtc.ToShorthandDateWithRelativeDays()
+                        </div>
+
+                        @if (Context.IsEditing)
+                        {
+                            @foreach (var character in Context.Appearance.Characters)
+                            {
+                                <div @key="character.CharacterId">
+                                    <label class="form-label" for="@GetAppearanceEditorId(Context.Appearance.AppearanceEntryId, character.CharacterId)">@character.CharacterName</label>
+                                    <textarea id="@GetAppearanceEditorId(Context.Appearance.AppearanceEntryId, character.CharacterId)"
+                                              class="form-control app-field-sizing-content"
+                                              rows="3"
+                                              disabled="@(Context.SavingAppearanceEntryId == Context.Appearance.AppearanceEntryId)"
+                                              value="@Actions.GetAppearanceDraft(character.CharacterId)"
+                                              @oninput="args => Actions.SetAppearanceDraft(character.CharacterId, args.Value?.ToString())"></textarea>
+                                </div>
+                            }
+
+                            <div class="d-flex justify-content-end gap-2">
+                                <button type="button"
+                                        class="btn btn-outline-secondary btn-sm"
+                                        disabled="@(Context.SavingAppearanceEntryId == Context.Appearance.AppearanceEntryId)"
+                                        @onclick="Actions.CancelAppearanceEdit">
+                                    <i class="fa-regular fa-xmark" aria-hidden="true"></i>
+                                </button>
+                                <BusyButton Class="btn btn-primary btn-sm"
+                                            OnClick="() => Actions.SaveAppearanceEdit(Context.Appearance)"
+                                            IsBusy="@(Context.SavingAppearanceEntryId == Context.Appearance.AppearanceEntryId)"
+                                            BusyText="Saving..."
+                                            ShowBusyText="false"
+                                            Disabled="@(Context.SavingAppearanceEntryId.HasValue && Context.SavingAppearanceEntryId != Context.Appearance.AppearanceEntryId)">
+                                    <i class="fa-regular fa-floppy-disk" aria-hidden="true"></i>
+                                </BusyButton>
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var character in Context.Appearance.Characters)
+                            {
+                                <div @key="character.CharacterId">
+                                    <div class="fw-semibold">@character.CharacterName</div>
+                                    @if (string.IsNullOrWhiteSpace(character.CurrentAppearance))
+                                    {
+                                        <div class="small text-body-secondary">No current appearance has been captured yet.</div>
+                                    }
+                                    else
+                                    {
+                                        <div class="small">@character.CurrentAppearance</div>
+                                    }
+                                </div>
+                            }
+
+                            @if (Context.Appearance.CanEdit)
+                            {
+                                <div class="d-flex justify-content-end">
+                                    <button type="button"
+                                            class="btn btn-outline-secondary btn-sm"
+                                            disabled="@Context.SavingAppearanceEntryId.HasValue"
+                                            @onclick="() => Actions.BeginAppearanceEdit(Context.Appearance)">
+                                        <i class="fa-regular fa-pen" aria-hidden="true"></i>
+                                    </button>
+                                </div>
+                            }
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public ChatAppearanceEntryContext Context { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public StorySceneChatActions Actions { get; set; } = new();
+
+    private static string GetAppearanceEditorId(Guid appearanceEntryId, Guid characterId) =>
+        $"story-scene-appearance-{appearanceEntryId:N}-{characterId:N}";
+}

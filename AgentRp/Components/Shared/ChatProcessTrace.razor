@@ -1,0 +1,248 @@
+@using System.Text
+
+@if (Context.ShowProcessPanels)
+{
+    <div class="card border-0 bg-body-tertiary shadow-sm">
+        <div class="card-body p-0">
+            <section>
+                <div class="d-flex align-items-start justify-content-between gap-3 p-3">
+                    <button type="button"
+                            class="btn btn-link flex-grow-1 p-0 text-start text-decoration-none text-reset"
+                            aria-expanded="@Context.IsTraceExpanded"
+                            @onclick="() => Actions.ToggleProcessTrace(Context.Process.RunId)">
+                        <div class="d-flex align-items-start gap-3">
+                            <div class="pt-1">
+                                <i class="fa-regular fa-gears text-body-secondary" aria-hidden="true"></i>
+                            </div>
+                            <div>
+                                <div class="fw-semibold">Process</div>
+                                <div class="small text-body-secondary">@GetProcessTraceSectionSubtitle(Context.Process)</div>
+                                @if (!string.IsNullOrWhiteSpace(Context.Process.ActiveStage))
+                                {
+                                    <div class="small text-body-secondary">Active stage: @Context.Process.ActiveStage</div>
+                                }
+                            </div>
+                        </div>
+                    </button>
+
+                    <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                        @if (Context.Process.Status == ProcessRunStatus.Running)
+                        {
+                            <StopOperationButton Class="btn btn-outline-danger btn-sm"
+                                                 IsStopping="@Actions.IsStoppingRun(Context.Process.RunId)"
+                                                 Disabled="@Actions.IsStoppingRun(Context.Process.RunId)"
+                                                 Title="Stop this scene generation"
+                                                 OnClick="() => Actions.StopSceneRun(Context.Process.RunId)" />
+                        }
+                        <span class="badge text-bg-light border text-body-secondary">@Context.Process.DisplayStatusText</span>
+                        <span class="badge text-bg-light border text-body-secondary">
+                            <LiveDurationText StartedUtc="@Context.Process.StartedUtc" CompletedUtc="@Context.Process.CompletedUtc" />
+                        </span>
+                        <button type="button"
+                                class="btn btn-link d-flex align-items-center gap-2 p-0 text-decoration-none text-reset"
+                                aria-expanded="@Context.IsTraceExpanded"
+                                @onclick="() => Actions.ToggleProcessTrace(Context.Process.RunId)">
+                            <i class="fa-regular @(Context.IsTraceExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                </div>
+
+                @if (Context.IsTraceExpanded)
+                {
+                    <div class="border-top px-3 py-3">
+                        <div class="d-flex flex-column">
+                            @for (var stepIndex = 0; stepIndex < Context.Process.Steps.Count; stepIndex++)
+                            {
+                                var step = Context.Process.Steps[stepIndex];
+                                var isStepExpanded = Context.ExpandedStepId == step.StepId;
+                                var stepTokenUsage = GetProcessStepTokenUsage(step);
+                                var stepSubtitle = GetProcessStepSubtitle(Context.Process, step);
+                                var stepBlocks = GetProcessStepBlocks(step);
+                                var stepDividerClass = stepIndex > 0 ? "border-top mt-2 pt-2" : string.Empty;
+                                var headerClass = step.IsActive ? "bg-primary-subtle" : string.Empty;
+                                var canCopyStep = CanCopyProcessStep(step, stepBlocks);
+
+                                <section @key="step.StepId" class="@stepDividerClass">
+                                    <div class="d-flex align-items-start gap-2 @headerClass">
+                                        <button type="button"
+                                                class="btn btn-link flex-grow-1 px-0 py-2 text-start text-decoration-none text-reset"
+                                                aria-expanded="@isStepExpanded"
+                                                @onclick="() => Actions.ToggleProcessStep(Context.Process.RunId, step.StepId)">
+                                            <div class="d-flex align-items-start gap-3">
+                                                <div class="pt-1">
+                                                    <i class="@($"{step.IconCssClass} fa-fw text-body-secondary")" aria-hidden="true"></i>
+                                                </div>
+                                                <div class="flex-grow-1 w-100">
+                                                    <div class="d-flex align-items-start justify-content-between gap-3">
+                                                        <div class="w-100">
+                                                            <div class="fw-semibold">@step.Title</div>
+                                                            <div class="small text-body-secondary">@stepSubtitle</div>
+                                                        </div>
+                                                        <div class="d-flex align-items-center gap-3 ms-auto">
+                                                            @if (step.StartedUtc.HasValue)
+                                                            {
+                                                                <div class="small text-body-secondary text-nowrap">
+                                                                    <i class="fa-regular fa-clock me-1" aria-hidden="true"></i><LiveDurationText StartedUtc="@step.StartedUtc.Value" CompletedUtc="@step.CompletedUtc" />
+                                                                </div>
+                                                            }
+                                                            @if (stepTokenUsage.Count > 0)
+                                                            {
+                                                                <div class="d-flex align-items-center gap-2 small text-body-secondary text-nowrap">
+                                                                    @for (var usageIndex = 0; usageIndex < stepTokenUsage.Count; usageIndex++)
+                                                                    {
+                                                                        <span @key="stepTokenUsage[usageIndex]">@stepTokenUsage[usageIndex]</span>
+
+                                                                        @if (usageIndex < stepTokenUsage.Count - 1)
+                                                                        {
+                                                                            <span aria-hidden="true">•</span>
+                                                                        }
+                                                                    }
+                                                                </div>
+                                                            }
+                                                            <i class="fa-regular @(isStepExpanded ? "fa-chevron-up" : "fa-chevron-down") text-body-secondary" aria-hidden="true"></i>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </button>
+
+                                        @if (isStepExpanded)
+                                        {
+                                            <BusyButton Class="btn btn-outline-secondary btn-sm mt-2 flex-shrink-0"
+                                                        OnClick="() => Actions.CopyProcessStep(step, stepBlocks)"
+                                                        IsBusy="@(Context.CopyingProcessStepId == step.StepId)"
+                                                        BusyText=""
+                                                        ShowBusyText="false"
+                                                        Disabled="@(!canCopyStep)"
+                                                        title="@($"Copy {step.Title} process step")"
+                                                        aria-label="@($"Copy {step.Title} process step")">
+                                                <i class="fa-regular @(Context.CopiedProcessStepId == step.StepId ? "fa-check" : "fa-copy")" aria-hidden="true"></i>
+                                            </BusyButton>
+                                        }
+                                    </div>
+
+                                    @if (isStepExpanded)
+                                    {
+                                        <div class="pt-2 pb-1 d-flex flex-column gap-3">
+                                            @if (stepBlocks.Count == 0)
+                                            {
+                                                <div class="small">
+                                                    <MarkdownContent Markdown="@step.Detail" CopyLabel="@($"{step.Title} detail")" />
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                @for (var blockIndex = 0; blockIndex < stepBlocks.Count; blockIndex++)
+                                                {
+                                                    var block = stepBlocks[blockIndex];
+
+                                                    <div @key="block.Title" class="@(blockIndex > 0 ? "pt-3" : string.Empty)">
+                                                        <div class="fw-semibold mb-2">@block.Title</div>
+                                                        <MarkdownContent Markdown="@block.Content" CopyLabel="@block.Title" />
+                                                    </div>
+                                                }
+                                            }
+                                        </div>
+                                    }
+                                </section>
+                            }
+                        </div>
+                    </div>
+                }
+            </section>
+        </div>
+    </div>
+}
+else if (Context.Process.Status == ProcessRunStatus.Running)
+{
+    <div class="card border-0 bg-body-tertiary shadow-sm">
+        <div class="card-body d-flex flex-wrap align-items-center justify-content-between gap-3">
+            <div class="d-flex align-items-start gap-3">
+                <div class="pt-1">
+                    <i class="fa-regular fa-gears text-body-secondary" aria-hidden="true"></i>
+                </div>
+                <div>
+                    <div class="fw-semibold">Scene generation in progress</div>
+                    <div class="small text-body-secondary">
+                        @GetHiddenProcessSummary(Context.Process)
+                        <span aria-hidden="true"> • </span>
+                        <LiveDurationText StartedUtc="@Context.Process.StartedUtc" CompletedUtc="@Context.Process.CompletedUtc" />
+                    </div>
+                </div>
+            </div>
+
+            <StopOperationButton Class="btn btn-outline-danger btn-sm"
+                                 IsStopping="@Actions.IsStoppingRun(Context.Process.RunId)"
+                                 Disabled="@Actions.IsStoppingRun(Context.Process.RunId)"
+                                 Title="Stop this scene generation"
+                                 OnClick="() => Actions.StopSceneRun(Context.Process.RunId)" />
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public ChatProcessTraceContext Context { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public StorySceneChatActions Actions { get; set; } = new();
+
+    private static IReadOnlyList<string> GetProcessStepTokenUsage(StorySceneProcessStepView step)
+    {
+        var values = new List<string>();
+
+        if (step.InputTokenCount.HasValue)
+            values.Add($"{step.InputTokenCount.Value:N0} in");
+        if (step.OutputTokenCount.HasValue)
+            values.Add($"{step.OutputTokenCount.Value:N0} out");
+        if (step.TotalTokenCount.HasValue)
+            values.Add($"{step.TotalTokenCount.Value:N0} total");
+
+        return values;
+    }
+
+    private static string GetProcessStepSubtitle(StorySceneMessageProcessView process, StorySceneProcessStepView step)
+    {
+        if (!string.IsNullOrWhiteSpace(step.Summary))
+            return step.Summary;
+
+        if (step.IsActive && !string.IsNullOrWhiteSpace(process.ActiveStage))
+            return process.ActiveStage;
+
+        return step.Status.ToString();
+    }
+
+    private static IReadOnlyList<StoryMessageProcessTextBlock> GetProcessStepBlocks(StorySceneProcessStepView step)
+    {
+        if (step.Artifact is null)
+            return [];
+
+        return step.Artifact.Inputs
+            .Concat(step.Artifact.Outputs)
+            .Where(block => !string.IsNullOrWhiteSpace(block.Content))
+            .ToList();
+    }
+
+    private static bool CanCopyProcessStep(StorySceneProcessStepView step, IReadOnlyList<StoryMessageProcessTextBlock> blocks) =>
+        !string.IsNullOrWhiteSpace(step.Detail) || blocks.Any(block => !string.IsNullOrWhiteSpace(block.Content));
+
+    private static string GetProcessTraceSectionSubtitle(StorySceneMessageProcessView process)
+    {
+        var stepCount = process.Steps.Count == 1 ? "1 step" : $"{process.Steps.Count} steps";
+        if (!string.IsNullOrWhiteSpace(process.Summary))
+            return $"{process.Summary} • {stepCount}";
+
+        return stepCount;
+    }
+
+    private static string GetHiddenProcessSummary(StorySceneMessageProcessView process)
+    {
+        if (!string.IsNullOrWhiteSpace(process.ActiveStage))
+            return process.ActiveStage;
+
+        if (!string.IsNullOrWhiteSpace(process.Summary))
+            return process.Summary;
+
+        return "Generating";
+    }
+}

@@ -1,0 +1,96 @@
+<div @key="Context.Message.MessageId"
+     class="@Context.CardClass"
+     @onclick="() => Actions.ToggleSelectedMessage(Context.Message.MessageId)">
+    <div class="card shadow-sm">
+        <div class="card-body d-flex flex-column gap-3">
+            <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 small text-body-secondary">
+                <div class="d-flex align-items-center gap-2">
+                    @if (!Context.Message.IsNarrator)
+                    {
+                        <StoryAvatar Name="@Context.Message.DisplaySpeakerName"
+                                     ImageUrl="@Context.Message.SpeakerPrimaryImageUrl"
+                                     Crop="@Context.Message.SpeakerPrimaryImageCrop"
+                                     Class="app-story-avatar flex-shrink-0" />
+                    }
+                    <span class="badge @(Context.Message.IsNarrator ? "text-bg-info" : Context.Message.IsSelectedSpeaker ? "text-bg-primary" : "text-bg-light border text-body-secondary")">
+                        @Context.Message.DisplaySpeakerName
+                    </span>
+
+                    @if (Context.Message.DisplaySpeakerName != Context.Message.CanonicalSpeakerName)
+                    {
+                        <span>as @Context.Message.CanonicalSpeakerName</span>
+                    }
+                </div>
+
+                <div class="d-flex align-items-center gap-2">
+                    <span>@Context.Message.CreatedUtc.ToShorthandDateWithRelativeDays()</span>
+                    <span class="badge text-bg-light border text-body-secondary">@DescribeMode(Context.Message.GenerationMode)</span>
+                </div>
+            </div>
+
+            @if (Context.IsEditing)
+            {
+                <div>
+                    <label class="visually-hidden" for="@GetInlineEditorId(Context.Message.MessageId)">Edit message</label>
+                    <textarea id="@GetInlineEditorId(Context.Message.MessageId)"
+                              class="form-control"
+                              rows="5"
+                              value="@Context.EditingDraft"
+                              @oninput="HandleEditingDraftChangedAsync"
+                              disabled="@Context.IsSubmitting"></textarea>
+                </div>
+            }
+            else if (string.IsNullOrWhiteSpace(Context.DisplayContent) && Context.Process is not null && Context.Process.Status == ProcessRunStatus.Running)
+            {
+                <div class="d-flex align-items-center gap-2 text-body-secondary">
+                    <div class="spinner-border spinner-border-sm" role="status"></div>
+                    <span>@(Context.Process.ActiveStage ?? "Generating")...</span>
+                </div>
+            }
+            else if (IsStoppedPlaceholder(Context.Message))
+            {
+                <div class="small text-body-secondary">
+                    Generation stopped before any scene text was written.
+                </div>
+            }
+            else if (Context.Message.IsNarrator)
+            {
+                <div class="fst-italic">
+                    <MarkdownContent Markdown="@Context.DisplayContent" ShowCopyButton="false" />
+                </div>
+            }
+            else
+            {
+                <MarkdownContent Markdown="@Context.DisplayContent" ShowCopyButton="false" />
+            }
+        </div>
+
+        <ChatMessageFooter Context="@Context.Footer" Actions="@Actions" />
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public ChatMessageContext Context { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public StorySceneChatActions Actions { get; set; } = new();
+
+    private static string DescribeMode(StoryScenePostMode mode) => mode switch
+    {
+        StoryScenePostMode.Manual => "Direct",
+        StoryScenePostMode.GuidedAi => "Guided AI",
+        StoryScenePostMode.AutomaticAi => "Automatic AI",
+        StoryScenePostMode.RespondGuidedAi => "Respond Guided AI",
+        StoryScenePostMode.RespondAutomaticAi => "Respond Automatic AI",
+        _ => mode.ToString()
+    };
+
+    private static bool IsStoppedPlaceholder(StorySceneMessageView message) =>
+        message.Process?.Status == ProcessRunStatus.Canceled && string.IsNullOrWhiteSpace(message.Content);
+
+    private static string GetInlineEditorId(Guid messageId) => $"story-scene-inline-edit-{messageId:N}";
+
+    private Task HandleEditingDraftChangedAsync(ChangeEventArgs args) =>
+        Actions.SetEditingDraft(args.Value?.ToString() ?? string.Empty);
+}
