@@ -1102,6 +1102,9 @@ public sealed record BranchStorySceneMessage(
     Guid SourceMessageId,
     string Content);
 
+public sealed record BranchStorySceneMessageResult(
+    Guid MessageId);
+
 public sealed record RegenerateStorySceneProse(
     Guid ThreadId,
     Guid SourceMessageId,
@@ -1268,7 +1271,7 @@ public interface IStorySceneChatService
 
     Task<ChangeStorySceneMessageSpeakerResult> ChangeMessageSpeakerAsync(ChangeStorySceneMessageSpeaker request, CancellationToken cancellationToken);
 
-    Task CreateBranchAsync(BranchStorySceneMessage request, CancellationToken cancellationToken);
+    Task<BranchStorySceneMessageResult> CreateBranchAsync(BranchStorySceneMessage request, CancellationToken cancellationToken);
 
     Task RegenerateProseAsync(
         RegenerateStorySceneProse request,

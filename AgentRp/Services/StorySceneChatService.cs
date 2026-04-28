@@ -312,7 +312,7 @@ public sealed class StorySceneChatService(
         return new ChangeStorySceneMessageSpeakerResult(replacementMessage.Id, true);
     }
 
-    public async Task CreateBranchAsync(BranchStorySceneMessage request, CancellationToken cancellationToken)
+    public async Task<BranchStorySceneMessageResult> CreateBranchAsync(BranchStorySceneMessage request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Content))
             throw new InvalidOperationException("Creating the edited scene branch failed because the message text was empty.");
@@ -354,6 +354,7 @@ public sealed class StorySceneChatService(
 
         await dbContext.SaveChangesAsync(cancellationToken);
         PublishWorkspaceRefresh(thread.Id);
+        return new BranchStorySceneMessageResult(branchedMessage.Id);
     }
 
     public async Task RegenerateProseAsync(

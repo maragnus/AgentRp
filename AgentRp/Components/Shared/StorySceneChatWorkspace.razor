@@ -314,6 +314,7 @@ else
     private StoryTurnShape? _submittingTurnShape;
     private string _draftText = string.Empty;
     private Guid? _retrySourceMessageId;
+    private Guid? _retryBranchMessageId;
     private string? _retrySpeakerName;
     private Guid? _startingRetryMessageId;
     private Guid? _reassigningMessageId;
@@ -509,45 +510,57 @@ else
 
     private StorySceneChatActions BuildChatActions() => new()
     {
-        Post = PostAsync,
-        RespondAs = PostRespondAsAsync,
-        RespondAutoselect = PostRespondAutoselectAsync,
-        SetDraftText = SetDraftTextAsync,
-        CancelRetry = CancelRetryAsync,
-        OpenAppearanceReplay = OpenAppearanceReplayAsync,
-        ToggleProcessPanels = ToggleProcessPanelsAsync,
-        StopSceneRun = StopSceneRunAsync,
+        Post = (mode, turnShape) => RunChatActionAsync(() => PostAsync(mode, turnShape)),
+        RespondAs = author => RunChatActionAsync(() => PostRespondAsAsync(author)),
+        RespondAutoselect = () => RunChatActionAsync(PostRespondAutoselectAsync),
+        SetDraftText = value => RunChatActionAsync(() => SetDraftTextAsync(value)),
+        CancelRetry = () => RunChatActionAsync(CancelRetryAsync),
+        OpenAppearanceReplay = () => RunChatActionAsync(OpenAppearanceReplayAsync),
+        ToggleProcessPanels = () => RunChatActionAsync(ToggleProcessPanelsAsync),
+        StopSceneRun = runId => RunChatActionAsync(() => StopSceneRunAsync(runId)),
         IsStoppingRun = IsStoppingRun,
         ChatLogScrollContainerChanged = SetChatLogScrollContainer,
         ChatLogFooterElementChanged = SetChatComposerFooter,
-        SelectBranch = EventCallback.Factory.Create<Guid>(this, SelectBranchAsync),
-        ToggleSelectedMessage = ToggleSelectedMessage,
-        SetEditingDraft = SetEditingDraftAsync,
-        CancelInlineEdit = CancelInlineEditAsync,
-        SaveInlineEdit = SaveInlineEditAsync,
-        CreateEditedBranch = CreateEditedBranchAsync,
-        ChangeMessageSpeaker = ChangeMessageSpeakerAsync,
-        BeginRetry = BeginRetryAsync,
-        OpenPrivateIntent = OpenPrivateIntentModal,
-        OpenMessageAppearance = OpenMessageAppearanceModal,
-        RegenerateProse = RegenerateProseAsync,
-        ChangeTurnShapeAndRegenerate = ChangeTurnShapeAndRegenerateAsync,
-        OpenPlan = OpenPlanModal,
-        OpenSnapshotDraft = OpenSnapshotDraftAsync,
-        BeginInlineEdit = BeginInlineEdit,
-        CopyMessage = CopyMessageAsync,
-        OpenDelete = OpenDeleteModal,
-        ToggleProcessTrace = ToggleProcessTrace,
-        ToggleProcessStep = ToggleProcessStep,
-        CopyProcessStep = CopyProcessStepAsync,
-        ToggleSnapshot = ToggleSnapshot,
-        ToggleAppearanceEntry = ToggleAppearanceEntry,
-        BeginAppearanceEdit = BeginAppearanceEdit,
-        CancelAppearanceEdit = CancelAppearanceEditAsync,
+        SelectBranch = EventCallback.Factory.Create<Guid>(this, (Guid leafMessageId) => RunChatActionAsync(() => SelectBranchAsync(leafMessageId))),
+        ToggleSelectedMessage = messageId => RunChatAction(() => ToggleSelectedMessage(messageId)),
+        SetEditingDraft = value => RunChatActionAsync(() => SetEditingDraftAsync(value)),
+        CancelInlineEdit = () => RunChatActionAsync(CancelInlineEditAsync),
+        SaveInlineEdit = () => RunChatActionAsync(SaveInlineEditAsync),
+        CreateEditedBranch = () => RunChatActionAsync(CreateEditedBranchAsync),
+        ChangeMessageSpeaker = (message, speaker) => RunChatActionAsync(() => ChangeMessageSpeakerAsync(message, speaker)),
+        BeginRetry = message => RunChatActionAsync(() => BeginRetryAsync(message)),
+        OpenPrivateIntent = message => RunChatAction(() => OpenPrivateIntentModal(message)),
+        OpenMessageAppearance = message => RunChatAction(() => OpenMessageAppearanceModal(message)),
+        RegenerateProse = message => RunChatActionAsync(() => RegenerateProseAsync(message)),
+        ChangeTurnShapeAndRegenerate = (message, turnShape) => RunChatActionAsync(() => ChangeTurnShapeAndRegenerateAsync(message, turnShape)),
+        OpenPlan = message => RunChatAction(() => OpenPlanModal(message)),
+        OpenSnapshotDraft = message => RunChatActionAsync(() => OpenSnapshotDraftAsync(message)),
+        BeginInlineEdit = message => RunChatAction(() => BeginInlineEdit(message)),
+        CopyMessage = content => RunChatActionAsync(() => CopyMessageAsync(content)),
+        OpenDelete = message => RunChatAction(() => OpenDeleteModal(message)),
+        ToggleProcessTrace = runId => RunChatAction(() => ToggleProcessTrace(runId)),
+        ToggleProcessStep = (runId, stepId) => RunChatAction(() => ToggleProcessStep(runId, stepId)),
+        CopyProcessStep = (step, textBlocks) => RunChatActionAsync(() => CopyProcessStepAsync(step, textBlocks)),
+        ToggleSnapshot = snapshotId => RunChatAction(() => ToggleSnapshot(snapshotId)),
+        ToggleAppearanceEntry = appearanceEntryId => RunChatAction(() => ToggleAppearanceEntry(appearanceEntryId)),
+        BeginAppearanceEdit = appearance => RunChatAction(() => BeginAppearanceEdit(appearance)),
+        CancelAppearanceEdit = () => RunChatActionAsync(CancelAppearanceEditAsync),
         GetAppearanceDraft = GetAppearanceDraft,
-        SetAppearanceDraft = SetAppearanceDraft,
-        SaveAppearanceEdit = SaveAppearanceEditAsync
+        SetAppearanceDraft = (appearanceEntryId, value) => RunChatAction(() => SetAppearanceDraft(appearanceEntryId, value)),
+        SaveAppearanceEdit = appearance => RunChatActionAsync(() => SaveAppearanceEditAsync(appearance))
     };
+
+    private async Task RunChatActionAsync(Func<Task> action)
+    {
+        await action();
+        StateHasChanged();
+    }
+
+    private void RunChatAction(Action action)
+    {
+        action();
+        StateHasChanged();
+    }
 
     private static object BuildTranscriptItemKey(StorySceneTranscriptNodeView node)
     {
@@ -833,7 +846,8 @@ else
         _submittingAuthorKey = submittingAuthorKey;
         _submittingTurnShape = requestedTurnShape;
         _isSubmitting = true;
-        var retrySourceMessageId = _retrySourceMessageId;
+        var retryBranchMessageId = _retryBranchMessageId;
+        var retrySourceMessageId = retryBranchMessageId ?? _retrySourceMessageId;
 
         try
         {
@@ -848,6 +862,9 @@ else
                     requestedTurnShape),
                 mode == StoryScenePostMode.Manual ? null : HandleMessageStreamUpdateAsync,
                 CancellationToken.None);
+
+            if (retryBranchMessageId.HasValue)
+                await DeleteRetryBranchCopyAsync(retryBranchMessageId.Value);
 
             if (!IgnoresDraft(mode))
                 _draftText = string.Empty;
@@ -900,7 +917,15 @@ else
         try
         {
             CancelInlineEdit();
+            CancelAppearanceEdit();
+            ClearRetryState(clearDraft: false);
+
+            var branch = await StorySceneChatService.CreateBranchAsync(
+                new BranchStorySceneMessage(_chat.ThreadId, message.MessageId, message.Content),
+                CancellationToken.None);
+
             _retrySourceMessageId = message.MessageId;
+            _retryBranchMessageId = branch.MessageId;
             _retrySpeakerName = message.CanonicalSpeakerName;
             _draftText = BuildRetryDraftText(message);
 
@@ -920,17 +945,56 @@ else
         }
     }
 
-    private void CancelRetry() => ClearRetryState(clearDraft: false);
-
-    private Task CancelRetryAsync()
+    private async Task CancelRetryAsync()
     {
-        CancelRetry();
-        return Task.CompletedTask;
+        if (_chat is null)
+        {
+            ClearRetryState(clearDraft: false);
+            return;
+        }
+
+        var retryBranchMessageId = _retryBranchMessageId;
+        if (!retryBranchMessageId.HasValue)
+        {
+            ClearRetryState(clearDraft: false);
+            return;
+        }
+
+        _isSubmitting = true;
+        _errorMessage = null;
+
+        try
+        {
+            await DeleteRetryBranchCopyAsync(retryBranchMessageId.Value);
+
+            ClearRetryState(clearDraft: true);
+            await LoadChatAsync(_chat.ThreadId);
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Canceling retry branch {MessageId} failed for chat {ThreadId}.", retryBranchMessageId, _chat.ThreadId);
+            _errorMessage = UserFacingErrorMessageBuilder.Build("Canceling the retry branch failed.", exception);
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private async Task DeleteRetryBranchCopyAsync(Guid retryBranchMessageId)
+    {
+        if (_chat is null)
+            return;
+
+        await StorySceneChatService.DeleteMessageAsync(
+            new DeleteStorySceneMessage(_chat.ThreadId, retryBranchMessageId, StorySceneDeleteMode.Branch),
+            CancellationToken.None);
     }
 
     private void ClearRetryState(bool clearDraft)
     {
         _retrySourceMessageId = null;
+        _retryBranchMessageId = null;
         _retrySpeakerName = null;
         _startingRetryMessageId = null;
 
@@ -943,7 +1007,9 @@ else
         if (!_retrySourceMessageId.HasValue)
             return;
 
-        var retryMessageIsInTranscript = _chat?.Transcript.Any(x => x.Message?.MessageId == _retrySourceMessageId.Value) == true;
+        var retryMessageId = _retryBranchMessageId ?? _retrySourceMessageId;
+        var retryMessageIsInTranscript = retryMessageId.HasValue
+            && _chat?.Transcript.Any(x => x.Message?.MessageId == retryMessageId.Value) == true;
         if (retryMessageIsInTranscript)
             return;
 
@@ -951,7 +1017,8 @@ else
     }
 
     private bool CanRetryMessage(StorySceneMessageView message) =>
-        message.Process?.Status != ProcessRunStatus.Running;
+        !_retrySourceMessageId.HasValue
+        && message.Process?.Status != ProcessRunStatus.Running;
 
     private bool CanRegenerateProse(StorySceneMessageView message) =>
         HasReusableSavedPlan(message);
